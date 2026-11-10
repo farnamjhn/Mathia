@@ -1,0 +1,14 @@
+[package]
+name = "math-core"
+description = "Mathia's pure-Rust semantic document compiler: Markdown+LaTeX -> classified blocks -> standalone HTML."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# This crate must never depend on Tauri (or any LLM/network client).
+[dependencies]
+pulldown-cmark.workspace = true
+askama.workspace = true
+serde.workspace = true
+thiserror.workspace = true

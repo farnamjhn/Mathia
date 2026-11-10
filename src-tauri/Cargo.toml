@@ -1,0 +1,11 @@
+[package]
+name = "mathia"
+description = "Mathia desktop shell. Placeholder CLI until the Tauri v2 app is wired in (see PLAN.md)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+math-core.workspace = true
+# tauri / tauri-build are added in Phase 3 (PLAN.md).

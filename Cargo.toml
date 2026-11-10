@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["crates/math-core", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Mathia contributors"]
+
+[workspace.dependencies]
+math-core = { path = "crates/math-core" }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+askama = "0.16"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
