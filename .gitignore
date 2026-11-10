@@ -1,0 +1,4 @@
+/target
+/crates/math-core/assets/katex
+*.html.tmp
+.DS_Store
