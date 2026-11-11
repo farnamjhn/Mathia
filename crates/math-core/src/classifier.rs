@@ -4,9 +4,13 @@
 //!
 //! 1. **Scoring** — every node gets a weighted feature score per [`BlockType`];
 //!    a node whose best score reaches [`ScoringConfig::threshold`] is an
-//!    *opener*.
+//!    *opener*. LaTeX theorem environments are openers with score 1.
 //! 2. **Scoping** — each opener absorbs the nodes after it until a terminator
-//!    (QED marker, next opener, heading, or a size limit).
+//!    (QED marker, next opener, heading, or a size limit); an environment
+//!    covers exactly its body.
+//!
+//! Afterwards proofs are linked to the statements they prove and textual
+//! references ("by Theorem 3.3") become links.
 //!
 //! Scope is the part a later decision model may disagree with, so it is
 //! adjustable from outside through [`ScopeOverrides`] without touching the
@@ -16,17 +20,33 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 use crate::config::ScoringConfig;
+use crate::crossref;
 use crate::features::{Features, Lexicon};
-use crate::model::{BlockType, Direction, Node, NodeKind, SemanticBlock, document_direction};
+use crate::model::{
+    BlockType, Direction, EndReason, Node, NodeKind, SemanticBlock, document_direction,
+};
+use crate::text::fold_digits;
 
 /// Scoring result for one node.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeScore {
     pub features: Features,
+    /// The score of every semantic type, in [`BlockType::SEMANTIC`] order.
+    pub scores: Vec<(BlockType, f32)>,
     /// Best semantic type and its score, whether or not it passes the threshold.
     pub best: (BlockType, f32),
     /// The node may open a block: right kind of node and score ≥ threshold.
     pub opens: bool,
+}
+
+/// Blocks plus everything needed to explain them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Classification {
+    pub blocks: Vec<SemanticBlock>,
+    /// One entry per node.
+    pub scores: Vec<NodeScore>,
+    /// For every node, the index in `blocks` of the block that contains it.
+    pub block_of: Vec<usize>,
 }
 
 /// Externally requested corrections to the default scoping, keyed by the
@@ -34,6 +54,7 @@ pub struct NodeScore {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScopeOverrides {
     /// Nodes to add to (positive) or drop from (negative) the block's end.
+    /// Ignored for LaTeX environments, whose extent is explicit.
     pub delta: BTreeMap<usize, isize>,
     /// Opener nodes to treat as ordinary content instead.
     pub suppressed: BTreeSet<usize>,
@@ -70,6 +91,10 @@ impl Default for HeuristicClassifier {
     }
 }
 
+fn on(flag: bool) -> f32 {
+    if flag { 1.0 } else { 0.0 }
+}
+
 impl HeuristicClassifier {
     pub fn new(config: ScoringConfig) -> Self {
         let lexicon = Lexicon::new(&config);
@@ -83,10 +108,10 @@ impl HeuristicClassifier {
     /// Weighted score of `features` for one candidate type, in `[0, 1]`.
     pub fn score(&self, features: &Features, kind: BlockType) -> f32 {
         let w = &self.config.weights;
-        let on = |flag: bool| if flag { 1.0 } else { 0.0 };
 
         let mut score = match &features.lead {
-            Some(hit) if hit.kind == kind => {
+            // "Theorem 2 implies…" talks about the theorem: a mention, no more.
+            Some(hit) if hit.kind == kind && !hit.reference => {
                 w.lead + w.label * on(hit.labelled) + w.emphasis * on(features.emphasized)
             }
             _ => w.mention * on(features.mentions.contains(&kind)),
@@ -97,7 +122,7 @@ impl HeuristicClassifier {
                     + w.logic * features.logic_density
                     + w.cue * on(features.proof_cue)
             }
-            BlockType::Definition => {
+            BlockType::Definition | BlockType::Notation => {
                 w.definitional * on(features.definitional) + w.math * features.math_density
             }
             k if k.is_statement() => {
@@ -112,9 +137,12 @@ impl HeuristicClassifier {
 
     pub fn score_node(&self, node: &Node) -> NodeScore {
         let features = self.lexicon.extract(node);
+        let scores: Vec<(BlockType, f32)> = BlockType::SEMANTIC
+            .iter()
+            .map(|&kind| (kind, self.score(&features, kind)))
+            .collect();
         let mut best = (BlockType::Theorem, f32::MIN);
-        for kind in BlockType::SEMANTIC {
-            let s = self.score(&features, kind);
+        for &(kind, s) in &scores {
             if s > best.1 {
                 best = (kind, s);
             }
@@ -126,6 +154,7 @@ impl HeuristicClassifier {
         NodeScore {
             opens: can_open && best.1 >= self.config.threshold,
             features,
+            scores,
             best,
         }
     }
@@ -140,39 +169,137 @@ impl HeuristicClassifier {
         nodes: &[Node],
         overrides: &ScopeOverrides,
     ) -> Vec<SemanticBlock> {
-        let scores: Vec<NodeScore> = nodes.iter().map(|n| self.score_node(n)).collect();
-        let opens = |i: usize| scores[i].opens && !overrides.suppressed.contains(&i);
-        let is_heading = |i: usize| matches!(nodes[i].kind, NodeKind::Heading(_));
+        self.classify_detailed(nodes, overrides).blocks
+    }
+
+    /// [`Self::classify_with_overrides`], keeping the per-node scores.
+    pub fn classify_detailed(&self, nodes: &[Node], overrides: &ScopeOverrides) -> Classification {
+        let n = nodes.len();
+        let scores: Vec<NodeScore> = nodes.iter().map(|node| self.score_node(node)).collect();
+
+        // LaTeX environments: `env_first` opens, `covered` belongs to one.
+        let mut env_first = vec![false; n];
+        let mut covered = vec![false; n];
+        let mut i = 0;
+        while i < n {
+            match &nodes[i].env {
+                Some(env) if !overrides.suppressed.contains(&i) => {
+                    let end = (i + env.len.max(1)).min(n);
+                    env_first[i] = true;
+                    covered[i + 1..end].fill(true);
+                    i = end;
+                }
+                _ => i += 1,
+            }
+        }
+
+        let opens = |i: usize| {
+            !covered[i] && (env_first[i] || (scores[i].opens && !overrides.suppressed.contains(&i)))
+        };
+        let is_heading = |i: usize| matches!(nodes[i].kind, NodeKind::Heading(_)) && !covered[i];
         let boundary = |i: usize| opens(i) || is_heading(i);
 
         let mut builder = Builder::new(nodes);
         let mut i = 0;
-        while i < nodes.len() {
+        while i < n {
             // Nothing absorbs past the next opener or heading.
-            let limit = (i + 1..nodes.len())
-                .find(|&j| boundary(j))
-                .unwrap_or(nodes.len());
-
-            if opens(i) {
-                let kind = scores[i].best.0;
-                let natural = if kind == BlockType::Proof {
-                    self.proof_end(&scores, i, limit)
-                } else {
-                    self.statement_end(nodes, &scores, i, limit)
-                };
+            let limit = (i + 1..n).find(|&j| boundary(j)).unwrap_or(n);
+            let at_limit = if limit == n {
+                EndReason::EndOfDocument
+            } else if opens(limit) {
+                EndReason::NextOpener
+            } else {
+                EndReason::Heading
+            };
+            let adjust = |natural: usize, reason: EndReason| {
                 let delta = overrides.delta.get(&i).copied().unwrap_or(0);
                 let end = (natural as isize + delta).clamp(i as isize + 1, limit as isize) as usize;
-                builder.push(kind, i..end, Some(&scores[i]));
+                (
+                    end,
+                    if end == natural {
+                        reason
+                    } else {
+                        EndReason::Override
+                    },
+                )
+            };
+            let features = Some(&scores[i].features);
+
+            if env_first[i] {
+                let env = nodes[i].env.as_ref().expect("env_first implies env");
+                let end = (i + env.len.max(1)).min(n);
+                let opener = Opener {
+                    score: 1.0,
+                    features,
+                    env_name: env.name.as_deref(),
+                };
+                builder.push(env.kind, i..end, opener, EndReason::Environment);
+                i = end;
+            } else if opens(i) {
+                let (kind, score) = scores[i].best;
+                let (natural, reason) = match kind {
+                    BlockType::Proof => self.argument_end(&scores, i, limit, at_limit),
+                    // Solutions rarely end in a QED mark; without one they are
+                    // scoped like a statement instead of running to the cap.
+                    BlockType::Solution => match self.argument_end(&scores, i, limit, at_limit) {
+                        (end, EndReason::Qed) => (end, EndReason::Qed),
+                        _ => self.statement_end(nodes, &scores, i, limit, at_limit),
+                    },
+                    _ => self.statement_end(nodes, &scores, i, limit, at_limit),
+                };
+                let (end, reason) = adjust(natural, reason);
+                let opener = Opener {
+                    score,
+                    features,
+                    env_name: None,
+                };
+                builder.push(kind, i..end, opener, reason);
                 i = end;
             } else if is_heading(i) {
-                builder.push(BlockType::Heading, i..i + 1, None);
+                builder.push(
+                    BlockType::Heading,
+                    i..i + 1,
+                    Opener::NONE,
+                    EndReason::Structural,
+                );
                 i += 1;
+            } else if !overrides.suppressed.contains(&i)
+                && let Some(score) =
+                    self.implicit_proof_score(nodes, &scores, builder.blocks.last(), i, limit)
+            {
+                let (natural, reason) = self.argument_end(&scores, i, limit, at_limit);
+                let (end, reason) = adjust(natural, reason);
+                let opener = Opener {
+                    score,
+                    features,
+                    env_name: None,
+                };
+                builder.push(BlockType::Proof, i..end, opener, reason);
+                i = end;
             } else {
-                builder.push(BlockType::Text, i..limit, None);
+                builder.push(
+                    BlockType::Text,
+                    i..limit,
+                    Opener::NONE,
+                    EndReason::Structural,
+                );
                 i = limit;
             }
         }
-        builder.blocks
+
+        let mut blocks = builder.blocks;
+        link_arguments(&mut blocks);
+        crossref::link_references(&mut blocks, &self.lexicon);
+
+        let mut block_of = vec![0; n];
+        for (index, block) in blocks.iter().enumerate() {
+            block_of[block.span.clone()].fill(index);
+        }
+        Classification {
+            blocks,
+            scores,
+            block_of,
+        }
     }
 
     /// Classify, let `judge` review every semantic block, apply its verdicts
@@ -231,12 +358,46 @@ impl HeuristicClassifier {
         blocks
     }
 
-    /// A proof runs through its QED marker, or to `limit` / the size cap.
-    fn proof_end(&self, scores: &[NodeScore], start: usize, limit: usize) -> usize {
+    /// Score of node `i` as a proof that has no "Proof." keyword: an ordinary
+    /// paragraph directly after a statement, with a QED marker before the next
+    /// boundary and/or a strong proof profile. `None` below the threshold.
+    fn implicit_proof_score(
+        &self,
+        nodes: &[Node],
+        scores: &[NodeScore],
+        previous: Option<&SemanticBlock>,
+        i: usize,
+        limit: usize,
+    ) -> Option<f32> {
+        if !previous?.kind.is_statement() || nodes[i].kind != NodeKind::Paragraph {
+            return None;
+        }
+        let w = &self.config.weights;
+        let features = &scores[i].features;
+        let cap = (i + self.config.scope.proof_max_nodes.max(1)).min(limit);
+        let qed = (i..cap).any(|j| scores[j].features.qed);
+        let score = w.after_statement
+            + w.qed * on(qed)
+            + w.logic * features.logic_density
+            + w.cue * on(features.proof_cue);
+        (score >= self.config.threshold).then_some(score.clamp(0.0, 1.0))
+    }
+
+    /// A proof or solution runs through its QED marker, or to `limit` / the
+    /// size cap.
+    fn argument_end(
+        &self,
+        scores: &[NodeScore],
+        start: usize,
+        limit: usize,
+        at_limit: EndReason,
+    ) -> (usize, EndReason) {
         let cap = (start + self.config.scope.proof_max_nodes.max(1)).min(limit);
-        (start..cap)
-            .find(|&j| scores[j].features.qed)
-            .map_or(cap, |j| j + 1)
+        match (start..cap).find(|&j| scores[j].features.qed) {
+            Some(j) => (j + 1, EndReason::Qed),
+            None if cap == limit => (cap, at_limit),
+            None => (cap, EndReason::SizeLimit),
+        }
     }
 
     /// A statement keeps the display math, lists and quotes that follow it,
@@ -247,7 +408,8 @@ impl HeuristicClassifier {
         scores: &[NodeScore],
         start: usize,
         limit: usize,
-    ) -> usize {
+        at_limit: EndReason,
+    ) -> (usize, EndReason) {
         let cap = (start + self.config.scope.statement_max_nodes.max(1)).min(limit);
         let mut needs_body = scores[start]
             .features
@@ -266,15 +428,79 @@ impl HeuristicClassifier {
                 _ => false,
             };
             if !take {
-                break;
+                return (end, EndReason::NoContinuation);
             }
             if nodes[end].kind == NodeKind::Paragraph {
                 needs_body = false;
             }
             end += 1;
         }
-        end
+        if cap == limit {
+            (end, at_limit)
+        } else {
+            (end, EndReason::SizeLimit)
+        }
     }
+}
+
+/// Links every proof to the statement it proves and every solution to the
+/// example or exercise it answers: by an explicit reference in the opener
+/// ("Proof of Theorem 2"), otherwise by adjacency (plain text in between is
+/// allowed, anything else is not).
+fn link_arguments(blocks: &mut [SemanticBlock]) {
+    for index in 0..blocks.len() {
+        let block = &blocks[index];
+        if !block.kind.is_argument() {
+            continue;
+        }
+        let before = &blocks[..index];
+        let referred = block
+            .features
+            .as_ref()
+            .and_then(|f| f.lead.as_ref())
+            .and_then(|hit| hit.refers_to.as_ref())
+            .and_then(|target| {
+                let number = target.number.as_deref().map(fold_digits);
+                before.iter().rev().find(|b| {
+                    b.kind == target.kind
+                        && (number.is_none() || b.number.as_deref().map(fold_digits) == number)
+                })
+            });
+        let adjacent = || {
+            let previous = before.iter().rev().find(|b| b.kind != BlockType::Text)?;
+            let fits = match block.kind {
+                BlockType::Proof => previous.kind.is_statement(),
+                _ => matches!(previous.kind, BlockType::Example | BlockType::Exercise),
+            };
+            fits.then_some(previous)
+        };
+        let proves = referred.or_else(adjacent).map(|b| b.id.clone());
+        blocks[index].proves = proves;
+    }
+}
+
+/// What made a node open a block.
+#[derive(Clone, Copy)]
+struct Opener<'a> {
+    score: f32,
+    features: Option<&'a Features>,
+    /// The `[Name]` of a LaTeX environment.
+    env_name: Option<&'a str>,
+}
+
+impl Opener<'_> {
+    /// Headings and plain text.
+    const NONE: Opener<'static> = Opener {
+        score: 0.0,
+        features: None,
+        env_name: None,
+    };
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Assigns ids and assembles [`SemanticBlock`]s in document order.
@@ -295,7 +521,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn push(&mut self, kind: BlockType, span: Range<usize>, score: Option<&NodeScore>) {
+    fn push(&mut self, kind: BlockType, span: Range<usize>, opener: Opener, end: EndReason) {
         let counter = self.counters.entry(kind).or_insert(0);
         *counter += 1;
         let id = match kind {
@@ -315,11 +541,16 @@ impl<'a> Builder<'a> {
             (BlockType::Heading, NodeKind::Heading(level)) => Some(level),
             _ => None,
         };
-        let lead = score
-            .and_then(|s| s.features.lead.as_ref())
-            .filter(|hit| hit.kind == kind);
+        let semantic = kind.is_semantic();
+        let lead = opener
+            .features
+            .and_then(|f| f.lead.as_ref())
+            .filter(|hit| semantic && hit.kind == kind);
         let number = lead.and_then(|hit| hit.number.clone());
-        let name = lead.and_then(|hit| hit.name.clone());
+        let name = opener
+            .env_name
+            .map(str::to_string)
+            .or_else(|| lead.and_then(|hit| hit.name.clone()));
 
         let title = match kind {
             BlockType::Heading => nodes[0].text.trim().to_string(),
@@ -337,6 +568,13 @@ impl<'a> Builder<'a> {
         };
 
         let mut html = String::new();
+        if let Some(name) = opener.env_name {
+            // The environment's own `\begin{…}[Name]` line produced no node.
+            html.push_str(&format!(
+                "<p class=\"mx-block-title\">{}</p>\n",
+                escape_html(name)
+            ));
+        }
         for node in nodes {
             match node.kind {
                 // A heading that opened a semantic block becomes its title line.
@@ -356,8 +594,14 @@ impl<'a> Builder<'a> {
             name,
             title,
             direction,
-            score: score.map_or(0.0, |s| s.best.1),
-            features: score.map(|s| s.features.clone()),
+            score: opener.score,
+            features: if semantic {
+                opener.features.cloned()
+            } else {
+                None
+            },
+            proves: None,
+            end,
             html,
         });
     }
@@ -530,6 +774,183 @@ mod tests {
         assert_eq!(blocks[0].direction, Direction::Rtl);
         assert_eq!(blocks[1].direction, Direction::Ltr);
         assert_eq!(blocks[1].title, "Theorem 2");
+    }
+
+    #[test]
+    fn references_to_a_block_do_not_open_one() {
+        for md in [
+            "قضیه ۲ نتیجه می‌دهد که برای هر $x$ داریم $f(x) > 0$.",
+            "Theorem 2 implies that for all $x$ we have $f(x) > 0$.",
+            "Lemma 3 is used twice in what follows.",
+            "تمرین ۴ را به عنوان تکلیف حل کنید.",
+        ] {
+            let s = best(md);
+            assert!(!s.opens, "should stay text: {md} (score {:?})", s.best);
+        }
+        // Emphasis still carries an unpunctuated label.
+        assert!(best("**قضیه ۲** اگر $a>0$ آنگاه $a^2>0$.").opens);
+    }
+
+    #[test]
+    fn exercises_solutions_claims_and_notation() {
+        let blocks = classify(
+            "Exercise 1. Show that $2$ is prime.\n\n\
+             Solution. Its only divisors are $1$ and $2$.\n\n\
+             **Claim.** The set is closed.\n\n\
+             **Notation.** We write $\\mathbb{N}$ for the naturals.\n\n\
+             تمرین ۲. ثابت کنید $۳$ اول است.\n\nحل: بدیهی است.",
+        );
+        assert!(!best("حل این معادله ساده است.").opens);
+        assert_eq!(
+            kinds(&blocks),
+            [
+                BlockType::Exercise,
+                BlockType::Solution,
+                BlockType::Claim,
+                BlockType::Notation,
+                BlockType::Exercise,
+                BlockType::Solution,
+            ]
+        );
+        assert_eq!(blocks[1].proves.as_deref(), Some("block-exercise-1"));
+        assert_eq!(blocks[5].proves.as_deref(), Some("block-exercise-2"));
+        assert_eq!(blocks[4].title, "تمرین ۲");
+
+        // Without a QED mark a solution does not swallow the discussion after it.
+        let blocks =
+            classify("Exercise 1. Do it.\n\nSolution. Done:\n\n$$x = 1$$\n\nUnrelated prose.");
+        assert_eq!(blocks[1].span, 1..3);
+        assert_eq!(kinds(&blocks)[2], BlockType::Text);
+    }
+
+    #[test]
+    fn keywordless_proof_after_a_statement() {
+        let blocks = classify(
+            "Lemma 1. Every $x > 0$ has a square root.\n\n\
+             Consider the set $S = \\{t : t^2 \\le x\\}$.\n\n\
+             Its supremum works. $\\blacksquare$\n\n\
+             Unrelated discussion.",
+        );
+        assert_eq!(
+            kinds(&blocks),
+            [BlockType::Lemma, BlockType::Proof, BlockType::Text]
+        );
+        assert_eq!(blocks[1].span, 1..3);
+        assert_eq!(blocks[1].end, EndReason::Qed);
+        assert_eq!(blocks[1].proves.as_deref(), Some("block-lemma-1"));
+        assert!((blocks[1].score - 0.55).abs() < 1e-6);
+
+        // No QED and no proof profile: ordinary discussion stays text, and a
+        // definition is never followed by an implicit proof.
+        let blocks = classify("Lemma 1. Statement.\n\nSome discussion follows.");
+        assert_eq!(kinds(&blocks), [BlockType::Lemma, BlockType::Text]);
+        let blocks = classify("Definition 1. A set is open if so.\n\nThis is fine. □");
+        assert_eq!(kinds(&blocks), [BlockType::Definition, BlockType::Text]);
+    }
+
+    #[test]
+    fn proofs_link_by_reference_before_adjacency() {
+        let blocks = classify(
+            "Theorem 1. A.\n\nTheorem 2. B.\n\nSome text.\n\n\
+             Proof of Theorem 1. Easy. □\n\nProof. Also easy. □\n\n\
+             Remark. Unrelated.\n\nProof. Orphan. □",
+        );
+        let proves: Vec<_> = blocks
+            .iter()
+            .filter(|b| b.kind == BlockType::Proof)
+            .map(|b| b.proves.as_deref())
+            .collect();
+        assert_eq!(proves, [Some("block-theorem-1"), None, None]);
+
+        let blocks = classify("قضیه ۲.۱. الف.\n\nمتن میانی.\n\nبرهان. ساده است. □");
+        assert_eq!(blocks[2].proves.as_deref(), Some("block-theorem-1"));
+    }
+
+    #[test]
+    fn latex_environments_are_exact_blocks() {
+        let md = "\\begin{theorem}[Rolle]\nIf $f(a)=f(b)$ then\n\n$$f'(c)=0.$$\n\n\
+                  Proof techniques vary. Note: this stays inside.\n\\end{theorem}\n\n\
+                  \\begin{proof}\nFirst step.\n\nSecond step.\n\\end{proof}\n\nAfter.";
+        let blocks = classify(md);
+        assert_eq!(
+            kinds(&blocks),
+            [BlockType::Theorem, BlockType::Proof, BlockType::Text]
+        );
+        assert_eq!(blocks[0].span, 0..3);
+        assert_eq!(blocks[0].score, 1.0);
+        assert_eq!(blocks[0].end, EndReason::Environment);
+        assert_eq!(blocks[0].title, "Theorem (Rolle)");
+        assert!(
+            blocks[0]
+                .html
+                .starts_with("<p class=\"mx-block-title\">Rolle</p>")
+        );
+        assert_eq!(blocks[1].span, 3..5);
+        assert_eq!(blocks[1].proves.as_deref(), Some("block-theorem-1"));
+
+        // A judge can still reject the environment; its nodes are then scored
+        // like any others. Scope deltas do not apply to it.
+        let c = HeuristicClassifier::default();
+        let nodes = parse_markdown(md);
+        let mut overrides = ScopeOverrides::default();
+        overrides.delta.insert(0, -1);
+        assert_eq!(c.classify_with_overrides(&nodes, &overrides)[0].span, 0..3);
+        overrides.suppressed.insert(0);
+        let kinds_now = kinds(&c.classify_with_overrides(&nodes, &overrides));
+        assert_eq!(kinds_now[0], BlockType::Text);
+    }
+
+    #[test]
+    fn end_reasons_explain_every_scope() {
+        let blocks = classify(
+            "Theorem 1. For all $x$,\n\n$$x = x.$$\n\nDiscussion.\n\n\
+             Proof. Clear. □\n\nLemma 2. A.\n\nLemma 3. B.\n\n## Next\n\nRemark. C.",
+        );
+        let ends: Vec<_> = blocks.iter().map(|b| (b.kind, b.end)).collect();
+        assert_eq!(
+            ends,
+            [
+                (BlockType::Theorem, EndReason::NoContinuation),
+                (BlockType::Text, EndReason::Structural),
+                (BlockType::Proof, EndReason::Qed),
+                (BlockType::Lemma, EndReason::NextOpener),
+                (BlockType::Lemma, EndReason::Heading),
+                (BlockType::Heading, EndReason::Structural),
+                (BlockType::Remark, EndReason::EndOfDocument),
+            ]
+        );
+
+        let c = HeuristicClassifier::new(ScoringConfig {
+            scope: crate::config::ScopeConfig {
+                proof_max_nodes: 2,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let nodes = parse_markdown("Proof. One.\n\nTwo.\n\nThree.\n\nFour.");
+        let blocks = c.classify(&nodes);
+        assert_eq!(
+            (blocks[0].span.clone(), blocks[0].end),
+            (0..2, EndReason::SizeLimit)
+        );
+
+        let mut overrides = ScopeOverrides::default();
+        overrides.delta.insert(0, 1);
+        assert_eq!(
+            c.classify_with_overrides(&nodes, &overrides)[0].end,
+            EndReason::Override
+        );
+    }
+
+    #[test]
+    fn detailed_classification_covers_every_node() {
+        let c = HeuristicClassifier::default();
+        let nodes = parse_markdown("# T\n\nTheorem 1. A.\n\n$$x$$\n\nText.");
+        let detail = c.classify_detailed(&nodes, &ScopeOverrides::default());
+        assert_eq!(detail.scores.len(), nodes.len());
+        assert_eq!(detail.block_of, [0, 1, 1, 2]);
+        assert_eq!(detail.scores[1].scores.len(), BlockType::SEMANTIC.len());
+        assert_eq!(detail.scores[1].best.0, BlockType::Theorem);
     }
 
     /// Asks for more until the block has `want` nodes.

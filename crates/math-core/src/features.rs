@@ -22,11 +22,25 @@ pub struct KeywordHit {
     pub number: Option<String>,
     /// `کوشی` in "قضیه ۳.۲ (کوشی)."
     pub name: Option<String>,
-    /// The keyword reads as a label: followed by a number, a name, `.`/`:`,
-    /// nothing at all, or (for proofs) a reference such as "of Theorem 2".
+    /// The keyword reads as a label: followed by a `(name)`, by `.`/`:`
+    /// (possibly after a number), by nothing at all, or (for proofs) by a
+    /// reference such as "of Theorem 2". A bare number is not enough:
+    /// "Theorem 2 gives a bound" is prose.
     pub labelled: bool,
     /// Nothing but the label on this node; the statement is in the next one.
     pub body_empty: bool,
+    /// A verb follows the keyword directly ("قضیه ۲ نتیجه می‌دهد که…",
+    /// "Theorem 2 implies…"): the sentence talks *about* the block.
+    pub reference: bool,
+    /// "Proof of Theorem 2" / "اثبات قضیه ۲": the statement referred to.
+    pub refers_to: Option<Reference>,
+}
+
+/// A mention of another block by type and (optionally) number.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reference {
+    pub kind: BlockType,
+    pub number: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -58,6 +72,7 @@ pub struct Lexicon {
     proof_cues: Vec<String>,
     statement_cues: Vec<String>,
     continuation: Vec<String>,
+    reference_cues: Vec<Vec<char>>,
 }
 
 fn fold_all(items: &[String]) -> Vec<String> {
@@ -94,6 +109,10 @@ impl Lexicon {
             proof_cues: fold_all(&config.proof_cues),
             statement_cues: fold_all(&config.statement_cues),
             continuation: fold_all(&config.continuation_cues),
+            reference_cues: fold_all(&config.reference_cues)
+                .iter()
+                .map(|c| c.chars().collect())
+                .collect(),
         }
     }
 
@@ -147,7 +166,7 @@ impl Lexicon {
     }
 
     /// Longest keyword starting at `at`, as (type, length in chars).
-    fn keyword_at(&self, low: &[char], at: usize) -> Option<(BlockType, usize)> {
+    pub(crate) fn keyword_at(&self, low: &[char], at: usize) -> Option<(BlockType, usize)> {
         self.keywords
             .iter()
             .filter(|(_, word, _)| {
@@ -169,14 +188,7 @@ impl Lexicon {
         let mut p = skip_ws(norm, start + len);
 
         let num_start = p;
-        while p < n
-            && (norm[p].is_numeric()
-                || (p > num_start
-                    && matches!(norm[p], '.' | '-' | '–' | '/')
-                    && norm.get(p + 1).is_some_and(|c| c.is_numeric())))
-        {
-            p += 1;
-        }
+        p = scan_number(norm, p);
         let number = (p > num_start).then(|| norm[num_start..p].iter().collect::<String>());
         p = skip_ws(norm, p);
 
@@ -190,22 +202,35 @@ impl Lexicon {
         }
 
         // "Proof of Theorem 2", "اثبات قضیه ۲".
-        let mut refers = false;
-        if kind == BlockType::Proof && number.is_none() && name.is_none() {
+        let mut refers_to = None;
+        if kind.is_argument() && number.is_none() && name.is_none() {
             let mut q = p;
             if low[q..].starts_with(&['o', 'f', ' ']) {
                 q = skip_ws(low, q + 3);
             }
-            if q < n {
-                refers = self
-                    .keyword_at(low, q)
-                    .is_some_and(|(k, _)| k != BlockType::Proof);
+            if q < n
+                && let Some((target, len)) = self.keyword_at(low, q)
+                && !target.is_argument()
+            {
+                let from = skip_ws(norm, q + len);
+                let to = scan_number(norm, from);
+                refers_to = Some(Reference {
+                    kind: target,
+                    number: (to > from).then(|| norm[from..to].iter().collect()),
+                });
             }
         }
 
         let punct = norm
             .get(p)
             .is_some_and(|c| matches!(c, ':' | '.' | '-' | '–' | '—'));
+        let reference = !punct
+            && name.is_none()
+            && refers_to.is_none()
+            && self.reference_cues.iter().any(|cue| {
+                low[p.min(n)..].starts_with(cue)
+                    && !low.get(p + cue.len()).is_some_and(|c| c.is_alphanumeric())
+            });
         if punct {
             p += 1;
         }
@@ -213,12 +238,29 @@ impl Lexicon {
 
         Some(KeywordHit {
             kind,
-            labelled: number.is_some() || name.is_some() || punct || refers || rest_empty,
-            body_empty: rest_empty && !refers,
+            labelled: name.is_some() || punct || refers_to.is_some() || rest_empty,
+            body_empty: rest_empty && refers_to.is_none(),
+            reference,
+            refers_to,
             number,
             name,
         })
     }
+}
+
+/// End of the label number starting at `p` (`3`, `۳.۲`, `2-1`); `p` itself
+/// when there is none.
+pub(crate) fn scan_number(chars: &[char], mut p: usize) -> usize {
+    let start = p;
+    while p < chars.len()
+        && (chars[p].is_numeric()
+            || (p > start
+                && matches!(chars[p], '.' | '-' | '–' | '/')
+                && chars.get(p + 1).is_some_and(|c| c.is_numeric())))
+    {
+        p += 1;
+    }
+    p
 }
 
 /// Occurrences of `symbol`; a `\command` must not run on into more letters
@@ -306,6 +348,35 @@ mod tests {
                 .unwrap()
                 .labelled
         );
+    }
+
+    #[test]
+    fn proof_reference_names_its_statement() {
+        let hit = features("اثبات قضیه ۲.۱. فرض کنید").lead.unwrap();
+        assert_eq!(
+            hit.refers_to,
+            Some(Reference {
+                kind: BlockType::Theorem,
+                number: Some("۲.۱".into())
+            })
+        );
+        let hit = features("Proof of the main result.").lead.unwrap();
+        assert_eq!(hit.refers_to, None);
+    }
+
+    #[test]
+    fn a_verb_after_the_label_marks_a_reference() {
+        for md in [
+            "قضیه ۲ نتیجه می‌دهد که $f$ کراندار است.",
+            "Theorem 2 implies that $f$ is bounded.",
+            "لم ۳ را در بخش بعد ثابت می‌کنیم.",
+        ] {
+            let hit = features(md).lead.unwrap();
+            assert!(hit.reference && !hit.labelled, "{md}");
+        }
+        let hit = features("Theorem 2 Let $G$ be a group.").lead.unwrap();
+        assert!(!hit.reference && !hit.labelled);
+        assert!(!features("Theorem 2. This implies").lead.unwrap().reference);
     }
 
     #[test]

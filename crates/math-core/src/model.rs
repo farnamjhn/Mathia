@@ -20,6 +20,11 @@ pub enum BlockType {
     Proof,
     Example,
     Remark,
+    Exercise,
+    /// The worked answer to an example or exercise.
+    Solution,
+    Claim,
+    Notation,
     /// A structural Markdown heading that is not itself a semantic opener.
     Heading,
     /// Ordinary prose / math that no classifier rule claimed.
@@ -28,7 +33,7 @@ pub enum BlockType {
 
 impl BlockType {
     /// Every type the classifier can assign from keywords and features.
-    pub const SEMANTIC: [BlockType; 8] = [
+    pub const SEMANTIC: [BlockType; 12] = [
         BlockType::Theorem,
         BlockType::Lemma,
         BlockType::Proposition,
@@ -37,6 +42,10 @@ impl BlockType {
         BlockType::Proof,
         BlockType::Example,
         BlockType::Remark,
+        BlockType::Exercise,
+        BlockType::Solution,
+        BlockType::Claim,
+        BlockType::Notation,
     ];
 
     pub fn is_semantic(self) -> bool {
@@ -47,7 +56,44 @@ impl BlockType {
     pub fn is_statement(self) -> bool {
         matches!(
             self,
-            BlockType::Theorem | BlockType::Lemma | BlockType::Proposition | BlockType::Corollary
+            BlockType::Theorem
+                | BlockType::Lemma
+                | BlockType::Proposition
+                | BlockType::Corollary
+                | BlockType::Claim
+        )
+    }
+
+    /// An argument that follows the block it belongs to and runs to a QED
+    /// marker: proofs and solutions.
+    pub fn is_argument(self) -> bool {
+        matches!(self, BlockType::Proof | BlockType::Solution)
+    }
+
+    /// The block type a LaTeX theorem-like environment name stands for
+    /// (`\begin{theorem}`, `\begin{defn*}`, …).
+    pub fn from_env_name(name: &str) -> Option<BlockType> {
+        Some(
+            match name
+                .trim()
+                .trim_end_matches('*')
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "theorem" | "thm" => BlockType::Theorem,
+                "lemma" | "lem" => BlockType::Lemma,
+                "proposition" | "prop" => BlockType::Proposition,
+                "corollary" | "cor" => BlockType::Corollary,
+                "definition" | "defn" | "def" => BlockType::Definition,
+                "proof" => BlockType::Proof,
+                "example" | "exmp" | "ex" => BlockType::Example,
+                "remark" | "rem" | "note" => BlockType::Remark,
+                "exercise" | "problem" => BlockType::Exercise,
+                "solution" | "sol" => BlockType::Solution,
+                "claim" => BlockType::Claim,
+                "notation" => BlockType::Notation,
+                _ => return None,
+            },
         )
     }
 
@@ -62,6 +108,10 @@ impl BlockType {
             BlockType::Proof => "proof",
             BlockType::Example => "example",
             BlockType::Remark => "remark",
+            BlockType::Exercise => "exercise",
+            BlockType::Solution => "solution",
+            BlockType::Claim => "claim",
+            BlockType::Notation => "notation",
             BlockType::Heading => "heading",
             BlockType::Text => "text",
         }
@@ -78,6 +128,10 @@ impl BlockType {
             (BlockType::Proof, Direction::Rtl) => "برهان",
             (BlockType::Example, Direction::Rtl) => "مثال",
             (BlockType::Remark, Direction::Rtl) => "تذکر",
+            (BlockType::Exercise, Direction::Rtl) => "تمرین",
+            (BlockType::Solution, Direction::Rtl) => "حل",
+            (BlockType::Claim, Direction::Rtl) => "ادعا",
+            (BlockType::Notation, Direction::Rtl) => "نمادگذاری",
             (BlockType::Heading, Direction::Rtl) => "بخش",
             (BlockType::Text, Direction::Rtl) => "متن",
             (BlockType::Theorem, Direction::Ltr) => "Theorem",
@@ -88,6 +142,10 @@ impl BlockType {
             (BlockType::Proof, Direction::Ltr) => "Proof",
             (BlockType::Example, Direction::Ltr) => "Example",
             (BlockType::Remark, Direction::Ltr) => "Remark",
+            (BlockType::Exercise, Direction::Ltr) => "Exercise",
+            (BlockType::Solution, Direction::Ltr) => "Solution",
+            (BlockType::Claim, Direction::Ltr) => "Claim",
+            (BlockType::Notation, Direction::Ltr) => "Notation",
             (BlockType::Heading, Direction::Ltr) => "Section",
             (BlockType::Text, Direction::Ltr) => "Text",
         }
@@ -155,6 +213,55 @@ pub struct MathSpan {
     pub display: bool,
 }
 
+/// A LaTeX theorem-like environment (`\begin{theorem}[Name] … \end{theorem}`),
+/// recorded on the first node of its body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvSpan {
+    pub kind: BlockType,
+    /// The optional `[Name]` argument.
+    pub name: Option<String>,
+    /// Number of nodes in the environment, this one included.
+    pub len: usize,
+}
+
+/// Why a block's scope stopped where it did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndReason {
+    /// Headings and plain text are not scoped.
+    Structural,
+    /// A QED marker closed the argument.
+    Qed,
+    /// The next node opens a block of its own.
+    NextOpener,
+    Heading,
+    EndOfDocument,
+    /// The next node does not read as a continuation of the statement.
+    NoContinuation,
+    /// The configured size cap was reached.
+    SizeLimit,
+    /// The scope is the exact extent of a LaTeX environment.
+    Environment,
+    /// A [`crate::ScopeOverrides`] entry moved the end.
+    Override,
+}
+
+impl EndReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EndReason::Structural => "structural",
+            EndReason::Qed => "qed",
+            EndReason::NextOpener => "next_opener",
+            EndReason::Heading => "heading",
+            EndReason::EndOfDocument => "end_of_document",
+            EndReason::NoContinuation => "no_continuation",
+            EndReason::SizeLimit => "size_limit",
+            EndReason::Environment => "environment",
+            EndReason::Override => "override",
+        }
+    }
+}
+
 /// One top-level Markdown node: the atom the classifier scores and the
 /// segmenter groups into [`SemanticBlock`]s.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -171,6 +278,8 @@ pub struct Node {
     pub html: String,
     /// Byte range in the Markdown source.
     pub source: Range<usize>,
+    /// Set on the first node of a LaTeX theorem-like environment.
+    pub env: Option<EnvSpan>,
 }
 
 /// A classified, addressable unit of the compiled document.
@@ -193,6 +302,11 @@ pub struct SemanticBlock {
     pub score: f32,
     /// Features of the opener node, kept for debugging and decision models.
     pub features: Option<Features>,
+    /// Id of the statement this proof proves, or of the example / exercise
+    /// this solution answers.
+    pub proves: Option<String>,
+    /// Why the scope ended where it did.
+    pub end: EndReason,
     pub html: String,
 }
 

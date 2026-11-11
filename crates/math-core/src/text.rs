@@ -4,14 +4,29 @@
 /// Arabic `ي`/`ك` become Persian `ی`/`ک`; ZWNJ, bidi marks, tatweel and
 /// diacritics are dropped; NBSP becomes a space. Case is left untouched.
 pub fn normalize(s: &str) -> String {
+    s.chars().filter_map(normalize_char).collect()
+}
+
+/// [`normalize`] for one char; `None` when the char is dropped.
+pub fn normalize_char(c: char) -> Option<char> {
+    match c {
+        'ي' | 'ى' => Some('ی'),
+        'ك' => Some('ک'),
+        '\u{200C}' | '\u{200D}' | '\u{200E}' | '\u{200F}' | '\u{0640}' => None,
+        '\u{064B}'..='\u{0655}' | '\u{0670}' => None,
+        '\u{00A0}' | '\u{202F}' => Some(' '),
+        c => Some(c),
+    }
+}
+
+/// Persian and Arabic-Indic digits as ASCII, so `۳.۲` and `3.2` compare equal.
+pub fn fold_digits(s: &str) -> String {
     s.chars()
-        .filter_map(|c| match c {
-            'ي' | 'ى' => Some('ی'),
-            'ك' => Some('ک'),
-            '\u{200C}' | '\u{200D}' | '\u{200E}' | '\u{200F}' | '\u{0640}' => None,
-            '\u{064B}'..='\u{0655}' | '\u{0670}' => None,
-            '\u{00A0}' | '\u{202F}' => Some(' '),
-            c => Some(c),
+        .map(|c| match c {
+            '۰'..='۹' => char::from(b'0' + (c as u32 - '۰' as u32) as u8),
+            '٠'..='٩' => char::from(b'0' + (c as u32 - '٠' as u32) as u8),
+            '–' | '/' => '-',
+            c => c,
         })
         .collect()
 }
@@ -57,6 +72,12 @@ mod tests {
         assert_eq!(normalize("مي‌ناميم"), "مینامیم");
         assert_eq!(normalize("كتاب"), "کتاب");
         assert_eq!(fold("Theorem"), "theorem");
+    }
+
+    #[test]
+    fn digits_fold_to_ascii() {
+        assert_eq!(fold_digits("۳.۲"), "3.2");
+        assert_eq!(fold_digits("٤–١"), "4-1");
     }
 
     #[test]

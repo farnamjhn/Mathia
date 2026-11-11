@@ -8,24 +8,113 @@
 
 pub mod classifier;
 pub mod config;
+mod crossref;
 pub mod error;
 pub mod features;
 pub mod html;
 pub mod model;
+pub mod normalize;
 pub mod parser;
+mod sha256;
 pub mod text;
 
-pub use classifier::{BlockJudge, HeuristicClassifier, NodeScore, ScopeOverrides, Verdict};
-pub use config::ScoringConfig;
+pub use classifier::{
+    BlockJudge, Classification, HeuristicClassifier, NodeScore, ScopeOverrides, Verdict,
+};
+pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, ScoringConfig};
 pub use error::{Error, Result};
-pub use html::{HtmlOptions, KatexAssets, MathAssets};
-pub use model::{BlockType, Direction, Document, Node, NodeKind, SemanticBlock, TocEntry};
+pub use html::{EmbeddedFont, HtmlOptions, KatexAssets, MathAssets};
+pub use model::{
+    BlockType, Direction, Document, EndReason, EnvSpan, Node, NodeKind, SemanticBlock, TocEntry,
+};
+pub use normalize::normalize_markdown;
 
-/// Parses and classifies a Markdown source.
+/// A [`Document`] together with the evidence behind every decision: all type
+/// scores of every node, and (on each block) why its scope ended.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Analysis {
+    pub document: Document,
+    /// One entry per node of the document.
+    pub scores: Vec<NodeScore>,
+    /// For every node, the index in `document.blocks` of its block.
+    pub block_of: Vec<usize>,
+}
+
+impl Analysis {
+    /// A plain-text table answering "why is this a theorem": one line per
+    /// node with its block, its best type and score, and the runner-up.
+    pub fn explain(&self, threshold: f32) -> String {
+        let mut out = String::new();
+        let mut current = usize::MAX;
+        for (index, score) in self.scores.iter().enumerate() {
+            let block_index = self.block_of[index];
+            let block = &self.document.blocks[block_index];
+            if block_index != current {
+                current = block_index;
+                out.push_str(&format!(
+                    "{}  [{}]  nodes {}..{}  score {:.2}  ended by {}{}\n",
+                    block.id,
+                    block.kind.slug(),
+                    block.span.start,
+                    block.span.end,
+                    block.score,
+                    block.end.as_str(),
+                    block
+                        .proves
+                        .as_deref()
+                        .map(|id| format!("  proves {id}"))
+                        .unwrap_or_default(),
+                ));
+            }
+            let mut ranked = score.scores.clone();
+            ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let runner_up = ranked
+                .get(1)
+                .filter(|(_, s)| *s > 0.0)
+                .map(|(kind, s)| format!(", then {} {s:.2}", kind.slug()))
+                .unwrap_or_default();
+            let preview: String = self.document.nodes[index]
+                .flat
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(48)
+                .collect();
+            let best = if score.best.1 > 0.0 {
+                format!("{} {:.2}", score.best.0.slug(), score.best.1)
+            } else {
+                "-".to_string()
+            };
+            out.push_str(&format!(
+                "  {index:>4} {} {best}{runner_up}  | {preview}\n",
+                if score.best.1 >= threshold { '*' } else { ' ' },
+            ));
+        }
+        out
+    }
+}
+
+/// Normalises OCR artefacts ([`normalize_markdown`]), then parses and
+/// classifies. Byte offsets in the result refer to the normalised text.
 pub fn analyze(markdown: &str, config: &ScoringConfig) -> Document {
-    let nodes = parser::parse_markdown(markdown);
-    let blocks = HeuristicClassifier::new(config.clone()).classify(&nodes);
-    Document::new(nodes, blocks)
+    analyze_detailed(markdown, config).document
+}
+
+/// [`analyze`], keeping the per-node scores for diagnostics and tuning.
+pub fn analyze_detailed(markdown: &str, config: &ScoringConfig) -> Analysis {
+    let nodes = parser::parse_markdown(&normalize_markdown(markdown));
+    let Classification {
+        blocks,
+        scores,
+        block_of,
+    } = HeuristicClassifier::new(config.clone())
+        .classify_detailed(&nodes, &ScopeOverrides::default());
+    Analysis {
+        document: Document::new(nodes, blocks),
+        scores,
+        block_of,
+    }
 }
 
 /// Like [`analyze`], with a decision model reviewing block scopes.
@@ -35,7 +124,7 @@ pub fn analyze_with_judge(
     judge: &dyn BlockJudge,
     max_rounds: usize,
 ) -> Document {
-    let nodes = parser::parse_markdown(markdown);
+    let nodes = parser::parse_markdown(&normalize_markdown(markdown));
     let blocks =
         HeuristicClassifier::new(config.clone()).classify_with_judge(&nodes, judge, max_rounds);
     Document::new(nodes, blocks)
