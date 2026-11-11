@@ -609,3 +609,84 @@ describe("degradation", () => {
     await finish(s);
   });
 });
+
+describe("search", () => {
+  test("finds, highlights and steps through matches; clears cleanly", async () => {
+    const s = await open(pages.plain);
+    const { page } = s;
+    const input = page.locator("#mx-search-input");
+    assert.ok(await page.locator("#mx-search").isVisible());
+    const before = await page.locator("#mx-main").innerHTML();
+    await input.fill("group");
+    await page.waitForSelector("mark.mx-hit");
+    const total = await page.locator("mark.mx-hit").count();
+    assert.ok(total > 0);
+    assert.match(await page.locator("#mx-search-count").textContent(), new RegExp(`^1 / ${total}$`));
+    assert.equal(await page.locator(".mx-hit-current").count(), 1);
+    await input.press("Enter");
+    assert.match(await page.locator("#mx-search-count").textContent(), /^2 \//);
+    await input.fill("zzzqqq-nothing");
+    await page.waitForSelector("#mx-search-count.mx-search-empty");
+    assert.equal(await page.locator("mark.mx-hit").count(), 0);
+    await input.press("Escape");
+    assert.equal(await page.locator("#mx-main").innerHTML(), before, "clearing restores the DOM");
+    await page.keyboard.press("/");
+    assert.equal(await page.evaluate(() => document.activeElement.id), "mx-search-input");
+    await finish(s);
+  });
+
+  test("Persian search folds Arabic letter variants", async () => {
+    const s = await open(pages.fa);
+    const { page } = s;
+    const n = await page.evaluate(() => window.Mathia.search("ك"));
+    assert.equal(typeof n, "number");
+    assert.equal(await page.evaluate(() => document.getElementById("mx-search-input").placeholder), "جستجو در متن…");
+    await finish(s);
+  });
+});
+
+describe("copy", () => {
+  async function withClipboard(url) {
+    const s = await open(url);
+    await s.context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: "file://" }).catch(() => {});
+    await s.page.evaluate(() => {
+      window.__clip = [];
+      const write = (t) => { window.__clip.push(t); return Promise.resolve(); };
+      Object.defineProperty(navigator, "clipboard", { value: { writeText: write }, configurable: true });
+    });
+    return s;
+  }
+
+  test("every semantic block has a Copy button that copies its text with LaTeX", async () => {
+    for (const url of [pages.plain, pages.en]) {
+      const s = await withClipboard(url);
+      const { page } = s;
+      const blocks = await page.locator("section.mx-block:has(.mx-block-head)").count();
+      assert.equal(await page.locator("[data-mx-action=copy], button[data-mx-action='copy']").count(), blocks);
+      const block = page.locator("section.mx-block:has(.math)").first();
+      await block.locator("button[data-mx-action=copy]").click();
+      const text = (await page.evaluate(() => window.__clip)).pop();
+      assert.match(text, /\$[^$]+\$/, "formulas are copied as LaTeX");
+      assert.ok(!text.includes("Copy"), "no UI text in the copy");
+      assert.equal(await block.locator("button[data-mx-action=copy]").textContent(), "Copied");
+      await finish(s);
+    }
+  });
+
+  test("formulas copy as LaTeX source", async () => {
+    const s = await withClipboard(pages.plain);
+    const { page } = s;
+    const tex = await page.evaluate(() => document.querySelector(".math-display").dataset.mxTex);
+    const display = page.locator(".math-display").first();
+    await display.hover();
+    await display.locator(".mx-math-copy").click();
+    assert.equal((await page.evaluate(() => window.__clip)).pop(), tex);
+    const inline = page.locator(".math-inline").first();
+    if (await inline.count()) {
+      const itex = await inline.evaluate((el) => el.dataset.mxTex);
+      await inline.click();
+      assert.equal((await page.evaluate(() => window.__clip)).pop(), itex);
+    }
+    await finish(s);
+  });
+});

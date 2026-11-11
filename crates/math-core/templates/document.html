@@ -14,6 +14,10 @@
 <button id="mx-toc-toggle" class="mx-toc-toggle" type="button" aria-controls="mx-toc" aria-expanded="true" aria-label="{{ toc_label }}">☰</button>
 <nav id="mx-toc" class="mx-toc" aria-label="{{ toc_label }}">
 <p class="mx-toc-title">{{ toc_label }}</p>
+<div id="mx-search" class="mx-search" role="search" hidden>
+<input id="mx-search-input" class="mx-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="{{ search_label }}" aria-label="{{ search_label }}" aria-controls="mx-main">
+<div class="mx-search-bar"><span id="mx-search-count" class="mx-search-count" aria-live="polite" data-none="{{ search_none }}"></span><button id="mx-search-prev" type="button" aria-label="{{ search_prev }}" title="{{ search_prev }}" disabled>↑</button><button id="mx-search-next" type="button" aria-label="{{ search_next }}" title="{{ search_next }}" disabled>↓</button></div>
+</div>
 <ol class="mx-toc-list">
 {%- for entry in toc %}
 <li class="mx-toc-item mx-toc-{{ entry.kind }}" style="--mx-depth: {{ entry.depth }}" data-depth="{{ entry.depth }}"><a href="#{{ entry.id }}" data-toc-target="{{ entry.id }}">{{ entry.title }}</a></li>

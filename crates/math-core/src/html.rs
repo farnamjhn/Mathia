@@ -245,6 +245,10 @@ struct DocumentTemplate<'a> {
     dir: &'static str,
     toc_label: &'static str,
     theme_label: &'static str,
+    search_label: &'static str,
+    search_none: &'static str,
+    search_prev: &'static str,
+    search_next: &'static str,
     csp: String,
     css: String,
     runtime_js: String,
@@ -338,6 +342,10 @@ pub fn render(doc: &Document, options: &HtmlOptions) -> Result<String> {
         } else {
             "Switch theme"
         },
+        search_label: if rtl { "جستجو در متن…" } else { "Search the text…" },
+        search_none: if rtl { "نتیجه‌ای نیست" } else { "No results" },
+        search_prev: if rtl { "نتیجهٔ قبلی" } else { "Previous result" },
+        search_next: if rtl { "نتیجهٔ بعدی" } else { "Next result" },
         csp: content_security_policy(&inline_scripts, &options.math, &connect_origins),
         css: css.replace("</style", "<\\/style"),
         math_head: math_head(&options.math, katex.as_ref()),
