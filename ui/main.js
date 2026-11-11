@@ -44,6 +44,10 @@
     cfgScorer: $("cfg-scorer"), cfgThreshold: $("cfg-threshold"), cfgWeights: $("cfg-weights"),
     cfgScope: $("cfg-scope"), cfgKeywords: $("cfg-keywords"), cfgCues: $("cfg-cues"),
     configError: $("config-error"), configLoad: $("config-load"), configSave: $("config-save"),
+    decision: $("decision"), decisionRun: $("decision-run"), decisionDialog: $("decision-dialog"),
+    dmProvider: $("dm-provider"), dmModel: $("dm-model"), dmUrl: $("dm-url"), dmKey: $("dm-key"),
+    dmKeyHint: $("dm-key-hint"), dmRemoveKey: $("dm-remove-key"), dmTest: $("dm-test"),
+    dmCancel: $("dm-cancel"), dmSave: $("dm-save"), decisionMessage: $("decision-message"),
     configReset: $("config-reset"), configCancel: $("config-cancel"), configApply: $("config-apply"),
   };
 
@@ -123,6 +127,7 @@
     el.preview.hidden = !has || !previewOpen;
     el.panes.classList.toggle("preview-closed", has && !previewOpen);
     el.previewToggle.disabled = !has;
+    updateDecisionRun();
     el.reload.disabled = el.export.disabled = el.exportPdf.disabled = !has;
   }
 
@@ -693,6 +698,140 @@
       configFailed(error);
     }
   });
+
+  // ── Decision model ───────────────────────────────────────────────────────────
+
+  const DM_PLACEHOLDERS = {
+    "anthropic": { model: "e.g. claude-haiku-5-5", url: "https://api.anthropic.com" },
+    "open-ai-compatible": { model: "e.g. gpt-4o-mini or llama3", url: "https://api.openai.com/v1" },
+  };
+  /** What the backend reports: settings, whether a key is stored. */
+  let decision = null;
+  /** The stored key is to be deleted when the dialog is saved. */
+  let dmClearKey = false;
+  let modelRunning = false;
+
+  function updateDecisionRun() {
+    el.decisionRun.disabled = !(analysis && decision && decision.ready) || modelRunning;
+  }
+
+  function dmMessage(text, isError) {
+    el.decisionMessage.textContent = text;
+    el.decisionMessage.classList.toggle("ok", !isError);
+    el.decisionMessage.hidden = !text;
+  }
+
+  function dmPlaceholders() {
+    const hints = DM_PLACEHOLDERS[el.dmProvider.value];
+    el.dmModel.placeholder = hints.model;
+    el.dmUrl.placeholder = hints.url;
+  }
+
+  function dmKeyChange() {
+    const typed = el.dmKey.value.trim();
+    if (typed) return { set: typed };
+    return dmClearKey ? "clear" : "keep";
+  }
+
+  function dmSettings() {
+    return {
+      provider: el.dmProvider.value,
+      baseUrl: el.dmUrl.value.trim(),
+      model: el.dmModel.value.trim(),
+    };
+  }
+
+  function fillDecision() {
+    const d = decision;
+    el.dmProvider.value = d.provider;
+    el.dmModel.value = d.model;
+    el.dmUrl.value = d.baseUrl;
+    el.dmKey.value = "";
+    dmClearKey = false;
+    el.dmKey.placeholder = d.hasKey ? "Saved (" + d.keyHint + ") — type to replace" : "Paste your API key";
+    el.dmKeyHint.textContent = d.provider === "open-ai-compatible"
+      ? "A local server may not need one." : "";
+    el.dmRemoveKey.hidden = !d.hasKey;
+    dmPlaceholders();
+    dmMessage("");
+  }
+
+  async function loadDecision() {
+    try {
+      decision = await invoke("get_decision_model");
+    } catch (error) {
+      setStatus(String(error), true);
+    }
+    updateDecisionRun();
+  }
+
+  async function showDecision() {
+    await loadDecision();
+    if (!decision) return;
+    fillDecision();
+    if (!el.decisionDialog.open) el.decisionDialog.showModal();
+    el.dmModel.focus();
+  }
+
+  async function saveDecision() {
+    if (!el.dmModel.reportValidity()) return;
+    try {
+      decision = await invoke("set_decision_model", { settings: dmSettings(), key: dmKeyChange() });
+      updateDecisionRun();
+      el.decisionDialog.close();
+      setStatus(decision.ready ? "Decision model saved" : "Decision model saved, but it still needs an API key");
+    } catch (error) {
+      dmMessage(String(error), true);
+    }
+  }
+
+  async function testDecision() {
+    if (!el.dmModel.reportValidity()) return;
+    el.dmTest.disabled = true;
+    dmMessage("Connecting…");
+    try {
+      dmMessage(await invoke("test_decision_model", { settings: dmSettings(), key: dmKeyChange() }));
+    } catch (error) {
+      dmMessage(String(error), true);
+    } finally {
+      el.dmTest.disabled = false;
+    }
+  }
+
+  async function runDecision() {
+    if (!source || modelRunning) return;
+    modelRunning = true;
+    updateDecisionRun();
+    setStatus("Asking the decision model…");
+    try {
+      const run = await invoke("run_decision_model", { source });
+      overrides = Object.assign(emptyOverrides(), run.overrides);
+      await pushOverrides();
+      setStatus(
+        "Decision model reviewed " + run.reviewed + " blocks and changed " + run.changed +
+          (run.asked === 0 ? " (answers reused)" : "")
+      );
+    } catch (error) {
+      setStatus(String(error), true);
+    } finally {
+      modelRunning = false;
+      updateDecisionRun();
+    }
+  }
+
+  el.decision.addEventListener("click", showDecision);
+  el.decisionRun.addEventListener("click", runDecision);
+  el.dmProvider.addEventListener("change", dmPlaceholders);
+  el.dmTest.addEventListener("click", testDecision);
+  el.dmSave.addEventListener("click", saveDecision);
+  el.dmCancel.addEventListener("click", () => el.decisionDialog.close());
+  el.dmRemoveKey.addEventListener("click", () => {
+    dmClearKey = true;
+    el.dmKey.value = "";
+    el.dmKey.placeholder = "Key will be removed when you save";
+    el.dmRemoveKey.hidden = true;
+  });
+  loadDecision();
 
   async function exportFolder() {
     try {

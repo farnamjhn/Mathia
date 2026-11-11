@@ -58,6 +58,12 @@
       </label>
       <hr>
       <button id="scoring" class="menu-item" type="button">Detection settings…</button>
+      <button id="decision" class="menu-item" type="button">Decision model…
+        <span class="option-hint">The API key and address of a model that double-checks the blocks.</span>
+      </button>
+      <button id="decision-run" class="menu-item" type="button" disabled>Review blocks with the model
+        <span class="option-hint">Sends each detected block to the model and applies its corrections.</span>
+      </button>
     </div>
   </div>
 
@@ -332,6 +338,42 @@ If I send more pages afterwards, continue the same document with the same conven
     <span class="spacer"></span>
     <button id="config-cancel" class="btn" type="button">Cancel</button>
     <button id="config-apply" class="btn primary" type="button">Apply</button>
+  </footer>
+</dialog>
+
+<dialog id="decision-dialog" class="dialog narrow" aria-labelledby="decision-title">
+  <header class="dialog-head">
+    <h2 id="decision-title">Decision model</h2>
+    <p>A hosted model that reviews each block Mathia detected and fixes its type or length.
+      Each block's text and the paragraphs around it are sent to the address below. The key
+      is kept on this computer and is never shown again.</p>
+  </header>
+  <form id="decision-form" class="config-form stack" method="dialog" autocomplete="off">
+    <label>Provider
+      <select id="dm-provider">
+        <option value="anthropic">Anthropic</option>
+        <option value="open-ai-compatible">OpenAI or compatible (Ollama, LM Studio…)</option>
+      </select>
+    </label>
+    <label>Model
+      <input id="dm-model" type="text" required spellcheck="false" autocapitalize="off">
+    </label>
+    <label>API address
+      <input id="dm-url" type="text" spellcheck="false" autocapitalize="off">
+      <span class="hint">Leave empty for the provider's own address.</span>
+    </label>
+    <label>API key
+      <input id="dm-key" type="password" spellcheck="false" autocapitalize="off" autocomplete="off">
+      <span id="dm-key-hint" class="hint"></span>
+    </label>
+  </form>
+  <p id="decision-message" class="config-error" role="status" hidden></p>
+  <footer class="dialog-actions">
+    <button id="dm-remove-key" class="btn" type="button" hidden>Remove key</button>
+    <button id="dm-test" class="btn" type="button">Test connection</button>
+    <span class="spacer"></span>
+    <button id="dm-cancel" class="btn" type="button">Cancel</button>
+    <button id="dm-save" class="btn primary" type="button">Save</button>
   </footer>
 </dialog>
 

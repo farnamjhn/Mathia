@@ -818,6 +818,13 @@ pre {
 .config-cues textarea { min-height: 96px; padding: 6px; font: 12px/1.4 var(--font-code); resize: vertical; }
 .config-error { margin: 8px 20px 0; color: var(--error); }
 
+.dialog.narrow { width: min(520px, calc(100vw - 48px)); }
+.config-form.stack { display: flex; flex-direction: column; gap: 12px; padding-bottom: 4px; }
+.config-form.stack label { flex-direction: column; align-items: stretch; gap: 4px; }
+.config-form.stack input[type="text"],
+.config-form.stack input[type="password"] { height: 30px; width: 100%; font: 13px var(--font-code); }
+.config-error.ok { color: var(--text); }
+
 /* ── Drop target ─────────────────────────────────────────────────────── */
 
 .drop {

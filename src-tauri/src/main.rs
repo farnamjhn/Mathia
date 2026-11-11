@@ -9,6 +9,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod decision;
 mod dock;
 mod session;
 mod theme;
@@ -29,6 +30,15 @@ use session::{AnalysisView, CompileOptions, Compiled, MARKDOWN_EXTENSIONS, Sessi
 const PREVIEW_SCHEME: &str = "mathia-preview";
 
 type Shared = Mutex<Session>;
+type SharedDecision = Mutex<decision::Decision>;
+
+fn lock_decision(state: &SharedDecision) -> MutexGuard<'_, decision::Decision> {
+    state.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+fn data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path().app_data_dir().map_err(|e| e.to_string())
+}
 
 /// The document waiting in the print window. Kept apart from the session's
 /// preview so printing never disturbs the preview frame's revision.
@@ -408,6 +418,114 @@ async fn save_config(app: AppHandle, state: State<'_, Shared>) -> Result<Option<
     Ok(Some(display(&dest)))
 }
 
+/// The decision model's settings; never the key itself.
+#[tauri::command]
+async fn get_decision_model(
+    state: State<'_, SharedDecision>,
+) -> Result<decision::DecisionView, String> {
+    Ok(lock_decision(&state).view())
+}
+
+/// Saves the settings and changes the key as asked.
+#[tauri::command]
+async fn set_decision_model(
+    app: AppHandle,
+    state: State<'_, SharedDecision>,
+    settings: decision::DecisionSettings,
+    key: decision::KeyChange,
+) -> Result<decision::DecisionView, String> {
+    let mut decision = lock_decision(&state);
+    decision.update(settings, key)?;
+    decision.save(&data_dir(&app)?)?;
+    Ok(decision.view())
+}
+
+/// Sends one tiny request with the given (unsaved) settings, so a wrong key
+/// or address shows up before a whole document is run. A key sent as `keep`
+/// is the stored one.
+#[tauri::command]
+async fn test_decision_model(
+    state: State<'_, SharedDecision>,
+    settings: decision::DecisionSettings,
+    key: decision::KeyChange,
+) -> Result<String, String> {
+    let trial = lock_decision(&state).trial(settings, key)?;
+    let judge = math_judge::ApiJudge::new(trial.api_config()?);
+    tauri::async_runtime::spawn_blocking(move || {
+        judge
+            .test()
+            .map(|()| format!("Connected to {}", judge.model_version()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// What `run_decision_model` reports.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelRun {
+    overrides: ScopeOverrides,
+    /// Blocks the model reviewed.
+    reviewed: usize,
+    /// Verdicts that changed a block.
+    changed: usize,
+    /// Verdicts that had to be asked of the model; the rest came from the cache.
+    asked: usize,
+}
+
+/// Has the decision model review the open document and makes its verdicts the
+/// session's corrections, which the user can then edit like any other.
+#[tauri::command]
+async fn run_decision_model(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    decision: State<'_, SharedDecision>,
+    source: Source,
+) -> Result<ModelRun, String> {
+    let config = lock_decision(&decision).api_config()?;
+    let (markdown, scoring) = {
+        let session = lock(&state);
+        (session.read(&source)?, session.config().clone())
+    };
+    let cache = decision::cache_path(&data_dir(&app)?);
+    // Network calls run off the UI thread with no lock held.
+    let run = tauri::async_runtime::spawn_blocking(move || {
+        let version = math_judge::ApiJudge::new(config.clone()).model_version();
+        let build = || math_judge::CachedJudge::new(math_judge::ApiJudge::new(config.clone()), &version);
+        let judge = build().load(&cache).unwrap_or_else(|_| build());
+        let (_, overrides, log) = math_core::analyze_with_judge_detailed(
+            &markdown,
+            &scoring,
+            &judge,
+            4,
+            ScopeOverrides::default(),
+        );
+        // A failed request is cached as "accept"; keep that out of the cache
+        // and out of the corrections.
+        if let Some(error) = judge.inner().errors().into_iter().next() {
+            return Err(error);
+        }
+        if let Some(dir) = cache.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = judge.save(&cache);
+        let changed = log
+            .iter()
+            .filter(|v| v.applied && v.verdict != math_core::Verdict::Accept)
+            .count();
+        Ok(ModelRun {
+            overrides,
+            reviewed: log.len(),
+            changed,
+            asked: judge.misses(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    lock(&state).set_overrides(run.overrides.clone());
+    Ok(run)
+}
+
 fn main() {
     // A development launch starts from a raw executable, so macOS initially
     // assigns it the generic `exec` icon. Initializing AppKit and replacing
@@ -418,6 +536,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Shared::default())
         .manage(PrintDoc::default())
+        .manage(SharedDecision::default())
         .register_uri_scheme_protocol(PREVIEW_SCHEME, |context, request| {
             let app = context.app_handle();
             let html = if request.uri().path() == PRINT_PATH {
@@ -437,6 +556,9 @@ fn main() {
         .setup(|app| {
             let saved = load_recent(app.handle());
             lock(&app.state::<Shared>()).set_recent(saved);
+            if let Ok(dir) = app.path().app_data_dir() {
+                *lock_decision(&app.state::<SharedDecision>()) = decision::Decision::load(&dir);
+            }
             // Replace the static bundle icon as soon as AppKit is available.
             // Waiting for `RunEvent::Ready` leaves the light bundle icon visible
             // while the application is starting in Dark Mode.
@@ -487,6 +609,10 @@ fn main() {
             recent_files,
             open_recent,
             clear_recent,
+            get_decision_model,
+            set_decision_model,
+            test_decision_model,
+            run_decision_model,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Mathia")

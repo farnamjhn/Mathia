@@ -22,6 +22,10 @@ const COMMANDS: &[&str] = &[
     "recent_files",
     "open_recent",
     "clear_recent",
+    "get_decision_model",
+    "set_decision_model",
+    "test_decision_model",
+    "run_decision_model",
 ];
 
 fn main() {

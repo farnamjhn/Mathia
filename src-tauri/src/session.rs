@@ -181,7 +181,7 @@ impl Session {
         self.recent.clear();
     }
 
-    fn read(&self, source: &Source) -> Result<String, String> {
+    pub fn read(&self, source: &Source) -> Result<String, String> {
         match source {
             Source::Text(text) => Ok(text.clone()),
             Source::Path(path) => {

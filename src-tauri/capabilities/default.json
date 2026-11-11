@@ -24,6 +24,10 @@
     "allow-export-folder",
     "allow-recent-files",
     "allow-open-recent",
-    "allow-clear-recent"
+    "allow-clear-recent",
+    "allow-get-decision-model",
+    "allow-set-decision-model",
+    "allow-test-decision-model",
+    "allow-run-decision-model"
   ]
 }
