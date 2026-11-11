@@ -176,6 +176,11 @@ async fn save_config(app: AppHandle, state: State<'_, Shared>) -> Result<Option<
 }
 
 fn main() {
+    // A development launch starts from a raw executable, so macOS initially
+    // assigns it the generic `exec` icon. Initializing AppKit and replacing
+    // that icon before Tauri builds its event loop prevents that first flash.
+    dock::refresh(None);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Shared::default())
@@ -188,6 +193,13 @@ fn main() {
                 .header("X-Content-Type-Options", "nosniff")
                 .body(html)
                 .expect("static response headers are valid")
+        })
+        .setup(|_app| {
+            // Replace the static bundle icon as soon as AppKit is available.
+            // Waiting for `RunEvent::Ready` leaves the light bundle icon visible
+            // while the application is starting in Dark Mode.
+            dock::refresh(None);
+            Ok(())
         })
         .on_window_event(|window, event| {
             match event {

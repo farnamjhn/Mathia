@@ -3,7 +3,7 @@
 #
 #   src-tauri/icons/source/mathia-{light,dark}.svg   the masters
 #   src-tauri/icons/{32x32,128x128,128x128@2x,icon}.png, icon.ico, icon.icns
-#                                                    bundle icons (light)
+#                                                    general bundle icons (light)
 #   src-tauri/icons/icon-dark.icns                   dark .icns, for reference
 #   src-tauri/icons/dock-{light,dark}.png            Dock icons the app swaps
 #                                                    between at runtime (macOS)
