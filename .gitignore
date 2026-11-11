@@ -2,3 +2,5 @@
 /crates/math-core/assets/katex
 *.html.tmp
 .DS_Store
+.agents
+tests/js/node_modules

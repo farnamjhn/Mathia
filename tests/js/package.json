@@ -1,0 +1,12 @@
+{
+  "name": "mathia-runtime-tests",
+  "private": true,
+  "type": "module",
+  "description": "Headless-Chrome tests for the runtime embedded in compiled Mathia documents",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.50.0"
+  }
+}
