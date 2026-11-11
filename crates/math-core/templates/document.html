@@ -9,7 +9,7 @@
 <style id="mx-style">{{ css|safe }}</style>
 {{ math_head|safe }}
 </head>
-<body>
+<body{% if !ai_attr.is_empty() %} data-mx-ai="{{ ai_attr }}"{% endif %}{% if !ai_endpoints.is_empty() %} data-mx-ai-endpoints="{{ ai_endpoints }}"{% endif %}>
 <button id="mx-theme-toggle" class="mx-theme-toggle" type="button" aria-label="{{ theme_label }}" title="{{ theme_label }}" hidden>◐</button>
 <button id="mx-toc-toggle" class="mx-toc-toggle" type="button" aria-controls="mx-toc" aria-expanded="true" aria-label="{{ toc_label }}">☰</button>
 <nav id="mx-toc" class="mx-toc" aria-label="{{ toc_label }}">
@@ -36,5 +36,8 @@
 {%- endfor %}
 </main>
 <script id="mx-runtime">{{ runtime_js|safe }}</script>
+{%- if let Some(ai) = ai_js %}
+<script id="mx-ai">{{ ai|safe }}</script>
+{%- endif %}
 </body>
 </html>

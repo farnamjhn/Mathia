@@ -28,6 +28,9 @@ Options:
 - `--explain` — print every node's scores and why each block ended where it did.
 - `--font Vazirmatn.woff2` — embed a WOFF2 text font in the output.
 - `--katex-dir DIR` — inline a local KaTeX distribution; `--no-math` leaves LaTeX unrendered.
+- `--ai` — embed the interactive AI runtime (all providers: Anthropic, OpenAI, Gemini).
+- `--ai-provider NAME` — enable a specific AI provider (repeatable: `anthropic`, `openai`, `gemini`).
+- `--ai-custom [NAME=]URL` — enable a custom OpenAI-compatible AI provider (repeatable: e.g. `https://api.deepseek.com/v1`, `ollama=http://localhost:11434/v1`).
 
 ## Development
 

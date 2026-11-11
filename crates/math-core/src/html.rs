@@ -9,7 +9,9 @@ use crate::model::{BlockType, Document};
 use crate::sha256::sha256;
 
 const STYLE_CSS: &str = include_str!("../assets/style.css");
+const AI_CSS: &str = include_str!("../assets/ai.css");
 const RUNTIME_JS: &str = include_str!("../assets/runtime.js");
+const AI_JS: &str = include_str!("../assets/ai.js");
 
 #[cfg(feature = "bundled-katex")]
 const BUNDLED_KATEX_CSS: &str = include_str!("../assets/katex/katex.prepared.css");
@@ -63,6 +65,136 @@ impl EmbeddedFont {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AiProvider {
+    Anthropic,
+    OpenAi,
+    Gemini,
+}
+
+impl AiProvider {
+    pub const ALL: [AiProvider; 3] = [
+        AiProvider::Anthropic,
+        AiProvider::OpenAi,
+        AiProvider::Gemini,
+    ];
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::OpenAi => "openai",
+            Self::Gemini => "gemini",
+        }
+    }
+
+    pub fn origin(self) -> &'static str {
+        match self {
+            Self::Anthropic => "https://api.anthropic.com",
+            Self::OpenAi => "https://api.openai.com",
+            Self::Gemini => "https://generativelanguage.googleapis.com",
+        }
+    }
+
+    pub fn from_slug(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "anthropic" => Some(Self::Anthropic),
+            "openai" => Some(Self::OpenAi),
+            "gemini" => Some(Self::Gemini),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CustomProvider {
+    /// Identifier slug, e.g. "custom", "ollama", "deepseek".
+    pub slug: String,
+    /// Origin for CSP `connect-src`, e.g. "https://api.deepseek.com" or "http://localhost:11434".
+    pub origin: String,
+    /// Optional default base URL or endpoint, e.g. "https://api.deepseek.com/v1".
+    pub endpoint: Option<String>,
+}
+
+impl CustomProvider {
+    pub fn new(slug: impl Into<String>, origin: impl Into<String>) -> Self {
+        Self {
+            slug: slug.into(),
+            origin: origin.into(),
+            endpoint: None,
+        }
+    }
+
+    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = Some(endpoint.into());
+        self
+    }
+
+    /// Parses a custom provider from a URL or `NAME=URL` string.
+    ///
+    /// The origin is automatically extracted from the URL scheme and authority
+    /// (e.g. `https://api.deepseek.com/v1` -> origin `https://api.deepseek.com`).
+    pub fn from_spec(spec: &str) -> std::result::Result<Self, String> {
+        let spec = spec.trim();
+        let (slug, url) = if let Some((name, u)) = spec.split_once('=') {
+            (name.trim(), u.trim())
+        } else {
+            ("custom", spec)
+        };
+
+        if slug.is_empty() {
+            return Err("custom provider name cannot be empty".to_string());
+        }
+        if !slug
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(format!(
+                "invalid custom provider name '{slug}': only alphanumeric, '-', and '_' are allowed"
+            ));
+        }
+
+        let origin = extract_origin(url).ok_or_else(|| {
+            format!(
+                "invalid URL for custom AI provider '{slug}': '{url}' (expected http:// or https:// URL)"
+            )
+        })?;
+
+        Ok(Self {
+            slug: slug.to_ascii_lowercase(),
+            origin,
+            endpoint: Some(url.to_string()),
+        })
+    }
+}
+
+/// Extracts `<scheme>://<host>[:<port>]` from a URL string.
+pub fn extract_origin(url: &str) -> Option<String> {
+    let url = url.trim();
+    let (scheme, rest) = if let Some(stripped) = url.strip_prefix("https://") {
+        ("https://", stripped)
+    } else {
+        let stripped = url.strip_prefix("http://")?;
+        ("http://", stripped)
+    };
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}{authority}"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AiOptions {
+    pub providers: Vec<AiProvider>,
+    pub custom_providers: Vec<CustomProvider>,
+}
+
+impl AiOptions {
+    pub fn is_empty(&self) -> bool {
+        self.providers.is_empty() && self.custom_providers.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct HtmlOptions {
     pub math: MathAssets,
@@ -70,6 +202,7 @@ pub struct HtmlOptions {
     pub title: Option<String>,
     /// Text fonts to embed; the first family leads the font stack.
     pub fonts: Vec<EmbeddedFont>,
+    pub ai: AiOptions,
 }
 
 struct BlockView<'a> {
@@ -105,6 +238,9 @@ struct DocumentTemplate<'a> {
     csp: String,
     css: String,
     runtime_js: String,
+    ai_js: Option<String>,
+    ai_attr: String,
+    ai_endpoints: String,
     math_head: String,
     toc: Vec<TocView<'a>>,
     blocks: Vec<BlockView<'a>>,
@@ -127,10 +263,60 @@ pub fn render(doc: &Document, options: &HtmlOptions) -> Result<String> {
         }),
         _ => None,
     };
+    let active_providers: Vec<AiProvider> = AiProvider::ALL
+        .into_iter()
+        .filter(|p| options.ai.providers.contains(p))
+        .collect();
+    let has_ai = !options.ai.is_empty();
+    let ai_js = if has_ai {
+        Some(AI_JS.replace("</script", "<\\/script"))
+    } else {
+        None
+    };
+    let mut provider_slugs: Vec<String> = active_providers
+        .iter()
+        .map(|p| p.slug().to_string())
+        .collect();
+    for custom in &options.ai.custom_providers {
+        if !provider_slugs.contains(&custom.slug) {
+            provider_slugs.push(custom.slug.clone());
+        }
+    }
+    let ai_attr = if has_ai {
+        provider_slugs.join(" ")
+    } else {
+        String::new()
+    };
+    let ai_endpoints = if has_ai {
+        let pairs: Vec<String> = options
+            .ai
+            .custom_providers
+            .iter()
+            .filter_map(|c| c.endpoint.as_ref().map(|ep| format!("{}={}", c.slug, ep)))
+            .collect();
+        pairs.join(" ")
+    } else {
+        String::new()
+    };
     let mut inline_scripts = vec![runtime_js.as_str()];
     inline_scripts.extend(katex.as_ref().map(|k| k.js.as_str()));
+    if let Some(ref js) = ai_js {
+        inline_scripts.push(js.as_str());
+    }
     let mut css = font_css(&options.fonts);
     css.push_str(STYLE_CSS);
+    if has_ai {
+        css.push_str(AI_CSS);
+    }
+    let mut connect_origins: Vec<String> = active_providers
+        .iter()
+        .map(|p| p.origin().to_string())
+        .collect();
+    for custom in &options.ai.custom_providers {
+        if !connect_origins.contains(&custom.origin) {
+            connect_origins.push(custom.origin.clone());
+        }
+    }
 
     let template = DocumentTemplate {
         title,
@@ -142,10 +328,13 @@ pub fn render(doc: &Document, options: &HtmlOptions) -> Result<String> {
         } else {
             "Switch theme"
         },
-        csp: content_security_policy(&inline_scripts, &options.math),
+        csp: content_security_policy(&inline_scripts, &options.math, &connect_origins),
         css: css.replace("</style", "<\\/style"),
         math_head: math_head(&options.math, katex.as_ref()),
         runtime_js,
+        ai_js,
+        ai_attr,
+        ai_endpoints,
         toc: doc
             .toc
             .iter()
@@ -210,7 +399,11 @@ const KATEX_CDN: &str = "https://cdn.jsdelivr.net";
 /// scripts Mathia inlined itself (allowed by hash, so an injected `<script>`,
 /// event-handler attribute or `javascript:` URL cannot run), inline styles
 /// (KaTeX needs them), embedded fonts, and images.
-fn content_security_policy(inline_scripts: &[&str], math: &MathAssets) -> String {
+fn content_security_policy(
+    inline_scripts: &[&str],
+    math: &MathAssets,
+    connect_origins: &[impl AsRef<str>],
+) -> String {
     let cdn = match math {
         MathAssets::Cdn { .. } => format!(" {KATEX_CDN}"),
         _ => String::new(),
@@ -219,11 +412,20 @@ fn content_security_policy(inline_scripts: &[&str], math: &MathAssets) -> String
         .iter()
         .map(|script| format!(" 'sha256-{}'", base64(&sha256(script.as_bytes()))))
         .collect();
-    format!(
+    let mut csp = format!(
         "default-src 'none'; script-src{hashes}{cdn}; style-src 'unsafe-inline'{cdn}; \
-         font-src data:{cdn}; img-src 'self' data: blob: https: http: file:; \
-         base-uri 'none'; form-action 'none'"
-    )
+         font-src data:{cdn}; img-src 'self' data: blob: https: http: file:;"
+    );
+    if !connect_origins.is_empty() {
+        let origins = connect_origins
+            .iter()
+            .map(|s| s.as_ref())
+            .collect::<Vec<_>>()
+            .join(" ");
+        csp.push_str(&format!(" connect-src {origins};"));
+    }
+    csp.push_str(" base-uri 'none'; form-action 'none'");
+    csp
 }
 
 /// `@font-face` rules for the embedded fonts, plus the font stack led by them.
@@ -410,6 +612,157 @@ mod tests {
         assert!(inline.contains(".katex{font:x}"));
         assert!(inline.contains(r"var s='<\/script>';"));
         assert!(!inline.contains("cdn.jsdelivr.net"));
+    }
+
+    #[test]
+    fn ai_provider_properties() {
+        assert_eq!(AiProvider::Anthropic.slug(), "anthropic");
+        assert_eq!(AiProvider::OpenAi.slug(), "openai");
+        assert_eq!(AiProvider::Gemini.slug(), "gemini");
+
+        assert_eq!(AiProvider::Anthropic.origin(), "https://api.anthropic.com");
+        assert_eq!(AiProvider::OpenAi.origin(), "https://api.openai.com");
+        assert_eq!(
+            AiProvider::Gemini.origin(),
+            "https://generativelanguage.googleapis.com"
+        );
+
+        assert_eq!(
+            AiProvider::from_slug("anthropic"),
+            Some(AiProvider::Anthropic)
+        );
+        assert_eq!(AiProvider::from_slug("openai"), Some(AiProvider::OpenAi));
+        assert_eq!(AiProvider::from_slug("gemini"), Some(AiProvider::Gemini));
+        assert_eq!(AiProvider::from_slug("invalid"), None);
+        assert_eq!(
+            AiProvider::ALL,
+            [
+                AiProvider::Anthropic,
+                AiProvider::OpenAi,
+                AiProvider::Gemini
+            ]
+        );
+    }
+
+    #[test]
+    fn ai_embedding_and_csp() {
+        let doc = analyze(SAMPLE, &ScoringConfig::default());
+
+        // Disabled -> no connect-src, no mx-ai, no data-mx-ai
+        let html_disabled = render(&doc, &HtmlOptions::default()).unwrap();
+        assert!(!html_disabled.contains("connect-src"));
+        assert!(!html_disabled.contains("mx-ai"));
+        assert!(!html_disabled.contains("data-mx-ai"));
+
+        // Enabled with [Gemini, Anthropic]
+        let options_enabled = HtmlOptions {
+            ai: AiOptions {
+                providers: vec![AiProvider::Gemini, AiProvider::Anthropic],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let html_enabled = render(&doc, &options_enabled).unwrap();
+
+        assert!(html_enabled.contains(
+            "connect-src https://api.anthropic.com https://generativelanguage.googleapis.com"
+        ));
+        assert!(html_enabled.contains(r#"data-mx-ai="anthropic gemini""#));
+
+        // Script present after mx-runtime
+        let runtime_pos = html_enabled
+            .find(r#"id="mx-runtime""#)
+            .expect("mx-runtime present");
+        let ai_pos = html_enabled.find(r#"id="mx-ai""#).expect("mx-ai present");
+        assert!(runtime_pos < ai_pos, "mx-ai must be after mx-runtime");
+
+        // And its SHA-256 hash in the CSP (compute it the same way content_security_policy does)
+        let ai_script = AI_JS.replace("</script", "<\\/script");
+        let expected_hash = format!("'sha256-{}'", base64(&sha256(ai_script.as_bytes())));
+        let csp_start = html_enabled
+            .find("Content-Security-Policy")
+            .expect("CSP meta tag");
+        let csp_end = html_enabled[csp_start..]
+            .find('>')
+            .expect("end of meta tag");
+        let csp_content = &html_enabled[csp_start..csp_start + csp_end];
+        assert!(
+            csp_content.contains(&expected_hash),
+            "CSP missing ai.js hash: {expected_hash}"
+        );
+    }
+
+    #[test]
+    fn custom_ai_provider_parsing() {
+        assert_eq!(
+            extract_origin("https://api.deepseek.com/v1/chat/completions"),
+            Some("https://api.deepseek.com".into())
+        );
+        assert_eq!(
+            extract_origin("http://localhost:11434"),
+            Some("http://localhost:11434".into())
+        );
+        assert_eq!(
+            extract_origin("http://127.0.0.1:8080/v1"),
+            Some("http://127.0.0.1:8080".into())
+        );
+        assert_eq!(extract_origin("not-a-url"), None);
+        assert_eq!(extract_origin("ftp://example.com"), None);
+
+        let custom1 = CustomProvider::from_spec("https://api.deepseek.com/v1").unwrap();
+        assert_eq!(custom1.slug, "custom");
+        assert_eq!(custom1.origin, "https://api.deepseek.com");
+        assert_eq!(custom1.endpoint, Some("https://api.deepseek.com/v1".into()));
+
+        let custom2 = CustomProvider::from_spec("ollama=http://localhost:11434").unwrap();
+        assert_eq!(custom2.slug, "ollama");
+        assert_eq!(custom2.origin, "http://localhost:11434");
+        assert_eq!(custom2.endpoint, Some("http://localhost:11434".into()));
+
+        assert!(CustomProvider::from_spec("").is_err());
+        assert!(CustomProvider::from_spec("bad slug=http://localhost").is_err());
+        assert!(CustomProvider::from_spec("foo=not-a-url").is_err());
+    }
+
+    #[test]
+    fn custom_ai_provider_embedding_and_csp() {
+        let doc = analyze(SAMPLE, &ScoringConfig::default());
+
+        // Custom provider alone
+        let options = HtmlOptions {
+            ai: AiOptions {
+                providers: vec![],
+                custom_providers: vec![
+                    CustomProvider::from_spec("ollama=http://localhost:11434/v1").unwrap(),
+                ],
+            },
+            ..Default::default()
+        };
+        let html = render(&doc, &options).unwrap();
+        assert!(html.contains("connect-src http://localhost:11434;"));
+        assert!(html.contains(r#"data-mx-ai="ollama""#));
+        assert!(html.contains(r#"data-mx-ai-endpoints="ollama=http://localhost:11434/v1""#));
+        assert!(html.contains(r#"id="mx-ai""#));
+        assert!(!html.contains("api.anthropic.com"));
+
+        // Custom provider combined with built-in
+        let options_combined = HtmlOptions {
+            ai: AiOptions {
+                providers: vec![AiProvider::OpenAi],
+                custom_providers: vec![
+                    CustomProvider::from_spec("https://api.deepseek.com/v1").unwrap(),
+                ],
+            },
+            ..Default::default()
+        };
+        let html_combined = render(&doc, &options_combined).unwrap();
+        assert!(
+            html_combined.contains("connect-src https://api.openai.com https://api.deepseek.com;")
+        );
+        assert!(html_combined.contains(r#"data-mx-ai="openai custom""#));
+        assert!(
+            html_combined.contains(r#"data-mx-ai-endpoints="custom=https://api.deepseek.com/v1""#)
+        );
     }
 
     #[test]

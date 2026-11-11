@@ -23,7 +23,9 @@ pub use classifier::{
 };
 pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, ScoringConfig};
 pub use error::{Error, Result};
-pub use html::{EmbeddedFont, HtmlOptions, KatexAssets, MathAssets};
+pub use html::{
+    AiOptions, AiProvider, CustomProvider, EmbeddedFont, HtmlOptions, KatexAssets, MathAssets,
+};
 pub use model::{
     BlockType, Direction, Document, EndReason, EnvSpan, Node, NodeKind, SemanticBlock, TocEntry,
 };

@@ -2,13 +2,16 @@
 //! a thin CLI over `math-core`, handy for trying the compiler on real files:
 //!
 //! ```text
-//! mathia notes.md [-o notes.html] [--config scoring.toml] [--explain] [--font F.woff2]
+//! mathia notes.md [-o notes.html] [--config scoring.toml] [--explain] [--font F.woff2] [--ai] [--ai-custom URL]
 //! ```
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use math_core::{ConfigFormat, EmbeddedFont, HtmlOptions, KatexAssets, MathAssets, ScoringConfig};
+use math_core::{
+    AiOptions, AiProvider, ConfigFormat, CustomProvider, EmbeddedFont, HtmlOptions, KatexAssets,
+    MathAssets, ScoringConfig,
+};
 
 #[cfg(not(feature = "bundled-katex"))]
 const KATEX_CDN_VERSION: &str = "0.16.22";
@@ -22,7 +25,14 @@ const USAGE: &str = "usage: mathia <input.md> [options]
       --font FILE       embed a WOFF2 text font (repeatable; family from the file name)
       --title TEXT      document title (default: the first heading)
       --katex-dir DIR   use this KaTeX dist/ directory
-      --no-math         leave LaTeX unrendered";
+      --no-math         leave LaTeX unrendered
+      --ai              enable AI runtime with all providers
+      --ai-provider NAME
+                        enable a specific AI provider (repeatable: anthropic, openai, gemini)
+      --ai-custom [NAME=]URL
+                        enable a custom OpenAI-compatible AI provider (repeatable; e.g.
+                        --ai-custom https://api.deepseek.com/v1 or
+                        --ai-custom ollama=http://localhost:11434/v1)";
 
 /// `Vazirmatn[wght].woff2` and `Vazirmatn-Regular.woff2` are both "Vazirmatn".
 fn font_family(path: &std::path::Path) -> String {
@@ -45,6 +55,8 @@ fn run() -> Result<(), String> {
     let mut title: Option<String> = None;
     let mut no_math = false;
     let mut explain = false;
+    let mut ai_providers: Vec<AiProvider> = Vec::new();
+    let mut custom_providers: Vec<CustomProvider> = Vec::new();
 
     let mut args = std::env::args().skip(1);
     let value = |args: &mut dyn Iterator<Item = String>, flag: &str| {
@@ -59,6 +71,48 @@ fn run() -> Result<(), String> {
             "--title" => title = Some(value(&mut args, &arg)?),
             "--no-math" => no_math = true,
             "--explain" => explain = true,
+            "--ai" => {
+                for p in AiProvider::ALL {
+                    if !ai_providers.contains(&p) {
+                        ai_providers.push(p);
+                    }
+                }
+            }
+            "--ai-custom" => {
+                let spec = value(&mut args, &arg)?;
+                let custom = CustomProvider::from_spec(&spec)?;
+                if !custom_providers.iter().any(|c| c.slug == custom.slug) {
+                    custom_providers.push(custom);
+                }
+            }
+            "--ai-provider" => {
+                let name = value(&mut args, &arg)?;
+                if name.contains('=') || name.starts_with("http://") || name.starts_with("https://")
+                {
+                    let custom = CustomProvider::from_spec(&name)?;
+                    if !custom_providers.iter().any(|c| c.slug == custom.slug) {
+                        custom_providers.push(custom);
+                    }
+                } else if name.trim().eq_ignore_ascii_case("custom") {
+                    return Err(
+                        "custom AI provider requires a URL or origin. Use --ai-custom [NAME=]URL (e.g. --ai-custom https://api.deepseek.com/v1)".into(),
+                    );
+                } else {
+                    let provider = AiProvider::from_slug(&name).ok_or_else(|| {
+                        let valid = AiProvider::ALL
+                            .iter()
+                            .map(|p| p.slug())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(
+                            "unknown AI provider '{name}'. Valid providers: {valid} (or use --ai-custom [NAME=]URL)"
+                        )
+                    })?;
+                    if !ai_providers.contains(&provider) {
+                        ai_providers.push(provider);
+                    }
+                }
+            }
             "--dump-config" => {
                 let text = ScoringConfig::default()
                     .serialize(ConfigFormat::Toml)
@@ -121,8 +175,19 @@ fn run() -> Result<(), String> {
         print!("{}", analysis.explain(config.threshold));
     }
     let document = analysis.document;
-    let html = math_core::html::render(&document, &HtmlOptions { math, title, fonts })
-        .map_err(|e| e.to_string())?;
+    let html = math_core::html::render(
+        &document,
+        &HtmlOptions {
+            math,
+            title,
+            fonts,
+            ai: AiOptions {
+                providers: ai_providers,
+                custom_providers,
+            },
+        },
+    )
+    .map_err(|e| e.to_string())?;
     std::fs::write(&output, html).map_err(|e| format!("{}: {e}", output.display()))?;
 
     let semantic = document
