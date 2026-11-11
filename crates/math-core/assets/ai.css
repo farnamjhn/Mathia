@@ -1,0 +1,204 @@
+/* Mathia AI interactive runtime styles (S2: settings toggle & dialog) */
+
+/* Settings toggle button (next to #mx-theme-toggle at inset-inline-end: 18px) */
+#mx-ai-toggle,
+.mx-ai-toggle {
+  position: fixed;
+  inset-block-start: 18px;
+  inset-inline-end: 64px;
+  z-index: 3;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--mx-border);
+  border-radius: 6px;
+  background: var(--mx-bg);
+  color: var(--mx-text);
+  font-size: 1.05rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+
+#mx-ai-toggle:hover,
+.mx-ai-toggle:hover {
+  background: var(--mx-text);
+  border-color: var(--mx-text);
+  color: var(--mx-bg);
+}
+
+#mx-ai-toggle:focus-visible,
+.mx-ai-toggle:focus-visible {
+  outline: 2px solid var(--mx-text);
+  outline-offset: 2px;
+}
+
+/* Offline state: hide toggle and action buttons */
+.mx-ai-offline #mx-ai-toggle,
+.mx-ai-offline .mx-ai-toggle,
+.mx-ai-offline [data-mx-ai-action] {
+  display: none !important;
+}
+
+/* Settings Dialog */
+#mx-ai-dialog,
+.mx-ai-dialog {
+  border: 1px solid var(--mx-border);
+  border-radius: 8px;
+  background: var(--mx-bg);
+  color: var(--mx-text);
+  padding: 24px;
+  max-width: 28rem;
+  width: min(92vw, 28rem);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
+  font-family: var(--mx-font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+
+#mx-ai-dialog::backdrop,
+.mx-ai-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+}
+
+.mx-ai-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--mx-border);
+}
+
+.mx-ai-dialog-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--mx-text);
+  letter-spacing: -0.01em;
+}
+
+.mx-ai-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.mx-ai-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mx-ai-field label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--mx-gray-700);
+}
+
+.mx-ai-field select,
+.mx-ai-field input[type="text"],
+.mx-ai-field input[type="url"],
+.mx-ai-field input[type="password"] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--mx-border);
+  border-radius: 5px;
+  background: var(--mx-bg-secondary);
+  color: var(--mx-text);
+  font-family: var(--mx-font-sans);
+  font-size: 13.5px;
+  box-sizing: border-box;
+  transition: border-color .15s ease;
+}
+
+.mx-ai-field input[type="password"] {
+  font-family: var(--mx-font-mono);
+}
+
+.mx-ai-field select:focus,
+.mx-ai-field input:focus {
+  outline: 2px solid var(--mx-text);
+  outline-offset: -1px;
+  border-color: var(--mx-text);
+}
+
+.mx-ai-notice {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--mx-gray-600);
+  line-height: 1.45;
+  padding: 8px 10px;
+  background: var(--mx-bg-secondary);
+  border: 1px solid var(--mx-border);
+  border-radius: 5px;
+  word-break: break-all;
+}
+
+.mx-ai-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--mx-border);
+}
+
+.mx-ai-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--mx-border);
+  border-radius: 5px;
+  background: var(--mx-bg-secondary);
+  color: var(--mx-text);
+  font: 500 12.5px var(--mx-font-sans);
+  cursor: pointer;
+  transition: all .12s ease;
+}
+
+.mx-ai-btn:hover {
+  background: var(--mx-text);
+  border-color: var(--mx-text);
+  color: var(--mx-bg);
+}
+
+.mx-ai-btn:focus-visible {
+  outline: 2px solid var(--mx-text);
+  outline-offset: 2px;
+}
+
+.mx-ai-btn-primary {
+  background: var(--mx-text);
+  border-color: var(--mx-text);
+  color: var(--mx-bg);
+  font-weight: 600;
+}
+
+.mx-ai-btn-primary:hover {
+  opacity: 0.88;
+}
+
+/* Print styles: completely hide AI elements */
+@media print {
+  #mx-ai-toggle,
+  .mx-ai-toggle,
+  #mx-ai-dialog,
+  .mx-ai-dialog,
+  [data-mx-ai-action],
+  .mx-ai-panel {
+    display: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #mx-ai-toggle,
+  .mx-ai-toggle,
+  .mx-ai-btn {
+    transition: none;
+  }
+}
