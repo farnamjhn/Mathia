@@ -17,8 +17,6 @@
     <img class="if-dark" src="assets/mathia-dark.png" width="28" height="28" alt="">
   </span>
   <button id="open" type="button" title="Open a Markdown file (⌘O / Ctrl+O)">Open…</button>
-  <button id="reload" type="button" title="Compile again (⌘R / Ctrl+R)" disabled>Reload</button>
-  <button id="export" type="button" title="Save the compiled HTML (⌘E / Ctrl+E)" disabled>Export…</button>
   <button id="guide" type="button" title="The prompt to give your OCR / vision LLM so its Markdown suits Mathia">OCR prompt</button>
   <label class="check" title="Embed the AI runtime (Ask / Illustrate) for Anthropic, OpenAI, Gemini or any OpenAI-compatible endpoint">
     <input id="ai" type="checkbox"> AI runtime
@@ -27,6 +25,10 @@
     <input id="no-math" type="checkbox"> No math
   </label>
   <span id="status" class="status" role="status" aria-live="polite"></span>
+  <button id="preview-toggle" class="preview-toggle" type="button" aria-controls="preview" aria-expanded="true" title="Close HTML preview">
+    <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+    <span>Preview</span>
+  </button>
   <button id="theme-toggle" class="theme-toggle" type="button" title="Toggle color theme">
     <span class="if-dark theme-option">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -46,7 +48,7 @@
   </button>
 </header>
 
-<main class="panes">
+<main id="panes" class="panes">
   <aside class="inspector" aria-label="Block inspector">
     <div class="inspector-head">
       <h2>Blocks</h2>
@@ -65,25 +67,45 @@
     </section>
   </aside>
 
-  <section class="preview">
-    <div id="empty" class="empty">
-      <div class="empty-logo" aria-hidden="true">
-        <img class="if-light" src="assets/mathia-light.png" width="96" height="96" alt="">
-        <img class="if-dark" src="assets/mathia-dark.png" width="96" height="96" alt="">
+  <section id="preview" class="preview">
+    <div class="preview-head">
+      <div class="preview-head-start">
+        <span class="preview-badge">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="16 18 22 12 16 6"/>
+            <polyline points="8 6 2 12 8 18"/>
+          </svg>
+          <span>HTML preview</span>
+        </span>
+        <button id="reload" class="btn preview-reload" type="button" aria-label="Reload" title="Compile again (⌘R / Ctrl+R)" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+            <path d="M21 3v5h-5"/>
+          </svg>
+        </button>
       </div>
-      <p class="empty-title">Open a Markdown file</p>
-      <p>Use <strong>Open…</strong> or drop a <code>.md</code> file on this window.</p>
-      <div class="empty-guide">
-        <p class="empty-guide-title">Transcribing pages with an LLM first?</p>
-        <p>Give your OCR / vision model this prompt before the page images, so the Markdown it
-          returns uses the conventions Mathia detects.</p>
-        <div class="actions">
-          <button id="copy-prompt-empty" class="btn primary" type="button">Copy OCR prompt</button>
-          <button id="view-prompt" class="btn" type="button">View prompt</button>
+      <button id="export" class="btn preview-export" type="button" title="Save the compiled HTML (⌘E / Ctrl+E)" disabled>Export…</button>
+    </div>
+    <div class="preview-body">
+      <div id="empty" class="empty">
+        <div class="empty-logo" aria-hidden="true">
+          <img class="if-light" src="assets/mathia-light.png" width="96" height="96" alt="">
+          <img class="if-dark" src="assets/mathia-dark.png" width="96" height="96" alt="">
+        </div>
+        <p class="empty-title">Open a Markdown file</p>
+        <p>Use <strong>Open…</strong> or drop a <code>.md</code> file on this window.</p>
+        <div class="empty-guide">
+          <p class="empty-guide-title">Transcribing pages with an LLM first?</p>
+          <p>Give your OCR / vision model this prompt before the page images, so the Markdown it
+            returns uses the conventions Mathia detects.</p>
+          <div class="actions">
+            <button id="copy-prompt-empty" class="btn primary" type="button">Copy OCR prompt</button>
+            <button id="view-prompt" class="btn" type="button">View prompt</button>
+          </div>
         </div>
       </div>
+      <iframe id="frame" title="Compiled document" sandbox="allow-scripts allow-same-origin" hidden></iframe>
     </div>
-    <iframe id="frame" title="Compiled document" sandbox="allow-scripts allow-same-origin" hidden></iframe>
   </section>
 </main>
 

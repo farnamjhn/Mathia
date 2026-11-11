@@ -16,7 +16,9 @@
   const el = {
     open: $("open"), reload: $("reload"), export: $("export"),
     ai: $("ai"), noMath: $("no-math"), showText: $("show-text"),
-    status: $("status"), blocks: $("blocks"), frame: $("frame"), empty: $("empty"),
+    status: $("status"), blocks: $("blocks"), panes: $("panes"),
+    preview: $("preview"), previewToggle: $("preview-toggle"),
+    frame: $("frame"), empty: $("empty"),
     drop: $("drop"), detail: $("detail"), detailTitle: $("detail-title"),
     detailFacts: $("detail-facts"), detailScores: $("detail-scores"),
     detailFeatures: $("detail-features"),
@@ -225,6 +227,19 @@
     button.copyTimer = setTimeout(() => { button.textContent = label; }, 1600);
   }
 
+  function setPreviewOpen(open) {
+    const isOpen = Boolean(open);
+    el.preview.hidden = !isOpen;
+    if (el.panes && !CSS.supports("selector(:has(*))")) {
+      el.panes.classList.toggle("preview-closed", !isOpen);
+    }
+    el.previewToggle.setAttribute("aria-expanded", String(isOpen));
+    el.previewToggle.title = isOpen ? "Close HTML preview" : "Open HTML preview";
+    if (!isOpen && el.preview.contains(document.activeElement)) {
+      el.previewToggle.focus();
+    }
+  }
+
   function showGuide() {
     if (!el.guideDialog.open) el.guideDialog.showModal();
     el.promptText.scrollTop = 0;
@@ -244,6 +259,7 @@
   el.open.addEventListener("click", open);
   el.reload.addEventListener("click", () => refresh());
   el.export.addEventListener("click", exportHtml);
+  el.previewToggle.addEventListener("click", () => setPreviewOpen(el.preview.hidden));
   el.ai.addEventListener("change", () => refresh());
   el.noMath.addEventListener("change", () => refresh());
   el.showText.addEventListener("change", renderBlocks);
