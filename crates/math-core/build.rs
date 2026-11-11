@@ -52,6 +52,20 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/katex/katex.min.css");
     println!("cargo:rerun-if-changed=assets/katex/katex.prepared.css");
 
+    println!("cargo:rerun-if-changed=assets/fonts/Vazirmatn.woff2");
+    if std::env::var("CARGO_FEATURE_BUNDLED_FONTS").is_ok()
+        && !Path::new("assets/fonts/Vazirmatn.woff2").is_file()
+    {
+        panic!(
+            "\n\n========================================================================\n\
+             The `bundled-fonts` feature requires the vendored Vazirmatn subset in:\n\
+             crates/math-core/assets/fonts/Vazirmatn.woff2\n\n\
+             Please run:\n\
+                 ./scripts/vendor-fonts.sh\n\
+             ========================================================================\n\n"
+        );
+    }
+
     if std::env::var("CARGO_FEATURE_BUNDLED_KATEX").is_ok() {
         let katex_dir = Path::new("assets/katex");
         let min_css = katex_dir.join("katex.min.css");

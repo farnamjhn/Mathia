@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::model::BlockType;
+use crate::tree::DecisionTree;
 
 /// Current version of the [`ScoringConfig`] file format. Files written by a
 /// newer Mathia (a higher number) are rejected rather than half-understood.
@@ -19,6 +20,9 @@ pub struct ScoringConfig {
     pub schema_version: u32,
     /// A node opens a block when its best type score reaches this value.
     pub threshold: f32,
+    /// How features become type scores: the weighted sum of [`Weights`]
+    /// (default) or a [`DecisionTree`].
+    pub scorer: Scorer,
     pub weights: Weights,
     pub scope: ScopeConfig,
     pub keywords: Vec<KeywordRule>,
@@ -34,6 +38,18 @@ pub struct ScoringConfig {
     /// Directly after a label these mean the sentence refers to the block
     /// rather than opening it ("Theorem 2 implies…").
     pub reference_cues: Vec<String>,
+}
+
+/// The scoring model. `weights.after_statement` (keyword-less proofs) and the
+/// scope rules apply to both.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "model", rename_all = "snake_case")]
+pub enum Scorer {
+    /// `score = Σ weight × feature`, see [`Weights`].
+    #[default]
+    Linear,
+    /// A static decision tree over the same features.
+    Tree(DecisionTree),
 }
 
 /// Feature weights. Each feature is in `[0, 1]`; the weighted sum is the score.
@@ -118,6 +134,7 @@ impl Default for ScoringConfig {
         ScoringConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
             threshold: 0.5,
+            scorer: Scorer::Linear,
             weights: Weights::default(),
             scope: ScopeConfig::default(),
             keywords: vec![
@@ -330,6 +347,9 @@ impl ScoringConfig {
                 return fail(format!("weights.{name} must be in [0, 1], got {weight}"));
             }
         }
+        if let Scorer::Tree(tree) = &self.scorer {
+            tree.validate()?;
+        }
         if self.scope.statement_max_nodes == 0 || self.scope.proof_max_nodes == 0 {
             return fail("scope limits must be at least 1".into());
         }
@@ -464,6 +484,48 @@ mod tests {
                 .contains("not a block type")
         );
         assert!(message("[[keywords]]\nkind = \"lemma\"\nwords = [\" \"]").contains("non-empty"));
+    }
+
+    #[test]
+    fn decision_tree_scorer_round_trips_and_validates() {
+        let config = ScoringConfig {
+            scorer: Scorer::Tree(DecisionTree::default()),
+            ..Default::default()
+        };
+        for format in [ConfigFormat::Toml, ConfigFormat::Json] {
+            let text = config.serialize(format).unwrap();
+            assert_eq!(
+                ScoringConfig::parse(&text, format).unwrap(),
+                config,
+                "{text}"
+            );
+        }
+        let toml = config.serialize(ConfigFormat::Toml).unwrap();
+        assert!(toml.contains("model = \"tree\""), "{toml}");
+
+        let small = "[scorer]\nmodel = \"tree\"\n[scorer.root]\nnode = \"split\"\n\
+                     test = { feature = \"lead\" }\nyes = { node = \"leaf\", score = 0.9 }\n\
+                     no = { node = \"leaf\", score = 0.0 }\n";
+        let parsed = ScoringConfig::parse(small, ConfigFormat::Toml).unwrap();
+        assert!(matches!(parsed.scorer, Scorer::Tree(_)));
+
+        let message = |text: &str| {
+            ScoringConfig::parse(text, ConfigFormat::Toml)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(message(&small.replace("0.9", "1.5")).contains("scorer.root.yes"));
+        assert!(
+            message(&small.replace(
+                "feature = \"lead\"",
+                "feature = \"math_at_least\", value = 2.0"
+            ))
+            .contains("threshold must be in [0, 1]")
+        );
+        assert!(message(&small.replace("\"lead\"", "\"nope\"")).contains("unknown variant"));
+        assert!(message("[scorer]\nmodel = \"forest\"").contains("unknown variant"));
+        let short = ScoringConfig::parse("[scorer]\nmodel = \"tree\"", ConfigFormat::Toml).unwrap();
+        assert_eq!(short.scorer, Scorer::Tree(DecisionTree::default()));
     }
 
     #[test]

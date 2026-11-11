@@ -8,7 +8,10 @@ authors.workspace = true
 
 [dependencies]
 math-core.workspace = true
+math-judge.workspace = true
+serde_json.workspace = true
 
 [features]
-default = ["bundled-katex"]
+default = ["bundled-katex", "bundled-fonts"]
 bundled-katex = ["math-core/bundled-katex"]
+bundled-fonts = ["math-core/bundled-fonts"]

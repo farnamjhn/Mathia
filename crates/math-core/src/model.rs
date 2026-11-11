@@ -179,7 +179,7 @@ impl Direction {
                 '\u{0590}'..='\u{08FF}' | '\u{FB1D}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}'
                     if c.is_alphabetic() =>
                 {
-                    return Some(Direction::Rtl)
+                    return Some(Direction::Rtl);
                 }
                 c if c.is_ascii_alphabetic() => ltr = true,
                 _ => {}
@@ -201,7 +201,10 @@ mod direction_tests {
 
     #[test]
     fn pure_english_is_ltr_and_math_only_is_none() {
-        assert_eq!(Direction::detect("Linear Independence"), Some(Direction::Ltr));
+        assert_eq!(
+            Direction::detect("Linear Independence"),
+            Some(Direction::Ltr)
+        );
         assert_eq!(Direction::detect("1 + 2 = 3"), None);
     }
 }

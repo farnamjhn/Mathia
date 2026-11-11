@@ -19,7 +19,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-use crate::config::ScoringConfig;
+use serde::{Deserialize, Serialize};
+
+use crate::config::{Scorer, ScoringConfig};
 use crate::crossref;
 use crate::features::{Features, Lexicon};
 use crate::model::{
@@ -39,6 +41,16 @@ pub struct NodeScore {
     pub opens: bool,
 }
 
+impl NodeScore {
+    /// This node's score for `kind` (0 for non-semantic types).
+    pub fn score_of(&self, kind: BlockType) -> f32 {
+        self.scores
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map_or(0.0, |(_, s)| *s)
+    }
+}
+
 /// Blocks plus everything needed to explain them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Classification {
@@ -49,19 +61,76 @@ pub struct Classification {
     pub block_of: Vec<usize>,
 }
 
-/// Externally requested corrections to the default scoping, keyed by the
-/// index of a block's opener node. An empty value reproduces [`HeuristicClassifier::classify`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Externally requested corrections to the default classification, keyed by
+/// the node index of a block's opener. An empty value reproduces
+/// [`HeuristicClassifier::classify`]. Serialisable, so a set of corrections
+/// (made by hand or by a [`BlockJudge`]) can be stored and replayed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct ScopeOverrides {
     /// Nodes to add to (positive) or drop from (negative) the block's end.
-    /// Ignored for LaTeX environments, whose extent is explicit.
+    /// Ignored for LaTeX environments, whose extent is explicit, and for
+    /// blocks with an explicit [`Self::end`].
     pub delta: BTreeMap<usize, isize>,
     /// Opener nodes to treat as ordinary content instead.
     pub suppressed: BTreeSet<usize>,
+    /// The block opened at this node has this type instead of its best
+    /// score. A node that does not open a block on its own opens one of this
+    /// type. Must be a semantic type.
+    pub retype: BTreeMap<usize, BlockType>,
+    /// Exclusive end node of the block opened here. Unlike `delta`, it may
+    /// run through later openers (they become part of the block); headings
+    /// and LaTeX environments still stop it.
+    pub end: BTreeMap<usize, usize>,
+}
+
+impl ScopeOverrides {
+    pub fn is_empty(&self) -> bool {
+        self.delta.is_empty()
+            && self.suppressed.is_empty()
+            && self.retype.is_empty()
+            && self.end.is_empty()
+    }
+
+    /// Drops every correction for the block opened at `opener`.
+    pub fn clear(&mut self, opener: usize) {
+        self.delta.remove(&opener);
+        self.suppressed.remove(&opener);
+        self.retype.remove(&opener);
+        self.end.remove(&opener);
+    }
+
+    /// Checks the corrections against a document of `nodes` nodes.
+    pub fn validate(&self, nodes: usize) -> std::result::Result<(), String> {
+        let check = |i: usize, what: &str| {
+            if i < nodes {
+                Ok(())
+            } else {
+                Err(format!("{what}: node {i} is past the end ({nodes} nodes)"))
+            }
+        };
+        for &i in self.delta.keys().chain(&self.suppressed) {
+            check(i, "override")?;
+        }
+        for (&i, kind) in &self.retype {
+            check(i, "retype")?;
+            if !kind.is_semantic() {
+                return Err(format!("retype: `{}` is not a block type", kind.slug()));
+            }
+        }
+        for (&i, &end) in &self.end {
+            check(i, "end")?;
+            if end <= i || end > nodes {
+                return Err(format!("end: block at node {i} cannot end at {end}"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// What a decision model thinks of one proposed block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Verdict {
     /// The block is a complete unit of its type.
     Accept,
@@ -71,12 +140,55 @@ pub enum Verdict {
     Overreach,
     /// It is not a block of this type at all: drop the opener.
     Reject,
+    /// It is a block, of this other type.
+    Retype(BlockType),
+    /// It ends right before this node (absolute index, exclusive): a split
+    /// point when inside the block, or a wider scope that may absorb later
+    /// openers.
+    EndAt(usize),
+    /// It really starts at this node (absolute index); the end stays put.
+    StartAt(usize),
 }
 
 /// Seam for decision models. `math-core` only defines the contract; the
 /// implementations (local models, remote calls) live outside this crate.
 pub trait BlockJudge {
     fn judge(&self, block: &SemanticBlock, nodes: &[Node]) -> Verdict;
+
+    /// Judges several blocks at once; one call per round of
+    /// [`HeuristicClassifier::classify_with_judge`]. Override to batch
+    /// requests to a model. Must return one verdict per block, in order.
+    fn judge_batch(&self, blocks: &[&SemanticBlock], nodes: &[Node]) -> Vec<Verdict> {
+        blocks
+            .iter()
+            .map(|block| self.judge(block, nodes))
+            .collect()
+    }
+}
+
+/// One verdict and what became of it, for logs and replays.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppliedVerdict {
+    /// 1-based round of the judge loop.
+    pub round: usize,
+    pub block: String,
+    pub kind: BlockType,
+    pub span: Range<usize>,
+    pub verdict: Verdict,
+    /// `false` when the verdict was not usable (an out-of-range node, a
+    /// non-semantic type, a scope change asked of a LaTeX environment).
+    pub applied: bool,
+}
+
+/// The outcome of [`HeuristicClassifier::classify_with_judge_detailed`]:
+/// `overrides` alone reproduces `blocks` through
+/// [`HeuristicClassifier::classify_with_overrides`], without the judge.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JudgedClassification {
+    pub blocks: Vec<SemanticBlock>,
+    pub overrides: ScopeOverrides,
+    pub log: Vec<AppliedVerdict>,
+    pub rounds: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -105,8 +217,17 @@ impl HeuristicClassifier {
         &self.config
     }
 
-    /// Weighted score of `features` for one candidate type, in `[0, 1]`.
+    /// Score of `features` for one candidate type, in `[0, 1]`, by the
+    /// configured [`Scorer`].
     pub fn score(&self, features: &Features, kind: BlockType) -> f32 {
+        match &self.config.scorer {
+            Scorer::Linear => self.linear_score(features, kind),
+            Scorer::Tree(tree) => tree.score(features, kind),
+        }
+    }
+
+    /// Weighted sum of the features for one candidate type, in `[0, 1]`.
+    pub fn linear_score(&self, features: &Features, kind: BlockType) -> f32 {
         let w = &self.config.weights;
 
         let mut score = match &features.lead {
@@ -193,10 +314,35 @@ impl HeuristicClassifier {
             }
         }
 
-        let opens = |i: usize| {
-            !covered[i] && (env_first[i] || (scores[i].opens && !overrides.suppressed.contains(&i)))
+        let retype = |i: usize| {
+            overrides
+                .retype
+                .get(&i)
+                .copied()
+                .filter(|kind| kind.is_semantic())
+        };
+        let base_opens = |i: usize| {
+            !covered[i]
+                && (env_first[i]
+                    || (!overrides.suppressed.contains(&i)
+                        && (scores[i].opens || retype(i).is_some())))
         };
         let is_heading = |i: usize| matches!(nodes[i].kind, NodeKind::Heading(_)) && !covered[i];
+        // An explicit end swallows the openers before it, up to a heading or
+        // an environment.
+        let mut absorbed = vec![false; n];
+        for (&i, &end) in &overrides.end {
+            if i >= n || absorbed[i] || env_first[i] || !base_opens(i) {
+                continue;
+            }
+            for j in i + 1..end.min(n) {
+                if is_heading(j) || env_first[j] || covered[j] {
+                    break;
+                }
+                absorbed[j] = true;
+            }
+        }
+        let opens = |i: usize| !absorbed[i] && base_opens(i);
         let boundary = |i: usize| opens(i) || is_heading(i);
 
         let mut builder = Builder::new(nodes);
@@ -212,8 +358,13 @@ impl HeuristicClassifier {
                 EndReason::Heading
             };
             let adjust = |natural: usize, reason: EndReason| {
-                let delta = overrides.delta.get(&i).copied().unwrap_or(0);
-                let end = (natural as isize + delta).clamp(i as isize + 1, limit as isize) as usize;
+                let end = match overrides.end.get(&i) {
+                    Some(&end) => end.clamp(i + 1, limit),
+                    None => {
+                        let delta = overrides.delta.get(&i).copied().unwrap_or(0);
+                        (natural as isize + delta).clamp(i as isize + 1, limit as isize) as usize
+                    }
+                };
                 (
                     end,
                     if end == natural {
@@ -232,11 +383,16 @@ impl HeuristicClassifier {
                     score: 1.0,
                     features,
                     env_name: env.name.as_deref(),
+                    retyped: retype(i).is_some(),
                 };
-                builder.push(env.kind, i..end, opener, EndReason::Environment);
+                let kind = retype(i).unwrap_or(env.kind);
+                builder.push(kind, i..end, opener, EndReason::Environment);
                 i = end;
             } else if opens(i) {
-                let (kind, score) = scores[i].best;
+                let (kind, score) = match retype(i) {
+                    Some(kind) => (kind, scores[i].score_of(kind)),
+                    None => scores[i].best,
+                };
                 let (natural, reason) = match kind {
                     BlockType::Proof => self.argument_end(&scores, i, limit, at_limit),
                     // Solutions rarely end in a QED mark; without one they are
@@ -252,6 +408,7 @@ impl HeuristicClassifier {
                     score,
                     features,
                     env_name: None,
+                    retyped: retype(i).is_some(),
                 };
                 builder.push(kind, i..end, opener, reason);
                 i = end;
@@ -264,6 +421,7 @@ impl HeuristicClassifier {
                 );
                 i += 1;
             } else if !overrides.suppressed.contains(&i)
+                && !absorbed[i]
                 && let Some(score) =
                     self.implicit_proof_score(nodes, &scores, builder.blocks.last(), i, limit)
             {
@@ -273,6 +431,7 @@ impl HeuristicClassifier {
                     score,
                     features,
                     env_name: None,
+                    retyped: false,
                 };
                 builder.push(BlockType::Proof, i..end, opener, reason);
                 i = end;
@@ -311,51 +470,66 @@ impl HeuristicClassifier {
         judge: &dyn BlockJudge,
         max_rounds: usize,
     ) -> Vec<SemanticBlock> {
-        let mut overrides = ScopeOverrides::default();
-        let mut accepted: BTreeSet<(usize, usize)> = BTreeSet::new();
-        let mut blocks = self.classify_with_overrides(nodes, &overrides);
+        self.classify_with_judge_detailed(nodes, judge, max_rounds, ScopeOverrides::default())
+            .blocks
+    }
 
-        for _ in 0..max_rounds {
-            let mut changed = false;
-            for block in blocks.iter().filter(|b| b.kind.is_semantic()) {
-                let key = (block.span.start, block.span.end);
-                if accepted.contains(&key) {
-                    continue;
-                }
-                let opener = block.span.start;
-                match judge.judge(block, nodes) {
-                    Verdict::Accept => {
-                        accepted.insert(key);
-                    }
-                    Verdict::Incomplete => {
-                        *overrides.delta.entry(opener).or_insert(0) += 1;
-                        changed = true;
-                    }
-                    Verdict::Overreach => {
-                        *overrides.delta.entry(opener).or_insert(0) -= 1;
-                        changed = true;
-                    }
-                    Verdict::Reject => {
-                        overrides.suppressed.insert(opener);
-                        changed = true;
-                    }
-                }
+    /// [`Self::classify_with_judge`] starting from `initial` overrides (for
+    /// example corrections made by hand), returning the final overrides and
+    /// a log of every verdict.
+    ///
+    /// Policy: a block is judged once per distinct (scope, type); a state
+    /// that comes back — the judge contradicting itself, or a change blocked
+    /// by a heading — is not asked about again, so the loop always ends.
+    pub fn classify_with_judge_detailed(
+        &self,
+        nodes: &[Node],
+        judge: &dyn BlockJudge,
+        max_rounds: usize,
+        initial: ScopeOverrides,
+    ) -> JudgedClassification {
+        let mut overrides = initial;
+        let mut judged: BTreeSet<(usize, usize, BlockType)> = BTreeSet::new();
+        let mut log = Vec::new();
+        let mut blocks = self.classify_with_overrides(nodes, &overrides);
+        let mut rounds = 0;
+
+        while rounds < max_rounds {
+            let pending: Vec<&SemanticBlock> = blocks
+                .iter()
+                .filter(|b| b.kind.is_semantic())
+                .filter(|b| !judged.contains(&(b.span.start, b.span.end, b.kind)))
+                .collect();
+            if pending.is_empty() {
+                break;
             }
+            rounds += 1;
+            let verdicts = judge.judge_batch(&pending, nodes);
+            let before = overrides.clone();
+            for (block, &verdict) in pending.iter().zip(&verdicts) {
+                judged.insert((block.span.start, block.span.end, block.kind));
+                let applied = apply_verdict(&mut overrides, block, verdict, nodes);
+                log.push(AppliedVerdict {
+                    round: rounds,
+                    block: block.id.clone(),
+                    kind: block.kind,
+                    span: block.span.clone(),
+                    verdict,
+                    applied,
+                });
+            }
+            let changed = overrides != before;
             if !changed {
                 break;
             }
-            let next = self.classify_with_overrides(nodes, &overrides);
-            let stuck = next
-                .iter()
-                .map(|b| (&b.span, b.kind))
-                .eq(blocks.iter().map(|b| (&b.span, b.kind)));
-            blocks = next;
-            if stuck {
-                // The requested change hit a hard boundary; asking again cannot help.
-                break;
-            }
+            blocks = self.classify_with_overrides(nodes, &overrides);
         }
-        blocks
+        JudgedClassification {
+            blocks,
+            overrides,
+            log,
+            rounds,
+        }
     }
 
     /// Score of node `i` as a proof that has no "Proof." keyword: an ordinary
@@ -443,6 +617,62 @@ impl HeuristicClassifier {
     }
 }
 
+/// Turns one verdict into overrides. Returns whether it could be applied.
+fn apply_verdict(
+    overrides: &mut ScopeOverrides,
+    block: &SemanticBlock,
+    verdict: Verdict,
+    nodes: &[Node],
+) -> bool {
+    let opener = block.span.start;
+    let environment = block.end == EndReason::Environment;
+    let mut nudge = |by: isize| match overrides.end.get_mut(&opener) {
+        Some(end) => {
+            *end = end.saturating_add_signed(by).max(opener + 1);
+            true
+        }
+        None => {
+            *overrides.delta.entry(opener).or_insert(0) += by;
+            true
+        }
+    };
+    match verdict {
+        Verdict::Accept => true,
+        Verdict::Incomplete | Verdict::Overreach if environment => false,
+        Verdict::Incomplete => nudge(1),
+        Verdict::Overreach => nudge(-1),
+        Verdict::Reject => {
+            overrides.clear(opener);
+            overrides.suppressed.insert(opener);
+            true
+        }
+        Verdict::Retype(kind) if kind.is_semantic() => {
+            if kind != block.kind {
+                overrides.retype.insert(opener, kind);
+            }
+            true
+        }
+        Verdict::Retype(_) => false,
+        Verdict::EndAt(end) if !environment && end > opener && end <= nodes.len() => {
+            overrides.delta.remove(&opener);
+            overrides.end.insert(opener, end);
+            true
+        }
+        Verdict::EndAt(_) => false,
+        Verdict::StartAt(start) if start == opener => true,
+        Verdict::StartAt(start) if !environment && start < block.span.end => {
+            let end = block.span.end;
+            overrides.clear(opener);
+            overrides.suppressed.insert(opener);
+            overrides.clear(start);
+            overrides.retype.insert(start, block.kind);
+            overrides.end.insert(start, end);
+            true
+        }
+        Verdict::StartAt(_) => false,
+    }
+}
+
 /// Links every proof to the statement it proves and every solution to the
 /// example or exercise it answers: by an explicit reference in the opener
 /// ("Proof of Theorem 2"), otherwise by adjacency (plain text in between is
@@ -486,6 +716,9 @@ struct Opener<'a> {
     features: Option<&'a Features>,
     /// The `[Name]` of a LaTeX environment.
     env_name: Option<&'a str>,
+    /// The type was set by a [`ScopeOverrides::retype`]: keep the label's
+    /// number and name although its keyword names another type.
+    retyped: bool,
 }
 
 impl Opener<'_> {
@@ -494,6 +727,7 @@ impl Opener<'_> {
         score: 0.0,
         features: None,
         env_name: None,
+        retyped: false,
     };
 }
 
@@ -545,7 +779,7 @@ impl<'a> Builder<'a> {
         let lead = opener
             .features
             .and_then(|f| f.lead.as_ref())
-            .filter(|hit| semantic && hit.kind == kind);
+            .filter(|hit| semantic && (hit.kind == kind || opener.retyped));
         let number = lead.and_then(|hit| hit.number.clone());
         let name = opener
             .env_name
@@ -1022,5 +1256,171 @@ mod tests {
             kinds(&c.classify_with_judge(&nodes, &RejectRemarks, 4)),
             [BlockType::Theorem, BlockType::Text]
         );
+    }
+
+    #[test]
+    fn decision_tree_scorer_makes_the_same_opening_calls() {
+        let tree = HeuristicClassifier::new(ScoringConfig {
+            scorer: Scorer::Tree(crate::tree::DecisionTree::default()),
+            ..Default::default()
+        });
+        for (md, kind) in [
+            (
+                "**قضیه ۱.** اگر $a>0$ آنگاه $a^2>0$.",
+                Some(BlockType::Theorem),
+            ),
+            ("برهان. فرض کنید $x \\in A$.", Some(BlockType::Proof)),
+            (
+                "Lemma 3 (Zorn). Every chain has an upper bound.",
+                Some(BlockType::Lemma),
+            ),
+            (
+                "Definition 2. A set is open if ...",
+                Some(BlockType::Definition),
+            ),
+            ("طبق قضیه ۳.۲ می‌توان نتیجه گرفت که $f$ کراندار است.", None),
+            (
+                "Theorem 2 implies that for all $x$ we have $f(x) > 0$.",
+                None,
+            ),
+            ("Proof techniques vary widely between fields.", None),
+            ("Note that $f$ is continuous.", None),
+        ] {
+            let s = tree.score_node(&parse_markdown(md)[0]);
+            assert_eq!(s.opens.then_some(s.best.0), kind, "{md} ({:?})", s.best);
+        }
+    }
+
+    #[test]
+    fn overrides_retype_and_force_openers() {
+        let c = HeuristicClassifier::default();
+        let nodes = parse_markdown("Theorem 1. A.\n\nPlain prose here.\n\nMore prose.");
+        let mut overrides = ScopeOverrides::default();
+        overrides.retype.insert(0, BlockType::Lemma);
+        overrides.retype.insert(1, BlockType::Remark);
+        let blocks = c.classify_with_overrides(&nodes, &overrides);
+        assert_eq!(
+            kinds(&blocks),
+            [BlockType::Lemma, BlockType::Remark, BlockType::Text]
+        );
+        assert_eq!(blocks[0].id, "block-lemma-1");
+        assert_eq!(blocks[0].title, "Lemma 1");
+        assert!(overrides.validate(nodes.len()).is_ok());
+        overrides.retype.insert(2, BlockType::Text);
+        assert!(overrides.validate(nodes.len()).is_err());
+    }
+
+    #[test]
+    fn explicit_end_absorbs_openers_but_not_headings() {
+        let c = HeuristicClassifier::default();
+        let nodes =
+            parse_markdown("Theorem 1. A.\n\nLemma 2. B.\n\nText.\n\n## Next\n\nRemark. C.");
+        let mut overrides = ScopeOverrides::default();
+        overrides.end.insert(0, 3);
+        let blocks = c.classify_with_overrides(&nodes, &overrides);
+        assert_eq!(
+            kinds(&blocks),
+            [BlockType::Theorem, BlockType::Heading, BlockType::Remark]
+        );
+        assert_eq!(
+            (blocks[0].span.clone(), blocks[0].end),
+            (0..3, EndReason::Override)
+        );
+
+        overrides.end.insert(0, 5);
+        assert_eq!(c.classify_with_overrides(&nodes, &overrides)[0].span, 0..3);
+
+        // Serialisable for the desktop app and for replay logs.
+        let json = serde_json::to_string(&overrides).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ScopeOverrides>(&json).unwrap(),
+            overrides
+        );
+    }
+
+    /// Plays back a fixed verdict per opener node, then accepts.
+    struct Script(BTreeMap<(usize, usize), Verdict>);
+    impl BlockJudge for Script {
+        fn judge(&self, block: &SemanticBlock, _: &[Node]) -> Verdict {
+            match self.0.get(&(block.span.start, block.span.end)) {
+                Some(Verdict::Retype(kind)) if *kind == block.kind => Verdict::Accept,
+                Some(verdict) => *verdict,
+                None => Verdict::Accept,
+            }
+        }
+    }
+
+    #[test]
+    fn judge_can_retype_split_and_move_starts() {
+        let c = HeuristicClassifier::default();
+        let nodes = parse_markdown(
+            "Some setup we need.\n\nTheorem 1. Statement.\n\nSecond half.\n\nThird.\n\nUnrelated.",
+        );
+        assert_eq!(c.classify(&nodes)[1].span, 1..2);
+
+        let judge = Script(BTreeMap::from([
+            ((1, 2), Verdict::EndAt(4)),
+            ((1, 4), Verdict::StartAt(0)),
+            ((0, 4), Verdict::Retype(BlockType::Proposition)),
+        ]));
+        let run = c.classify_with_judge_detailed(&nodes, &judge, 8, ScopeOverrides::default());
+        assert_eq!(
+            run.blocks
+                .iter()
+                .map(|b| (b.kind, b.span.clone()))
+                .collect::<Vec<_>>(),
+            [(BlockType::Proposition, 0..4), (BlockType::Text, 4..5)]
+        );
+        assert_eq!(
+            run.log
+                .iter()
+                .filter(|v| v.verdict != Verdict::Accept)
+                .count(),
+            3,
+            "{:?}",
+            run.log
+        );
+        // The overrides alone replay the judged result.
+        assert_eq!(
+            c.classify_with_overrides(&nodes, &run.overrides),
+            run.blocks
+        );
+
+        // A split point inside the block narrows it; the rest becomes text.
+        let judge = Script(BTreeMap::from([((0, 3), Verdict::EndAt(1))]));
+        let nodes = parse_markdown("Proof. One.\n\nTwo.\n\nThree. □");
+        let blocks = c.classify_with_judge(&nodes, &judge, 4);
+        assert_eq!(kinds(&blocks), [BlockType::Proof, BlockType::Text]);
+        assert_eq!(blocks[0].span, 0..1);
+    }
+
+    #[test]
+    fn unusable_verdicts_are_logged_and_ignored() {
+        let c = HeuristicClassifier::default();
+        let nodes = parse_markdown("Theorem 1. A.\n\nText.");
+        let judge = Script(BTreeMap::from([((0, 1), Verdict::EndAt(9))]));
+        let run = c.classify_with_judge_detailed(&nodes, &judge, 4, ScopeOverrides::default());
+        assert_eq!(run.blocks, c.classify(&nodes));
+        assert!(!run.log[0].applied);
+        assert_eq!(run.rounds, 1);
+    }
+
+    #[test]
+    fn a_self_contradicting_judge_terminates() {
+        /// Wants the theorem longer when short, shorter when long.
+        struct FlipFlop;
+        impl BlockJudge for FlipFlop {
+            fn judge(&self, block: &SemanticBlock, _: &[Node]) -> Verdict {
+                if block.span.len() == 1 {
+                    Verdict::Incomplete
+                } else {
+                    Verdict::Overreach
+                }
+            }
+        }
+        let c = HeuristicClassifier::default();
+        let nodes = parse_markdown("Theorem 1. A.\n\nB.\n\nC.");
+        let run = c.classify_with_judge_detailed(&nodes, &FlipFlop, 100, ScopeOverrides::default());
+        assert!(run.rounds <= 3, "{}", run.rounds);
     }
 }

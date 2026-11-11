@@ -18,3 +18,5 @@ serde_json.workspace = true
 [features]
 default = []
 bundled-katex = []
+# Embeds Vazirmatn (run scripts/vendor-fonts.sh first): EmbeddedFont::bundled().
+bundled-fonts = []

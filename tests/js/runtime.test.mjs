@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { after, before, describe, test } from "node:test";
 import { ANTHROPIC, GEMINI, OPENAI, mock, open, pages, saveKey, setup, sse, teardown } from "./harness.mjs";
 
@@ -688,5 +692,43 @@ describe("copy", () => {
       assert.equal((await page.evaluate(() => window.__clip)).pop(), itex);
     }
     await finish(s);
+  });
+});
+
+describe("host frame", () => {
+  test("a click on a block tells the embedding app which block it was", async () => {
+    // The desktop app shows the document in a frame and listens for this.
+    const dir = mkdtempSync(join(tmpdir(), "mathia-host-"));
+    const host = join(dir, "host.html");
+    writeFileSync(
+      host,
+      `<!doctype html><script>window.got = [];
+       addEventListener("message", (e) => window.got.push(e.data));</script>
+       <iframe id="f" src="${pages.plain}" style="width:900px;height:700px"></iframe>`,
+    );
+    const s = await open(pathToFileURL(host).href);
+    const frame = s.page.frameLocator("#f");
+    const body = frame.locator("section.mx-theorem .mx-block-body p").first();
+    await body.waitFor();
+    const id = await frame.locator("section.mx-theorem").first().getAttribute("data-block-id");
+    await body.click({ position: { x: 4, y: 4 } });
+    await s.page.waitForFunction(() => window.got.length > 0);
+    assert.deepEqual(await s.page.evaluate(() => window.got), [{ mathia: "select", id }]);
+    // Buttons (Copy) do not count as selecting a block.
+    await frame.locator("section.mx-theorem [data-mx-action=copy]").first().click();
+    assert.equal(await s.page.evaluate(() => window.got.length), 1);
+    await finish(s);
+    rmSync(dir, { recursive: true, force: true });
+
+    // Opened on its own, the document posts nothing.
+    const alone = await open(pages.plain);
+    const posted = await alone.page.evaluate(() => {
+      let count = 0;
+      window.addEventListener("message", () => count++);
+      document.querySelector("section.mx-theorem .mx-block-body p").click();
+      return new Promise((done) => setTimeout(() => done(count), 100));
+    });
+    assert.equal(posted, 0);
+    await finish(alone);
   });
 });

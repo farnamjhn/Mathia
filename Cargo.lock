@@ -1837,10 +1837,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "math-judge"
+version = "0.1.0"
+dependencies = [
+ "math-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mathia"
 version = "0.1.0"
 dependencies = [
  "math-core",
+ "math-judge",
+ "serde_json",
 ]
 
 [[package]]

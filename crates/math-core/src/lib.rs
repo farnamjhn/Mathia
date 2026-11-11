@@ -17,11 +17,13 @@ pub mod normalize;
 pub mod parser;
 mod sha256;
 pub mod text;
+pub mod tree;
 
 pub use classifier::{
-    BlockJudge, Classification, HeuristicClassifier, NodeScore, ScopeOverrides, Verdict,
+    AppliedVerdict, BlockJudge, Classification, HeuristicClassifier, JudgedClassification,
+    NodeScore, ScopeOverrides, Verdict,
 };
-pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, ScoringConfig};
+pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, Scorer, ScoringConfig};
 pub use error::{Error, Result};
 pub use html::{
     AiOptions, AiProvider, CustomProvider, EmbeddedFont, HtmlOptions, KatexAssets, MathAssets,
@@ -30,6 +32,7 @@ pub use model::{
     BlockType, Direction, Document, EndReason, EnvSpan, Node, NodeKind, SemanticBlock, TocEntry,
 };
 pub use normalize::normalize_markdown;
+pub use tree::DecisionTree;
 
 /// A [`Document`] together with the evidence behind every decision: all type
 /// scores of every node, and (on each block) why its scope ended.
@@ -105,13 +108,23 @@ pub fn analyze(markdown: &str, config: &ScoringConfig) -> Document {
 
 /// [`analyze`], keeping the per-node scores for diagnostics and tuning.
 pub fn analyze_detailed(markdown: &str, config: &ScoringConfig) -> Analysis {
+    analyze_with_overrides(markdown, config, &ScopeOverrides::default())
+}
+
+/// [`analyze_detailed`] with corrections applied (made by hand in the
+/// desktop app, or recorded from a [`BlockJudge`] run). Override keys are
+/// node indices of the normalised source.
+pub fn analyze_with_overrides(
+    markdown: &str,
+    config: &ScoringConfig,
+    overrides: &ScopeOverrides,
+) -> Analysis {
     let nodes = parser::parse_markdown(&normalize_markdown(markdown));
     let Classification {
         blocks,
         scores,
         block_of,
-    } = HeuristicClassifier::new(config.clone())
-        .classify_detailed(&nodes, &ScopeOverrides::default());
+    } = HeuristicClassifier::new(config.clone()).classify_detailed(&nodes, overrides);
     Analysis {
         document: Document::new(nodes, blocks),
         scores,
@@ -126,10 +139,35 @@ pub fn analyze_with_judge(
     judge: &dyn BlockJudge,
     max_rounds: usize,
 ) -> Document {
+    analyze_with_judge_detailed(
+        markdown,
+        config,
+        judge,
+        max_rounds,
+        ScopeOverrides::default(),
+    )
+    .0
+}
+
+/// [`analyze_with_judge`] starting from `initial` overrides, also returning
+/// the final overrides and the log of verdicts. Passing those overrides to
+/// [`analyze_with_overrides`] reproduces the document without the judge.
+pub fn analyze_with_judge_detailed(
+    markdown: &str,
+    config: &ScoringConfig,
+    judge: &dyn BlockJudge,
+    max_rounds: usize,
+    initial: ScopeOverrides,
+) -> (Document, ScopeOverrides, Vec<AppliedVerdict>) {
     let nodes = parser::parse_markdown(&normalize_markdown(markdown));
-    let blocks =
-        HeuristicClassifier::new(config.clone()).classify_with_judge(&nodes, judge, max_rounds);
-    Document::new(nodes, blocks)
+    let JudgedClassification {
+        blocks,
+        overrides,
+        log,
+        ..
+    } = HeuristicClassifier::new(config.clone())
+        .classify_with_judge_detailed(&nodes, judge, max_rounds, initial);
+    (Document::new(nodes, blocks), overrides, log)
 }
 
 /// Markdown in, standalone HTML out.

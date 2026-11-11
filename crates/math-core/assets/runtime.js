@@ -437,8 +437,26 @@
     renderMath: renderMath,
   };
 
+  /* Inside a host frame (the Mathia desktop app), a click on a block tells the
+     host which block it was. Only the block id is sent; nothing is received.
+     Links, buttons, formulas (which copy themselves) and text selections are
+     left alone. */
+  function setupHostLink() {
+    if (window.parent === window) return;
+    document.addEventListener("click", function (e) {
+      var target = e.target;
+      if (!target || !target.closest || target.closest("a, button, input, textarea, select, .math, dialog")) return;
+      var sel = window.getSelection();
+      if (sel && String(sel).length) return;
+      var block = target.closest("[data-block-id]");
+      if (!block) return;
+      window.parent.postMessage({ mathia: "select", id: block.dataset.blockId }, "*");
+    });
+  }
+
   function start() {
     setupTheme();
+    setupHostLink();
     renderMath();
     setupCopy();
     setupSidebar();

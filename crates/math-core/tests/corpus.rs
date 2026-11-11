@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use math_core::{Analysis, BlockType, ScoringConfig, analyze_detailed};
+use math_core::{Analysis, BlockType, DecisionTree, Scorer, ScoringConfig, analyze_detailed};
 
 fn fixtures() -> Vec<(String, PathBuf)> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -32,8 +32,12 @@ fn fixtures() -> Vec<(String, PathBuf)> {
 }
 
 fn analyze_file(path: &Path) -> Analysis {
+    analyze_file_with(path, &ScoringConfig::default())
+}
+
+fn analyze_file_with(path: &Path, config: &ScoringConfig) -> Analysis {
     let source = fs::read_to_string(path).unwrap();
-    analyze_detailed(&source, &ScoringConfig::default())
+    analyze_detailed(&source, config)
 }
 
 fn snapshot(analysis: &Analysis) -> String {
@@ -117,6 +121,20 @@ impl Tally {
 
 #[test]
 fn precision_and_recall_per_type() {
+    gold_precision_and_recall("linear", &ScoringConfig::default());
+}
+
+/// The decision-tree scorer must hold the same floor on the same corpus.
+#[test]
+fn decision_tree_precision_and_recall_per_type() {
+    let config = ScoringConfig {
+        scorer: Scorer::Tree(DecisionTree::default()),
+        ..Default::default()
+    };
+    gold_precision_and_recall("tree", &config);
+}
+
+fn gold_precision_and_recall(scorer: &str, config: &ScoringConfig) {
     let mut tallies: BTreeMap<BlockType, Tally> = BTreeMap::new();
     let mut misses = Vec::new();
 
@@ -134,7 +152,7 @@ fn precision_and_recall_per_type() {
             })
             .collect();
 
-        let analysis = analyze_file(&path);
+        let analysis = analyze_file_with(&path, config);
         let doc = &analysis.document;
         for block in doc.blocks.iter().filter(|b| b.kind.is_semantic()) {
             let opener = squash(&doc.nodes[block.span.start].text);
@@ -159,6 +177,7 @@ fn precision_and_recall_per_type() {
     }
 
     let mut total = Tally::default();
+    println!("scorer: {scorer}");
     println!(
         "{:<12} {:>4} {:>4} {:>9} {:>6}",
         "type", "gold", "pred", "precision", "recall"
@@ -194,7 +213,7 @@ fn precision_and_recall_per_type() {
     for (kind, tally) in &tallies {
         assert!(
             tally.precision() >= FLOOR && tally.recall() >= FLOOR,
-            "{} fell below {FLOOR}: precision {:.2}, recall {:.2}\n{}",
+            "[{scorer}] {} fell below {FLOOR}: precision {:.2}, recall {:.2}\n{}",
             kind.slug(),
             tally.precision(),
             tally.recall(),

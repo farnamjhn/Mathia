@@ -13,6 +13,8 @@ const AI_CSS: &str = include_str!("../assets/ai.css");
 const RUNTIME_JS: &str = include_str!("../assets/runtime.js");
 const AI_JS: &str = include_str!("../assets/ai.js");
 
+#[cfg(feature = "bundled-fonts")]
+const BUNDLED_VAZIRMATN: &[u8] = include_bytes!("../assets/fonts/Vazirmatn.woff2");
 #[cfg(feature = "bundled-katex")]
 const BUNDLED_KATEX_CSS: &str = include_str!("../assets/katex/katex.prepared.css");
 #[cfg(feature = "bundled-katex")]
@@ -62,6 +64,18 @@ impl EmbeddedFont {
             weight: weight.to_string(),
             woff2,
         })
+    }
+
+    /// Vazirmatn (variable, weights 100–900), subset to Persian/Arabic and
+    /// Latin by `scripts/vendor-fonts.sh` and embedded at compile time
+    /// (requires the `bundled-fonts` feature). SIL Open Font License.
+    #[cfg(feature = "bundled-fonts")]
+    pub fn bundled() -> Self {
+        EmbeddedFont {
+            family: "Vazirmatn".to_string(),
+            weight: "100 900".to_string(),
+            woff2: BUNDLED_VAZIRMATN.to_vec(),
+        }
     }
 }
 
@@ -342,10 +356,26 @@ pub fn render(doc: &Document, options: &HtmlOptions) -> Result<String> {
         } else {
             "Switch theme"
         },
-        search_label: if rtl { "جستجو در متن…" } else { "Search the text…" },
-        search_none: if rtl { "نتیجه‌ای نیست" } else { "No results" },
-        search_prev: if rtl { "نتیجهٔ قبلی" } else { "Previous result" },
-        search_next: if rtl { "نتیجهٔ بعدی" } else { "Next result" },
+        search_label: if rtl {
+            "جستجو در متن…"
+        } else {
+            "Search the text…"
+        },
+        search_none: if rtl {
+            "نتیجه‌ای نیست"
+        } else {
+            "No results"
+        },
+        search_prev: if rtl {
+            "نتیجهٔ قبلی"
+        } else {
+            "Previous result"
+        },
+        search_next: if rtl {
+            "نتیجهٔ بعدی"
+        } else {
+            "Next result"
+        },
         csp: content_security_policy(&inline_scripts, &options.math, &connect_origins),
         css: css.replace("</style", "<\\/style"),
         math_head: math_head(&options.math, katex.as_ref()),
@@ -676,7 +706,8 @@ mod tests {
         // Disabled -> no connect-src, no mx-ai, no data-mx-ai
         let html_disabled = render(&doc, &HtmlOptions::default()).unwrap();
         assert!(!html_disabled.contains("connect-src"));
-        assert!(!html_disabled.contains("mx-ai"));
+        assert!(!html_disabled.contains("id=\"mx-ai\""));
+        assert!(!html_disabled.contains("Mathia.ai"));
         assert!(!html_disabled.contains("data-mx-ai"));
 
         // Enabled with [Gemini, Anthropic]

@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/math-core", "crates/mathia-cli", "src-tauri"]
+members = ["crates/math-core", "crates/math-judge", "crates/mathia-cli", "src-tauri"]
 # Plain `cargo build` / `cargo test` leave the desktop app (and Tauri's system
 # dependencies) out; use `-p mathia-app` or `--workspace` to include it.
-default-members = ["crates/math-core", "crates/mathia-cli"]
+default-members = ["crates/math-core", "crates/math-judge", "crates/mathia-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,7 @@ authors = ["Mathia contributors"]
 
 [workspace.dependencies]
 math-core = { path = "crates/math-core" }
+math-judge = { path = "crates/math-judge" }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 askama = "0.16"
 serde = { version = "1", features = ["derive"] }

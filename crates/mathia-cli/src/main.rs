@@ -3,26 +3,33 @@
 //!
 //! ```text
 //! mathia notes.md [-o notes.html] [--config scoring.toml] [--explain] [--font F.woff2] [--ai] [--ai-custom URL]
+//! mathia chapters/ [-o site/] [--watch]
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{Duration, SystemTime};
 
 use math_core::{
     AiOptions, AiProvider, ConfigFormat, CustomProvider, EmbeddedFont, HtmlOptions, KatexAssets,
-    MathAssets, ScoringConfig,
+    MathAssets, ScopeOverrides, ScoringConfig,
 };
+use math_judge::{CachedJudge, CommandJudge, Policy, Replay};
 
 #[cfg(not(feature = "bundled-katex"))]
 const KATEX_CDN_VERSION: &str = "0.16.22";
 
-const USAGE: &str = "usage: mathia <input.md> [options]
+const USAGE: &str = "usage: mathia <input.md | folder> [options]
 
-  -o, --output FILE     where to write the HTML (default: input with .html)
+  -o, --output FILE     where to write the HTML (default: input with .html);
+                        for a folder input, the output folder (default: the input folder)
+      --watch           recompile whenever an input file changes (Ctrl+C stops)
       --config FILE     scoring configuration (.toml or .json)
       --dump-config     print the default scoring configuration as TOML and exit
       --explain         print every node's scores and why each block ended
-      --font FILE       embed a WOFF2 text font (repeatable; family from the file name)
+      --font FILE       embed a WOFF2 text font (repeatable; family from the file name);
+                        replaces the bundled Vazirmatn
+      --no-font         embed no text font (the reader's installed fonts are used)
       --title TEXT      document title (default: the first heading)
       --katex-dir DIR   use this KaTeX dist/ directory
       --no-math         leave LaTeX unrendered
@@ -32,7 +39,20 @@ const USAGE: &str = "usage: mathia <input.md> [options]
       --ai-custom [NAME=]URL
                         enable a custom OpenAI-compatible AI provider (repeatable; e.g.
                         --ai-custom https://api.deepseek.com/v1 or
-                        --ai-custom ollama=http://localhost:11434/v1)";
+                        --ai-custom ollama=http://localhost:11434/v1)
+
+decision models (see crates/math-judge):
+      --judge CMD       review every block with an external model: CMD gets one JSON
+                        request per line on stdin and answers one JSON verdict per line
+      --judge-model ID  model name and version, part of every cache key (default: CMD)
+      --judge-cache FILE
+                        verdict cache (JSON); unchanged blocks are not asked again
+      --judge-log FILE  write the overrides and every verdict, for --overrides later
+      --judge-rounds N  at most N review rounds (default 4)
+      --min-confidence X
+                        treat answers below confidence X as accept (default 0.5)
+      --overrides FILE  apply recorded corrections (a --judge-log file or bare
+                        ScopeOverrides JSON) instead of running a model";
 
 /// `Vazirmatn[wght].woff2` and `Vazirmatn-Regular.woff2` are both "Vazirmatn".
 fn font_family(path: &std::path::Path) -> String {
@@ -46,6 +66,24 @@ fn font_family(path: &std::path::Path) -> String {
         .to_string()
 }
 
+/// Everything that is the same for every file of a run.
+struct Settings {
+    config: ScoringConfig,
+    html: HtmlOptions,
+    explain: bool,
+    judge: Option<JudgeSettings>,
+    overrides: Option<ScopeOverrides>,
+}
+
+struct JudgeSettings {
+    command: String,
+    model: String,
+    cache: Option<PathBuf>,
+    log: Option<PathBuf>,
+    rounds: usize,
+    policy: Policy,
+}
+
 fn run() -> Result<(), String> {
     let mut input: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
@@ -54,9 +92,18 @@ fn run() -> Result<(), String> {
     let mut fonts: Vec<PathBuf> = Vec::new();
     let mut title: Option<String> = None;
     let mut no_math = false;
+    let mut no_font = false;
     let mut explain = false;
+    let mut watch = false;
     let mut ai_providers: Vec<AiProvider> = Vec::new();
     let mut custom_providers: Vec<CustomProvider> = Vec::new();
+    let mut judge_command: Option<String> = None;
+    let mut judge_model: Option<String> = None;
+    let mut judge_cache: Option<PathBuf> = None;
+    let mut judge_log: Option<PathBuf> = None;
+    let mut judge_rounds = 4;
+    let mut policy = Policy::default();
+    let mut overrides_path: Option<PathBuf> = None;
 
     let mut args = std::env::args().skip(1);
     let value = |args: &mut dyn Iterator<Item = String>, flag: &str| {
@@ -70,7 +117,24 @@ fn run() -> Result<(), String> {
             "--font" => fonts.push(value(&mut args, &arg)?.into()),
             "--title" => title = Some(value(&mut args, &arg)?),
             "--no-math" => no_math = true,
+            "--no-font" => no_font = true,
             "--explain" => explain = true,
+            "--watch" => watch = true,
+            "--judge" => judge_command = Some(value(&mut args, &arg)?),
+            "--judge-model" => judge_model = Some(value(&mut args, &arg)?),
+            "--judge-cache" => judge_cache = Some(value(&mut args, &arg)?.into()),
+            "--judge-log" => judge_log = Some(value(&mut args, &arg)?.into()),
+            "--judge-rounds" => {
+                judge_rounds = value(&mut args, &arg)?
+                    .parse()
+                    .map_err(|e| format!("--judge-rounds: {e}"))?;
+            }
+            "--min-confidence" => {
+                policy.min_confidence = value(&mut args, &arg)?
+                    .parse()
+                    .map_err(|e| format!("--min-confidence: {e}"))?;
+            }
+            "--overrides" => overrides_path = Some(value(&mut args, &arg)?.into()),
             "--ai" => {
                 for p in AiProvider::ALL {
                     if !ai_providers.contains(&p) {
@@ -132,17 +196,32 @@ fn run() -> Result<(), String> {
         }
     }
     let input = input.ok_or(USAGE)?;
-    let output = output.unwrap_or_else(|| input.with_extension("html"));
+    if judge_command.is_some() && overrides_path.is_some() {
+        return Err("--judge and --overrides exclude each other".into());
+    }
+    if judge_command.is_none()
+        && (judge_cache.is_some() || judge_log.is_some() || judge_model.is_some())
+    {
+        return Err("--judge-model, --judge-cache and --judge-log need --judge".into());
+    }
 
     let config = match config_path {
         Some(path) => ScoringConfig::load(path).map_err(|e| e.to_string())?,
         None => ScoringConfig::default(),
     };
-    let fonts = fonts
+    if no_font && !fonts.is_empty() {
+        return Err("--font and --no-font exclude each other".into());
+    }
+    #[cfg_attr(not(feature = "bundled-fonts"), allow(unused_mut))]
+    let mut fonts = fonts
         .iter()
         .map(|path| EmbeddedFont::from_file(path, &font_family(path), "100 900"))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
+    #[cfg(feature = "bundled-fonts")]
+    if fonts.is_empty() && !no_font {
+        fonts.push(EmbeddedFont::bundled());
+    }
 
     let math = match (no_math, katex_dir) {
         (true, _) => MathAssets::None,
@@ -168,16 +247,13 @@ fn run() -> Result<(), String> {
         }
     };
 
-    let markdown =
-        std::fs::read_to_string(&input).map_err(|e| format!("{}: {e}", input.display()))?;
-    let analysis = math_core::analyze_detailed(&markdown, &config);
-    if explain {
-        print!("{}", analysis.explain(config.threshold));
-    }
-    let document = analysis.document;
-    let html = math_core::html::render(
-        &document,
-        &HtmlOptions {
+    let overrides = match overrides_path {
+        Some(path) => Some(load_overrides(&path)?),
+        None => None,
+    };
+    let settings = Settings {
+        config,
+        html: HtmlOptions {
             math,
             title,
             fonts,
@@ -186,9 +262,119 @@ fn run() -> Result<(), String> {
                 custom_providers,
             },
         },
-    )
-    .map_err(|e| e.to_string())?;
-    std::fs::write(&output, html).map_err(|e| format!("{}: {e}", output.display()))?;
+        explain,
+        judge: judge_command.map(|command| JudgeSettings {
+            model: judge_model.unwrap_or_else(|| command.clone()),
+            command,
+            cache: judge_cache,
+            log: judge_log,
+            rounds: judge_rounds,
+            policy,
+        }),
+        overrides,
+    };
+
+    let jobs = jobs(&input, output)?;
+    if settings.judge.as_ref().is_some_and(|j| j.log.is_some()) && jobs.len() > 1 {
+        return Err("--judge-log takes one input file, not a folder".into());
+    }
+    let mut stamps: Vec<Option<(SystemTime, u64)>> = vec![None; jobs.len()];
+    loop {
+        for (job, stamp) in jobs.iter().zip(stamps.iter_mut()) {
+            let now = file_stamp(&job.0);
+            if watch && now.is_some() && now == *stamp {
+                continue;
+            }
+            *stamp = now;
+            match compile_file(&job.0, &job.1, &settings) {
+                Ok(()) => {}
+                Err(message) if watch => eprintln!("error: {message}"),
+                Err(message) => return Err(message),
+            }
+        }
+        if !watch {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(400));
+    }
+}
+
+fn is_markdown(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        ["md", "markdown", "mdown"]
+            .iter()
+            .any(|m| e.eq_ignore_ascii_case(m))
+    })
+}
+
+/// `(input, output)` pairs: one for a file, one per Markdown file (sorted,
+/// not recursive) for a folder.
+fn jobs(input: &Path, output: Option<PathBuf>) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+    if !input.is_dir() {
+        let output = output.unwrap_or_else(|| input.with_extension("html"));
+        return Ok(vec![(input.to_path_buf(), output)]);
+    }
+    let out_dir = output.unwrap_or_else(|| input.to_path_buf());
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+    let mut files: Vec<PathBuf> = std::fs::read_dir(input)
+        .map_err(|e| format!("{}: {e}", input.display()))?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| path.is_file() && is_markdown(path))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        return Err(format!("{}: no Markdown files", input.display()));
+    }
+    Ok(files
+        .into_iter()
+        .map(|file| {
+            let name = file.with_extension("html");
+            let name = name.file_name().expect("a file has a name");
+            let out = out_dir.join(name);
+            (file, out)
+        })
+        .collect())
+}
+
+fn file_stamp(path: &Path) -> Option<(SystemTime, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// A `--judge-log` file, or a bare `ScopeOverrides` object.
+fn load_overrides(path: &Path) -> Result<ScopeOverrides, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if let Ok(replay) = serde_json::from_str::<Replay>(&text) {
+        return Ok(replay.overrides);
+    }
+    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn compile_file(input: &Path, output: &Path, settings: &Settings) -> Result<(), String> {
+    let config = &settings.config;
+    let markdown =
+        std::fs::read_to_string(input).map_err(|e| format!("{}: {e}", input.display()))?;
+    let analysis = match (&settings.judge, &settings.overrides) {
+        (Some(judge), _) => {
+            let overrides = run_judge(&markdown, config, judge)?;
+            math_core::analyze_with_overrides(&markdown, config, &overrides)
+        }
+        (None, Some(overrides)) => {
+            let nodes =
+                math_core::parser::parse_markdown(&math_core::normalize_markdown(&markdown));
+            overrides
+                .validate(nodes.len())
+                .map_err(|e| format!("{}: {e}", input.display()))?;
+            math_core::analyze_with_overrides(&markdown, config, overrides)
+        }
+        (None, None) => math_core::analyze_detailed(&markdown, config),
+    };
+    if settings.explain {
+        print!("{}", analysis.explain(config.threshold));
+    }
+    let document = analysis.document;
+    let html = math_core::html::render(&document, &settings.html).map_err(|e| e.to_string())?;
+    std::fs::write(output, html).map_err(|e| format!("{}: {e}", output.display()))?;
 
     let semantic = document
         .blocks
@@ -201,6 +387,46 @@ fn run() -> Result<(), String> {
         output.display()
     );
     Ok(())
+}
+
+/// Runs the model over `markdown` and returns the overrides it settled on.
+fn run_judge(
+    markdown: &str,
+    config: &ScoringConfig,
+    settings: &JudgeSettings,
+) -> Result<ScopeOverrides, String> {
+    let command = CommandJudge::from_command_line(&settings.command, &settings.model)?
+        .with_policy(settings.policy);
+    let mut judge = CachedJudge::new(command, &settings.model);
+    if let Some(path) = &settings.cache {
+        judge = judge.load(path)?;
+    }
+    let (_, overrides, log) = math_core::analyze_with_judge_detailed(
+        markdown,
+        config,
+        &judge,
+        settings.rounds,
+        ScopeOverrides::default(),
+    );
+    for error in judge.inner().errors() {
+        eprintln!("judge: {error}");
+    }
+    let changes = log
+        .iter()
+        .filter(|v| v.applied && v.verdict != math_core::Verdict::Accept)
+        .count();
+    eprintln!(
+        "judge: {} verdicts ({} from the model, {changes} changes)",
+        log.len(),
+        judge.misses()
+    );
+    if let Some(path) = &settings.cache {
+        judge.save(path)?;
+    }
+    if let Some(path) = &settings.log {
+        Replay::new(&settings.model, overrides.clone(), log).save(path)?;
+    }
+    Ok(overrides)
 }
 
 fn main() -> ExitCode {

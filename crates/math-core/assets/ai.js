@@ -1,5 +1,5 @@
 /* Mathia AI interactive runtime: settings, providers, streaming, safe rendering,
-   and the per-block Ask and Illustrate actions. See docs/phase2-spec.md. */
+   and the per-block Ask and Illustrate actions. See docs/archive/phase2-spec.md. */
 (function () {
   "use strict";
 
