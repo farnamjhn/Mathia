@@ -6,13 +6,16 @@ use std::path::{Path, PathBuf};
 
 use math_core::{
     AiOptions, AiProvider, BlockType, CustomProvider, Document, HtmlOptions, MathAssets,
-    ScoringConfig,
+    ScopeOverrides, ScoringConfig,
 };
 use serde::{Deserialize, Serialize};
 
 /// File extensions accepted from a drag and drop (the open dialog filters on
 /// the same list).
 pub const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "txt"];
+
+/// How many recent files are kept.
+const RECENT_MAX: usize = 8;
 
 pub fn is_markdown(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
@@ -76,7 +79,7 @@ impl CompileOptions {
                 MathAssets::bundled()
             },
             title: self.title.clone().filter(|t| !t.trim().is_empty()),
-            fonts: Vec::new(),
+            fonts: vec![math_core::EmbeddedFont::bundled()],
             ai: AiOptions {
                 providers,
                 custom_providers,
@@ -117,14 +120,21 @@ pub struct Compiled {
     pub bytes: usize,
 }
 
-/// The app state: one scoring configuration, the files the user has opened,
-/// and the HTML currently shown in the preview.
+/// The app state: one scoring configuration, the hand corrections for the
+/// open document, the files the user has opened, and the HTML currently
+/// shown in the preview.
 #[derive(Debug, Default)]
 pub struct Session {
     config: ScoringConfig,
+    /// Corrections made in the inspector, keyed by node index of the open
+    /// document. The frontend clears them when it opens another file.
+    overrides: ScopeOverrides,
     /// Canonical paths the user chose in an open dialog or dropped on the
     /// window. Commands read nothing else from disk.
     granted: HashSet<PathBuf>,
+    /// Files opened before, most recent first. Only these may be re-opened
+    /// without a dialog (see [`Session::open_recent`]).
+    recent: Vec<PathBuf>,
     preview: String,
     revision: u64,
 }
@@ -140,7 +150,35 @@ impl Session {
             return Err(format!("{}: not a file", path.display()));
         }
         self.granted.insert(canonical.clone());
+        self.recent.retain(|p| p != &canonical);
+        self.recent.insert(0, canonical.clone());
+        self.recent.truncate(RECENT_MAX);
         Ok(canonical)
+    }
+
+    /// Replaces the recent list with one saved by an earlier run.
+    pub fn set_recent(&mut self, paths: Vec<PathBuf>) {
+        self.recent = paths;
+        self.recent.truncate(RECENT_MAX);
+    }
+
+    /// The recent files that still exist, most recent first.
+    pub fn recent(&self) -> Vec<PathBuf> {
+        self.recent.iter().filter(|p| p.is_file()).cloned().collect()
+    }
+
+    /// Opens a file from the recent list. A path that is not in the list is
+    /// refused, so the frontend cannot use this to read arbitrary files. A
+    /// file that has gone is dropped from the list.
+    pub fn open_recent(&mut self, path: &Path) -> Result<PathBuf, String> {
+        if !self.recent.iter().any(|p| p == path) {
+            return Err(format!("{}: not a recent file", path.display()));
+        }
+        self.grant(path).inspect_err(|_| self.recent.retain(|p| p != path))
+    }
+
+    pub fn clear_recent(&mut self) {
+        self.recent.clear();
     }
 
     fn read(&self, source: &Source) -> Result<String, String> {
@@ -161,8 +199,78 @@ impl Session {
         }
     }
 
+    /// Classifies with the session's configuration and corrections.
+    fn classify(&self, source: &Source) -> Result<math_core::Analysis, String> {
+        let markdown = self.read(source)?;
+        let analysis = math_core::analyze_with_overrides(&markdown, &self.config, &self.overrides);
+        self.overrides
+            .validate(analysis.document.nodes.len())
+            .map_err(|e| format!("the corrections no longer fit this file ({e}); reset them"))?;
+        Ok(analysis)
+    }
+
+    /// Modification time and size of an opened file, as an opaque string
+    /// that changes when the file does; `None` for text sources.
+    pub fn stamp(&self, source: &Source) -> Result<Option<String>, String> {
+        let Source::Path(path) = source else {
+            return Ok(None);
+        };
+        let canonical = path
+            .canonicalize()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        if !self.granted.contains(&canonical) {
+            return Err(format!("{}: not opened in Mathia", path.display()));
+        }
+        let meta = std::fs::metadata(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos());
+        Ok(Some(format!("{modified}:{}", meta.len())))
+    }
+
+    pub fn overrides(&self) -> &ScopeOverrides {
+        &self.overrides
+    }
+
+    pub fn set_overrides(&mut self, overrides: ScopeOverrides) {
+        self.overrides = overrides;
+    }
+
+    /// Compiles every Markdown file directly inside `dir` (not recursive)
+    /// into `out_dir`, with the session's configuration but without the
+    /// corrections, which belong to one document. Returns the files written.
+    pub fn compile_folder(
+        &self,
+        dir: &Path,
+        out_dir: &Path,
+        options: &CompileOptions,
+    ) -> Result<Vec<PathBuf>, String> {
+        let html_options = options.html_options()?;
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map_err(|e| format!("{}: {e}", dir.display()))?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.is_file() && is_markdown(path))
+            .collect();
+        files.sort();
+        let mut written = Vec::new();
+        for file in files {
+            let markdown =
+                std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            let document = math_core::analyze(&markdown, &self.config);
+            let html =
+                math_core::html::render(&document, &html_options).map_err(|e| e.to_string())?;
+            let name = file.with_extension("html");
+            let dest = out_dir.join(name.file_name().expect("a file has a name"));
+            std::fs::write(&dest, html).map_err(|e| format!("{}: {e}", dest.display()))?;
+            written.push(dest);
+        }
+        Ok(written)
+    }
+
     pub fn analyze(&self, source: &Source) -> Result<AnalysisView, String> {
-        let analysis = math_core::analyze_detailed(&self.read(source)?, &self.config);
+        let analysis = self.classify(source)?;
         Ok(AnalysisView {
             document: analysis.document,
             scores: analysis
@@ -187,7 +295,7 @@ impl Session {
         source: &Source,
         options: &CompileOptions,
     ) -> Result<(String, usize), String> {
-        let document = math_core::analyze(&self.read(source)?, &self.config);
+        let document = self.classify(source)?.document;
         let semantic = document
             .blocks
             .iter()
@@ -264,6 +372,27 @@ mod tests {
         let json = serde_json::to_value(&view).unwrap();
         assert_eq!(json["scores"][1]["best"], "theorem");
         assert!(json["document"]["blocks"][1]["id"].is_string());
+    }
+
+    #[test]
+    fn recent_files_are_ordered_unique_and_the_only_ones_reopenable() {
+        let a = temp_file("recent-a.md", SAMPLE);
+        let b = temp_file("recent-b.md", SAMPLE);
+        let mut session = Session::default();
+        let a = session.grant(&a).unwrap();
+        let b = session.grant(&b).unwrap();
+        session.grant(&a).unwrap();
+        assert_eq!(session.recent(), vec![a.clone(), b.clone()]);
+
+        // A fresh session (a new run) can reopen a saved recent file...
+        let mut next = Session::default();
+        next.set_recent(vec![b.clone()]);
+        assert_eq!(next.open_recent(&b).unwrap(), b);
+        // ...but not one the user never opened.
+        assert!(next.open_recent(&a).is_err());
+
+        next.clear_recent();
+        assert!(next.recent().is_empty());
     }
 
     #[test]
@@ -346,5 +475,66 @@ mod tests {
 
         assert!(is_markdown(Path::new("notes.MD")));
         assert!(!is_markdown(Path::new("notes.html")));
+    }
+
+    #[test]
+    fn corrections_apply_to_analysis_and_preview() {
+        let mut session = Session::default();
+        let mut overrides = ScopeOverrides::default();
+        overrides.retype.insert(1, BlockType::Lemma);
+        session.set_overrides(overrides);
+        let view = session.analyze(&text()).unwrap();
+        assert_eq!(view.document.blocks[1].kind, BlockType::Lemma);
+        let (html, _) = session
+            .compile(&text(), &CompileOptions::default())
+            .unwrap();
+        assert!(html.contains("block-lemma-1"));
+
+        // Overrides that point past the document are reported, not ignored.
+        let mut stale = ScopeOverrides::default();
+        stale.suppressed.insert(99);
+        session.set_overrides(stale);
+        assert!(session.analyze(&text()).unwrap_err().contains("reset them"));
+        // The frontend sends them as JSON.
+        let parsed: ScopeOverrides =
+            serde_json::from_str(r#"{"retype": {"1": "lemma"}, "end": {"1": 3}}"#).unwrap();
+        assert_eq!(parsed.end.get(&1), Some(&3));
+    }
+
+    #[test]
+    fn stamps_change_with_the_file_and_folders_compile() {
+        let path = temp_file("stamped.md", SAMPLE);
+        let mut session = Session::default();
+        let source = Source::Path(path.clone());
+        assert!(session.stamp(&source).is_err());
+        session.grant(&path).unwrap();
+        let first = session.stamp(&source).unwrap();
+        std::fs::write(&path, format!("{SAMPLE}\nMore text.\n")).unwrap();
+        assert_ne!(session.stamp(&source).unwrap(), first);
+        assert_eq!(session.stamp(&text()).unwrap(), None);
+
+        let dir = path.parent().unwrap().join("folder");
+        let out = path.parent().unwrap().join("folder-out");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(dir.join("a.md"), SAMPLE).unwrap();
+        std::fs::write(dir.join("b.markdown"), SAMPLE).unwrap();
+        std::fs::write(dir.join("skip.html"), "x").unwrap();
+        let written = session
+            .compile_folder(
+                &dir,
+                &out,
+                &CompileOptions {
+                    no_math: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(written, [out.join("a.html"), out.join("b.html")]);
+        assert!(
+            std::fs::read_to_string(&written[0])
+                .unwrap()
+                .contains("block-theorem-1")
+        );
     }
 }

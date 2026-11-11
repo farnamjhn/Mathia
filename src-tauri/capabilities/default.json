@@ -15,6 +15,14 @@
     "allow-reset-config",
     "allow-load-config",
     "allow-save-config",
-    "allow-set-window-theme"
+    "allow-set-window-theme",
+    "allow-source-stamp",
+    "allow-set-overrides",
+    "allow-save-overrides",
+    "allow-load-overrides",
+    "allow-export-folder",
+    "allow-recent-files",
+    "allow-open-recent",
+    "allow-clear-recent"
   ]
 }

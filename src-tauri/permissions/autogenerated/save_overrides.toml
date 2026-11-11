@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-overrides"
+description = "Enables the save_overrides command without any pre-configured scope."
+commands.allow = ["save_overrides"]
+
+[[permission]]
+identifier = "deny-save-overrides"
+description = "Denies the save_overrides command without any pre-configured scope."
+commands.deny = ["save_overrides"]

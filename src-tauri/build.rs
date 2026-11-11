@@ -13,6 +13,14 @@ const COMMANDS: &[&str] = &[
     "load_config",
     "save_config",
     "set_window_theme",
+    "source_stamp",
+    "set_overrides",
+    "save_overrides",
+    "load_overrides",
+    "export_folder",
+    "recent_files",
+    "open_recent",
+    "clear_recent",
 ];
 
 fn main() {

@@ -16,7 +16,7 @@ mod theme;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
-use math_core::{ConfigFormat, ScoringConfig};
+use math_core::{ConfigFormat, ScopeOverrides, ScoringConfig};
 use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 
@@ -32,6 +32,30 @@ fn lock(state: &Shared) -> MutexGuard<'_, Session> {
     state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Where the recent list is kept between runs.
+fn recent_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|dir| dir.join("recent.json"))
+}
+
+/// Best effort: a recent list that cannot be saved is not worth an error.
+fn save_recent(app: &AppHandle, session: &Session) {
+    let Some(file) = recent_path(app) else { return };
+    let paths: Vec<_> = session.recent();
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(json) = serde_json::to_string(&paths) {
+        let _ = std::fs::write(file, json);
+    }
+}
+
+fn load_recent(app: &AppHandle) -> Vec<std::path::PathBuf> {
+    recent_path(app)
+        .and_then(|file| std::fs::read_to_string(file).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
 }
 
 fn display(path: &Path) -> String {
@@ -51,20 +75,52 @@ async fn pick_markdown(app: AppHandle, state: State<'_, Shared>) -> Result<Optio
         return Ok(None);
     };
     let path = picked.into_path().map_err(|e| e.to_string())?;
-    let granted = lock(&state).grant(&path)?;
+    let mut session = lock(&state);
+    let granted = session.grant(&path)?;
+    save_recent(&app, &session);
     Ok(Some(display(&granted)))
+}
+
+/// The files opened before that still exist, most recent first.
+#[tauri::command]
+async fn recent_files(state: State<'_, Shared>) -> Result<Vec<String>, String> {
+    Ok(lock(&state).recent().iter().map(|p| display(p)).collect())
+}
+
+/// Opens a file from the recent list. Returns its canonical path.
+#[tauri::command]
+async fn open_recent(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    path: String,
+) -> Result<String, String> {
+    let mut session = lock(&state);
+    let result = session.open_recent(Path::new(&path));
+    save_recent(&app, &session);
+    result.map(|p| display(&p))
+}
+
+#[tauri::command]
+async fn clear_recent(app: AppHandle, state: State<'_, Shared>) -> Result<(), String> {
+    let mut session = lock(&state);
+    session.clear_recent();
+    save_recent(&app, &session);
+    Ok(())
 }
 
 /// The Markdown file given on the command line (`mathia-app notes.md`), if any.
 #[tauri::command]
-async fn startup_file(state: State<'_, Shared>) -> Result<Option<String>, String> {
+async fn startup_file(app: AppHandle, state: State<'_, Shared>) -> Result<Option<String>, String> {
     let Some(path) = std::env::args_os().nth(1).map(std::path::PathBuf::from) else {
         return Ok(None);
     };
     if !session::is_markdown(&path) {
         return Ok(None);
     }
-    Ok(Some(display(&lock(&state).grant(&path)?)))
+    let mut session = lock(&state);
+    let granted = session.grant(&path)?;
+    save_recent(&app, &session);
+    Ok(Some(display(&granted)))
 }
 
 #[tauri::command]
@@ -109,6 +165,112 @@ async fn export(
     let dest = dest.into_path().map_err(|e| e.to_string())?;
     std::fs::write(&dest, html).map_err(|e| format!("{}: {e}", dest.display()))?;
     Ok(Some(display(&dest)))
+}
+
+/// An opaque stamp that changes when the opened file changes on disk; the
+/// frontend polls it to recompile edits made in another program.
+#[tauri::command]
+async fn source_stamp(state: State<'_, Shared>, source: Source) -> Result<Option<String>, String> {
+    lock(&state).stamp(&source)
+}
+
+/// Replaces the hand corrections for the open document.
+#[tauri::command]
+async fn set_overrides(state: State<'_, Shared>, overrides: ScopeOverrides) -> Result<(), String> {
+    lock(&state).set_overrides(overrides);
+    Ok(())
+}
+
+/// Saves the corrections as JSON (usable with `mathia --overrides`).
+#[tauri::command]
+async fn save_overrides(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    source: Source,
+) -> Result<Option<String>, String> {
+    let overrides = lock(&state).overrides().clone();
+    let stem = source.path().and_then(Path::file_stem);
+    let mut dialog = app
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .set_file_name(format!(
+            "{}.overrides.json",
+            stem.map(|s| s.to_string_lossy())
+                .as_deref()
+                .unwrap_or("document")
+        ));
+    if let Some(dir) = source.path().and_then(Path::parent) {
+        dialog = dialog.set_directory(dir);
+    }
+    let Some(dest) = dialog.blocking_save_file() else {
+        return Ok(None);
+    };
+    let dest = dest.into_path().map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&overrides).map_err(|e| e.to_string())?;
+    std::fs::write(&dest, json + "\n").map_err(|e| format!("{}: {e}", dest.display()))?;
+    Ok(Some(display(&dest)))
+}
+
+/// Loads corrections from a JSON file the user picks (a saved set, or a
+/// `mathia --judge-log` file) and makes them current.
+#[tauri::command]
+async fn load_overrides(
+    app: AppHandle,
+    state: State<'_, Shared>,
+) -> Result<Option<ScopeOverrides>, String> {
+    let Some(picked) = app
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let path = picked.into_path().map_err(|e| e.to_string())?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    // A judge log keeps the overrides under "overrides".
+    let value = match value.get("overrides") {
+        Some(inner) => inner.clone(),
+        None => value,
+    };
+    let overrides: ScopeOverrides =
+        serde_json::from_value(value).map_err(|e| format!("{}: {e}", path.display()))?;
+    lock(&state).set_overrides(overrides.clone());
+    Ok(Some(overrides))
+}
+
+/// Compiles every Markdown file of a folder the user picks into a folder
+/// the user picks. Returns the number of files and the destination.
+#[tauri::command]
+async fn export_folder(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    options: CompileOptions,
+) -> Result<Option<(usize, String)>, String> {
+    let Some(dir) = app
+        .dialog()
+        .file()
+        .set_title("Folder of Markdown files")
+        .blocking_pick_folder()
+    else {
+        return Ok(None);
+    };
+    let dir = dir.into_path().map_err(|e| e.to_string())?;
+    let Some(out) = app
+        .dialog()
+        .file()
+        .set_title("Where to write the HTML files")
+        .set_directory(&dir)
+        .blocking_pick_folder()
+    else {
+        return Ok(None);
+    };
+    let out = out.into_path().map_err(|e| e.to_string())?;
+    let written = lock(&state).compile_folder(&dir, &out, &options)?;
+    Ok(Some((written.len(), display(&out))))
 }
 
 #[tauri::command]
@@ -194,7 +356,9 @@ fn main() {
                 .body(html)
                 .expect("static response headers are valid")
         })
-        .setup(|_app| {
+        .setup(|app| {
+            let saved = load_recent(app.handle());
+            lock(&app.state::<Shared>()).set_recent(saved);
             // Replace the static bundle icon as soon as AppKit is available.
             // Waiting for `RunEvent::Ready` leaves the light bundle icon visible
             // while the application is starting in Dark Mode.
@@ -219,6 +383,7 @@ fn main() {
                     for path in paths.iter().filter(|p| session::is_markdown(p)) {
                         let _ = session.grant(path);
                     }
+                    save_recent(window.app_handle(), &session);
                 }
                 _ => {}
             }
@@ -235,6 +400,14 @@ fn main() {
             load_config,
             save_config,
             set_window_theme,
+            source_stamp,
+            set_overrides,
+            save_overrides,
+            load_overrides,
+            export_folder,
+            recent_files,
+            open_recent,
+            clear_recent,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Mathia")

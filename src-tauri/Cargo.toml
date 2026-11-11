@@ -10,8 +10,9 @@ authors.workspace = true
 tauri-build = "2"
 
 [dependencies]
-# KaTeX is always bundled: the app has no --katex-dir and never uses a CDN.
-math-core = { workspace = true, features = ["bundled-katex"] }
+# KaTeX and Vazirmatn are always bundled: the app has no --katex-dir and
+# never uses a CDN.
+math-core = { workspace = true, features = ["bundled-katex", "bundled-fonts"] }
 serde.workspace = true
 serde_json.workspace = true
 tauri = "2"

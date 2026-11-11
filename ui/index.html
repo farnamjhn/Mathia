@@ -11,111 +11,202 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="toolbar">
+<header class="bar">
   <span class="brand" aria-hidden="true">
     <img class="if-light" src="assets/mathia-light.png" width="28" height="28" alt="">
     <img class="if-dark" src="assets/mathia-dark.png" width="28" height="28" alt="">
   </span>
-  <button id="open" type="button" title="Open a Markdown file (⌘O / Ctrl+O)">Open…</button>
-  <button id="guide" type="button" title="The prompt to give your OCR / vision LLM so its Markdown suits Mathia">OCR prompt</button>
-  <label class="check" title="Embed the AI runtime (Ask / Illustrate) for Anthropic, OpenAI, Gemini or any OpenAI-compatible endpoint">
-    <input id="ai" type="checkbox"> AI runtime
-  </label>
-  <label class="check" title="Leave LaTeX unrendered">
-    <input id="no-math" type="checkbox"> No math
-  </label>
-  <span id="status" class="status" role="status" aria-live="polite"></span>
-  <button id="preview-toggle" class="preview-toggle" type="button" aria-controls="preview" aria-expanded="true" title="Close HTML preview">
-    <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
-    <span>Preview</span>
+  <span id="doc-name" class="doc-name" dir="auto">Mathia</span>
+  <button id="reload" class="icon-btn" type="button" aria-label="Compile again" title="Compile again (⌘R / Ctrl+R)" disabled>
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+      <path d="M21 3v5h-5"/>
+    </svg>
   </button>
-  <button id="theme-toggle" class="theme-toggle" type="button" title="Toggle color theme">
+
+  <span class="bar-space"></span>
+
+  <button id="open" class="btn" type="button" title="Open a Markdown file (⌘O / Ctrl+O)">Open…</button>
+  <div class="menu-wrap" id="recent-wrap" hidden>
+    <button id="recent-button" class="btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="recent-menu">
+      Recent
+      <svg class="caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5"/></svg>
+    </button>
+    <div id="recent-menu" class="menu" hidden></div>
+  </div>
+  <button id="guide" class="btn" type="button" title="The prompt that makes a vision model transcribe pages the way Mathia reads them">Transcription prompt</button>
+
+  <div class="menu-wrap">
+    <button id="options-button" class="btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="options-menu">
+      Options
+      <svg class="caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5"/></svg>
+    </button>
+    <div id="options-menu" class="menu menu-end" hidden>
+      <label class="option">
+        <input id="render-math" type="checkbox" checked>
+        <span class="option-text">
+          <span class="option-name">Render formulas</span>
+          <span class="option-hint">Turn off to leave LaTeX as typed.</span>
+        </span>
+      </label>
+      <label class="option">
+        <input id="ai" type="checkbox">
+        <span class="option-text">
+          <span class="option-name">Add AI study tools</span>
+          <span class="option-hint">Puts Ask and Illustrate on each block. Works with Anthropic, OpenAI, Gemini or a compatible endpoint.</span>
+        </span>
+      </label>
+      <hr>
+      <button id="scoring" class="menu-item" type="button">Detection settings…</button>
+    </div>
+  </div>
+
+  <button id="preview-toggle" class="icon-btn" type="button" aria-controls="preview" aria-expanded="true" aria-label="Preview" title="Hide the preview" disabled>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2"/>
+      <path d="M10 4v16"/>
+    </svg>
+  </button>
+  <button id="theme-toggle" class="icon-btn" type="button" title="Toggle color theme">
     <span class="if-dark theme-option">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <circle cx="12" cy="12" r="4"/>
         <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
       </svg>
-      <span aria-hidden="true">Light</span>
       <span class="sr-only">Switch to light theme</span>
     </span>
     <span class="if-light theme-option">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
       </svg>
-      <span aria-hidden="true">Dark</span>
       <span class="sr-only">Switch to dark theme</span>
     </span>
   </button>
+
+  <div class="menu-wrap split">
+    <button id="export" class="btn primary split-main" type="button" title="Save this document as one HTML file (⌘E / Ctrl+E)" disabled>Export…</button>
+    <button id="export-more" class="btn primary split-more" type="button" aria-label="More ways to export" aria-haspopup="true" aria-expanded="false" aria-controls="export-menu">
+      <svg class="caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5"/></svg>
+    </button>
+    <div id="export-menu" class="menu menu-end" hidden>
+      <button id="export-folder" class="menu-item" type="button">
+        Export every file in a folder…
+        <span class="option-hint">Each Markdown file becomes its own HTML file.</span>
+      </button>
+    </div>
+  </div>
 </header>
 
 <main id="panes" class="panes">
-  <aside class="inspector" aria-label="Block inspector">
-    <div class="inspector-head">
-      <h2>Blocks</h2>
-      <label class="check"><input id="show-text" type="checkbox"> plain text</label>
+  <aside id="inspector" class="inspector" aria-label="Blocks" hidden>
+    <div class="list-tools">
+      <input id="filter" class="filter" type="search" placeholder="Find a block" aria-label="Find a block" spellcheck="false" autocomplete="off">
+      <div id="views" class="views" role="group" aria-label="Which blocks to list">
+        <button type="button" data-view="all" aria-pressed="true">All <span class="n" id="count-all"></span></button>
+        <button type="button" data-view="unsure" aria-pressed="false" title="Blocks Mathia detected with low confidence">Unsure <span class="n" id="count-unsure"></span></button>
+        <button type="button" data-view="changed" aria-pressed="false" title="Blocks you corrected">Changed <span class="n" id="count-changed"></span></button>
+      </div>
     </div>
     <ol id="blocks" class="blocks"></ol>
-    <section id="detail" class="detail" hidden>
-      <h3 id="detail-title" dir="auto"></h3>
-      <dl id="detail-facts"></dl>
-      <h4>Opener scores</h4>
-      <ul id="detail-scores" class="scores"></ul>
-      <details>
-        <summary>Features</summary>
-        <pre id="detail-features"></pre>
+    <p id="blocks-empty" class="blocks-empty" hidden></p>
+    <label class="check plain-toggle" title="List ordinary paragraphs too, so you can turn one Mathia missed into a block">
+      <input id="show-text" type="checkbox"> Show plain paragraphs
+    </label>
+
+    <section id="detail" class="detail" aria-labelledby="detail-title" hidden>
+      <header class="detail-head">
+        <h2 id="detail-title" dir="auto"></h2>
+        <button id="detail-close" class="icon-btn" type="button" aria-label="Close block details">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"/></svg>
+        </button>
+      </header>
+      <p id="detail-note" class="detail-note" hidden></p>
+      <div class="fix">
+        <label for="fix-kind">Type</label>
+        <select id="fix-kind"></select>
+        <span id="fix-length-label">Length</span>
+        <div class="fix-length" role="group" aria-labelledby="fix-length-label">
+          <button id="fix-shorter" class="btn small" type="button" title="End the block one part earlier">Shorter</button>
+          <span id="fix-length" class="fix-length-value"></span>
+          <button id="fix-longer" class="btn small" type="button" title="End the block one part later; it may take in the next block">Longer</button>
+        </div>
+      </div>
+      <div class="fix-row">
+        <button id="fix-reject" class="btn small" type="button" title="Treat this as ordinary text, not a block">Not a block</button>
+        <button id="fix-reset" class="btn small" type="button" title="Go back to what Mathia detected for this block">Undo my changes</button>
+      </div>
+      <details class="why">
+        <summary>Why Mathia chose this</summary>
+        <ul id="detail-scores" class="scores"></ul>
+        <dl id="detail-facts"></dl>
+        <details>
+          <summary>Raw features</summary>
+          <pre id="detail-features"></pre>
+        </details>
       </details>
     </section>
   </aside>
 
-  <section id="preview" class="preview">
-    <div class="preview-head">
-      <div class="preview-head-start">
-        <span class="preview-badge">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polyline points="16 18 22 12 16 6"/>
-            <polyline points="8 6 2 12 8 18"/>
-          </svg>
-          <span>HTML preview</span>
-        </span>
-        <button id="reload" class="btn preview-reload" type="button" aria-label="Reload" title="Compile again (⌘R / Ctrl+R)" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
-            <path d="M21 3v5h-5"/>
-          </svg>
-        </button>
+  <section id="preview" class="preview" aria-label="Compiled document" hidden>
+    <iframe id="frame" title="Compiled document" sandbox="allow-scripts allow-same-origin"></iframe>
+  </section>
+
+  <section id="empty" class="welcome" aria-labelledby="welcome-title">
+    <div class="welcome-inner">
+      <div class="welcome-logo" aria-hidden="true">
+        <img class="if-light" src="assets/mathia-light.png" width="72" height="72" alt="">
+        <img class="if-dark" src="assets/mathia-dark.png" width="72" height="72" alt="">
       </div>
-      <button id="export" class="btn preview-export" type="button" title="Save the compiled HTML (⌘E / Ctrl+E)" disabled>Export…</button>
-    </div>
-    <div class="preview-body">
-      <div id="empty" class="empty">
-        <div class="empty-logo" aria-hidden="true">
-          <img class="if-light" src="assets/mathia-light.png" width="96" height="96" alt="">
-          <img class="if-dark" src="assets/mathia-dark.png" width="96" height="96" alt="">
-        </div>
-        <p class="empty-title">Open a Markdown file</p>
-        <p>Use <strong>Open…</strong> or drop a <code>.md</code> file on this window.</p>
-        <div class="empty-guide">
-          <p class="empty-guide-title">Transcribing pages with an LLM first?</p>
-          <p>Give your OCR / vision model this prompt before the page images, so the Markdown it
-            returns uses the conventions Mathia detects.</p>
+      <h1 id="welcome-title">Turn transcribed notes into a study guide</h1>
+      <section id="recent" class="recent" aria-labelledby="recent-title" hidden>
+        <header class="recent-head">
+          <h2 id="recent-title">Recent</h2>
+          <button id="recent-clear" class="link" type="button">Clear</button>
+        </header>
+        <ul id="recent-list" class="recent-list"></ul>
+      </section>
+      <ol class="steps">
+        <li>
+          <h2>Transcribe your pages</h2>
+          <p>Give a vision model Mathia's prompt, then photos of the pages. The Markdown it returns is laid out the way Mathia reads it.</p>
           <div class="actions">
-            <button id="copy-prompt-empty" class="btn primary" type="button">Copy OCR prompt</button>
-            <button id="view-prompt" class="btn" type="button">View prompt</button>
+            <button id="copy-prompt-empty" class="btn" type="button">Copy prompt</button>
+            <button id="view-prompt" class="btn" type="button">Read the prompt</button>
           </div>
-        </div>
-      </div>
-      <iframe id="frame" title="Compiled document" sandbox="allow-scripts allow-same-origin" hidden></iframe>
+        </li>
+        <li>
+          <h2>Open the Markdown</h2>
+          <p>Choose the file, or drop it anywhere on this window.</p>
+          <div class="actions">
+            <button id="open-welcome" class="btn primary" type="button">Open a Markdown file…</button>
+          </div>
+        </li>
+        <li>
+          <h2>Check the blocks, then export</h2>
+          <p>Mathia finds the theorems, definitions and proofs. Fix any it got wrong and export a single HTML file.</p>
+        </li>
+      </ol>
     </div>
   </section>
 </main>
 
-<dialog id="guide-dialog" class="guide" aria-labelledby="guide-title">
-  <header class="guide-head">
-    <h2 id="guide-title">OCR prompt</h2>
-    <p>Paste this into your OCR / vision LLM as the first message (or system prompt), then attach
-      the page images. Its Markdown output opens directly in Mathia.</p>
+<footer class="statusbar">
+  <span id="status" class="status" role="status" aria-live="polite"></span>
+  <div id="corrections" class="corrections" hidden>
+    <span id="corrections-count" class="corrections-count"></span>
+    <button id="corrections-save" class="link" type="button" title="Save your corrections as a JSON file, to load again later or use with mathia --overrides">Save…</button>
+    <button id="corrections-load" class="link" type="button" title="Load corrections from a JSON file (also a mathia --judge-log file)">Load…</button>
+    <button id="corrections-clear" class="link" type="button" title="Drop every correction and go back to what Mathia detected">Undo all</button>
+  </div>
+</footer>
+
+<dialog id="guide-dialog" class="dialog" aria-labelledby="guide-title">
+  <header class="dialog-head">
+    <h2 id="guide-title">Transcription prompt</h2>
+    <p>Paste this into a vision model as the first message or system prompt, then attach photos
+      of the pages. The Markdown it returns opens directly in Mathia.</p>
   </header>
-  <textarea id="prompt-text" class="prompt" readonly spellcheck="false" aria-label="OCR prompt">You transcribe pages of mathematics lecture notes and textbooks, written in Persian, English or both, into Markdown. The Markdown is compiled by Mathia, a program that finds theorems, definitions, proofs and similar blocks purely from the Markdown, so the conventions below matter. Reply with the Markdown only: no greeting, no explanation, and no code fence around the answer.
+  <textarea id="prompt-text" class="prompt" readonly spellcheck="false" aria-label="Transcription prompt">You transcribe pages of mathematics lecture notes and textbooks, written in Persian, English or both, into Markdown. The Markdown is compiled by Mathia, a program that finds theorems, definitions, proofs and similar blocks purely from the Markdown, so the conventions below matter. Reply with the Markdown only: no greeting, no explanation, and no code fence around the answer.
 
 TRANSCRIBE FAITHFULLY
 - Copy what is printed. Do not solve, summarize, translate, correct or reorder anything.
@@ -188,13 +279,59 @@ BEFORE YOU ANSWER, CHECK
 3. Every $ is closed, and nothing but the transcription is in your reply.
 
 If I send more pages afterwards, continue the same document with the same conventions and numbering, without repeating earlier content.</textarea>
-  <footer class="guide-actions">
+  <footer class="dialog-actions">
     <button id="copy-prompt" class="btn primary" type="button">Copy prompt</button>
     <button id="guide-close" class="btn" type="button">Close</button>
   </footer>
 </dialog>
 
-<div id="drop" class="drop" hidden>Drop to open</div>
+<dialog id="config-dialog" class="dialog config" aria-labelledby="config-title">
+  <header class="dialog-head">
+    <h2 id="config-title">Detection settings</h2>
+    <p>How Mathia decides what is a block. Applies to the open document and to exports. Save…
+      writes a file you can also use with <code>mathia --config</code>.</p>
+  </header>
+  <form id="config-form" class="config-form" method="dialog">
+    <fieldset>
+      <legend>Method</legend>
+      <label>Score with
+        <select id="cfg-scorer">
+          <option value="linear">Weighted sum</option>
+          <option value="tree">Decision tree</option>
+        </select>
+      </label>
+      <label>Threshold <input id="cfg-threshold" type="number" min="0" max="1" step="0.01" required>
+        <span class="hint">Raise it to detect fewer blocks, lower it to detect more.</span></label>
+    </fieldset>
+    <fieldset>
+      <legend>Weights <span class="hint">(weighted sum only, except after_statement)</span></legend>
+      <div id="cfg-weights" class="config-grid"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Scope limits <span class="hint">(nodes)</span></legend>
+      <div id="cfg-scope" class="config-grid"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Keywords <span class="hint">(comma-separated)</span></legend>
+      <div id="cfg-keywords" class="config-list"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Cues <span class="hint">(one per line)</span></legend>
+      <div id="cfg-cues" class="config-cues"></div>
+    </fieldset>
+  </form>
+  <p id="config-error" class="config-error" role="alert" hidden></p>
+  <footer class="dialog-actions">
+    <button id="config-load" class="btn" type="button">Load…</button>
+    <button id="config-save" class="btn" type="button">Save…</button>
+    <button id="config-reset" class="btn" type="button">Restore defaults</button>
+    <span class="spacer"></span>
+    <button id="config-cancel" class="btn" type="button">Cancel</button>
+    <button id="config-apply" class="btn primary" type="button">Apply</button>
+  </footer>
+</dialog>
+
+<div id="drop" class="drop" hidden>Drop the Markdown file to open it</div>
 <script src="main.js"></script>
 </body>
 </html>

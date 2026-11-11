@@ -47,15 +47,12 @@ mod macos {
     fn effective_system_theme(mtm: MainThreadMarker) -> Theme {
         let app = NSApplication::sharedApplication(mtm);
         let appearance = app.effectiveAppearance();
-        let names = unsafe { NSArray::from_slice(&[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) };
+        let names =
+            unsafe { NSArray::from_slice(&[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) };
         let is_dark = appearance
             .bestMatchFromAppearancesWithNames(&names)
             .is_some_and(|name| unsafe { &*name == NSAppearanceNameDarkAqua });
-        if is_dark {
-            Theme::Dark
-        } else {
-            Theme::Light
-        }
+        if is_dark { Theme::Dark } else { Theme::Light }
     }
 
     fn icon_appearance_default() -> Option<String> {
@@ -138,10 +135,7 @@ mod tests {
             resolve_theme(Theme::Light, Some("RegularDark")),
             Theme::Dark
         );
-        assert_eq!(
-            resolve_theme(Theme::Light, Some("ClearDark")),
-            Theme::Dark
-        );
+        assert_eq!(resolve_theme(Theme::Light, Some("ClearDark")), Theme::Dark);
         assert_eq!(
             resolve_theme(Theme::Dark, Some("RegularLight")),
             Theme::Light
