@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mathia</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="toolbar">
+  <button id="open" type="button" title="Open a Markdown file (⌘O / Ctrl+O)">Open…</button>
+  <button id="reload" type="button" title="Compile again (⌘R / Ctrl+R)" disabled>Reload</button>
+  <button id="export" type="button" title="Save the compiled HTML (⌘E / Ctrl+E)" disabled>Export…</button>
+  <label class="check" title="Embed the AI runtime (Ask / Illustrate) for Anthropic, OpenAI and Gemini">
+    <input id="ai" type="checkbox"> AI runtime
+  </label>
+  <label class="check" title="Leave LaTeX unrendered">
+    <input id="no-math" type="checkbox"> No math
+  </label>
+  <span id="status" class="status" role="status" aria-live="polite"></span>
+</header>
+
+<main class="panes">
+  <aside class="inspector" aria-label="Block inspector">
+    <div class="inspector-head">
+      <h2>Blocks</h2>
+      <label class="check"><input id="show-text" type="checkbox"> plain text</label>
+    </div>
+    <ol id="blocks" class="blocks"></ol>
+    <section id="detail" class="detail" hidden>
+      <h3 id="detail-title" dir="auto"></h3>
+      <dl id="detail-facts"></dl>
+      <h4>Opener scores</h4>
+      <ul id="detail-scores" class="scores"></ul>
+      <details>
+        <summary>Features</summary>
+        <pre id="detail-features"></pre>
+      </details>
+    </section>
+  </aside>
+
+  <section class="preview">
+    <div id="empty" class="empty">
+      <p class="empty-title">Open a Markdown file</p>
+      <p>Use <strong>Open…</strong> or drop a <code>.md</code> file on this window.</p>
+    </div>
+    <iframe id="frame" title="Compiled document" sandbox="allow-scripts allow-same-origin" hidden></iframe>
+  </section>
+</main>
+
+<div id="drop" class="drop" hidden>Drop to open</div>
+<script src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window: events (for drag and drop) and Mathia's own commands. No fs, dialog or shell permission is granted to the frontend; files are chosen through dialogs opened by the Rust side.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:default",
+    "allow-pick-markdown",
+    "allow-startup-file",
+    "allow-analyze",
+    "allow-compile",
+    "allow-export",
+    "allow-get-config",
+    "allow-set-config",
+    "allow-reset-config",
+    "allow-load-config",
+    "allow-save-config"
+  ]
+}

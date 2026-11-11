@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-compile"
+description = "Enables the compile command without any pre-configured scope."
+commands.allow = ["compile"]
+
+[[permission]]
+identifier = "deny-compile"
+description = "Denies the compile command without any pre-configured scope."
+commands.deny = ["compile"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pick-markdown"
+description = "Enables the pick_markdown command without any pre-configured scope."
+commands.allow = ["pick_markdown"]
+
+[[permission]]
+identifier = "deny-pick-markdown"
+description = "Denies the pick_markdown command without any pre-configured scope."
+commands.deny = ["pick_markdown"]

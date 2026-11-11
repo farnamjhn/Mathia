@@ -1,0 +1,18 @@
+[package]
+name = "mathia-app"
+description = "Mathia desktop app (Tauri v2): a thin shell over math-core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+# KaTeX is always bundled: the app has no --katex-dir and never uses a CDN.
+math-core = { workspace = true, features = ["bundled-katex"] }
+serde.workspace = true
+serde_json.workspace = true
+tauri = "2"
+tauri-plugin-dialog = "2"
