@@ -1,0 +1,13 @@
+[package]
+name = "math-judge"
+description = "Decision models for Mathia: the BlockJudge contract over JSON, an external-process judge, a verdict cache and replay logs."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# Model runtimes and clients belong here, never in math-core.
+[dependencies]
+math-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
