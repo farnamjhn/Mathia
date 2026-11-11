@@ -32,10 +32,23 @@ Options:
 - `--ai-provider NAME` — enable a specific AI provider (repeatable: `anthropic`, `openai`, `gemini`).
 - `--ai-custom [NAME=]URL` — enable a custom OpenAI-compatible AI provider (repeatable: e.g. `https://api.deepseek.com/v1`, `ollama=http://localhost:11434/v1`).
 
+With an `--ai*` option the compiled page gets a settings button (⚙) and two actions on every
+block: **Ask** (a conversation about the block) and **Illustrate** (an explanatory figure).
+The reader pastes their own API key into the page; it is kept in that browser's
+`localStorage`, never written into the file, and sent only to the chosen provider. Without
+these options the output contains no AI code and allows no network connections.
+
 ## Development
 
 ```bash
 cargo test
+```
+
+The JavaScript inside compiled documents is tested in headless Chrome (see
+[tests/js/README.md](tests/js/README.md)):
+
+```bash
+cd tests/js && npm install && npm test
 ```
 
 See [PLAN.md](PLAN.md) for the current state and next steps.

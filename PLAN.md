@@ -17,7 +17,7 @@ Done (Task 1 — the foundation, all in `crates/math-core`, `cargo test` green):
 | Features | `src/features.rs` | lead keyword + label, mentions, math density, logic symbols, QED ending, cues |
 | Classifier | `src/classifier.rs`, `src/crossref.rs` | scoring → openers → scoping → proof links → reference links; `ScopeOverrides`, `BlockJudge`, `classify_with_judge` |
 | HTML | `src/html.rs`, `templates/document.html`, `assets/` | `askama` template, callouts, sidebar TOC, `data-block-id` hooks, micro-runtime |
-| CLI stand-in | `src-tauri/src/main.rs` | `mathia in.md [-o out.html] [--config F] [--explain] [--font F] [--katex-dir DIR]`; no Tauri dependency yet |
+| CLI stand-in | `src-tauri/src/main.rs` | `mathia in.md [-o out.html] [--config F] [--explain] [--font F] [--katex-dir DIR] [--ai] [--ai-provider P] [--ai-custom [NAME=]URL]`; no Tauri dependency yet |
 
 Decisions taken (change here first if they are revisited):
 
@@ -118,20 +118,40 @@ live **outside** `math-core`.
 
 ## Phase 2 — interactive runtime (inside the compiled HTML)
 
-The compiled file already exposes `window.Mathia` (`blocks()`, `block(id)`,
-`registerAction({id, label, run, types})`, `renderMath()`) and an empty action slot in every
-semantic block (`[data-block-actions]`).
+Done. Contract: `docs/phase2-spec.md`. Opt-in: nothing below is embedded unless the document
+is compiled with `--ai` / `--ai-provider` / `--ai-custom` (`HtmlOptions::ai`); without them
+the output is unchanged. Code: `assets/ai.js`, `assets/ai.css`; API: `window.Mathia.ai`.
 
-1. **API key handling:** user pastes their own key into the page; stored in `localStorage`
-   only, never written into the file; clear "forget key" control; provider selection.
-2. **Ask about this block:** per-block panel that sends the block text (LaTeX restored via
-   `block.text`) plus optional neighbouring context; streamed answer rendered as Markdown +
-   KaTeX; conversation kept per block.
-3. **Explanatory SVG:** per-block "illustrate" action; the returned SVG must be sanitised
-   (no scripts, no external references) before insertion; cache per block in `localStorage`.
-4. Offline behaviour: all of the above degrade to hidden controls with no network.
-5. Keep the runtime dependency-free vanilla JS, embedded from `assets/runtime.js`; add a
-   small JS test harness (headless browser) for it.
+1. [x] **Embedding and CSP** (`html.rs`). `AiOptions { providers, custom_providers }` adds
+   the second script (allowed by hash), `connect-src` limited to the enabled provider
+   origins, and `body[data-mx-ai]`. Rust still has no network or LLM code.
+2. [x] **API key handling.** Settings dialog (gear button): provider, model, endpoint for
+   custom providers, key. Stored in `localStorage` (`mathia-ai`) only, never written into
+   the file, sent only in request headers; "Forget key" / "Forget all". Providers:
+   Anthropic, OpenAI, Gemini, and any OpenAI-compatible endpoint (key optional for local
+   ones), all called directly from the browser with streaming.
+3. [x] **Ask about this block.** Per-block panel; first turn sends the block text (LaTeX
+   restored) plus, optionally, the neighbouring blocks and the statement a proof proves;
+   the streamed answer is rendered by a DOM-only Markdown + KaTeX renderer (no `innerHTML`
+   anywhere); conversation kept per block in `sessionStorage`.
+4. [x] **Explanatory SVG.** Per-block "Illustrate". The returned SVG goes through
+   `sanitizeSvg` (element and attribute allowlists, only `#fragment` references) and is
+   shown through `<img src="data:…">`, so it cannot run script or load anything even if the
+   sanitiser missed something. Cached in `localStorage` per block and block-text hash;
+   cached entries are sanitised again on load.
+5. [x] **Offline behaviour.** `html.mx-ai-offline` hides the settings button and every AI
+   action; an open panel says it is offline and disables input. Cached figures stay visible.
+6. [x] **Tests.** `tests/js` (`npm test`): `playwright-core` driving the system Chrome
+   against documents compiled by the real CLI, all provider traffic mocked, every test
+   asserting no CSP violations and no un-mocked requests. Not yet run in CI (Phase 3.5).
+
+Not done / known limits:
+
+- No request has been made against a real provider from these tests; the wire formats
+  follow the spec and are only checked against mocks. Default model names are free text in
+  the dialog and will age.
+- Figures cannot contain rendered LaTeX (labels are plain text).
+- One conversation per block; nothing is shared between blocks or exported.
 
 ## Phase 3 — Tauri v2 desktop app (`src-tauri`)
 
@@ -149,5 +169,5 @@ semantic block (`[data-block-actions]`).
 ## Open questions
 
 - One HTML per Markdown file, or multi-file books with a shared TOC?
-- Which providers must the in-page AI features support first, and may requests go direct
-  from the browser (CORS) or do they need the desktop app as a relay?
+- In-page AI requests go direct from the browser today. Should the desktop app offer a
+  relay (keys in the OS keychain instead of `localStorage`, providers without CORS)?
