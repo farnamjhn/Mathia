@@ -45,8 +45,7 @@
 
   var DEFAULT_MODELS = {
     anthropic: "claude-sonnet-5-5",
-    openai: "gpt-5-mini",
-    gemini: "gemini-3.8-flash"
+    openai: "gpt-5-mini"
   };
 
   var BUILTIN_ORIGINS = {
@@ -972,6 +971,10 @@
       dialogTitle: "AI Settings",
       providerLabel: "Provider",
       modelLabel: "Model",
+      refreshModels: "Refresh models",
+      loadingModels: "Loading models…",
+      modelsAvailable: "models available from Google.",
+      modelsLoadFailed: "Could not load models. Check the API key and try again.",
       endpointLabel: "API Endpoint URL",
       endpointPlaceholder: "https://host/v1 (an OpenAI-compatible base URL)",
       modelPlaceholder: "model name as the server lists it",
@@ -1012,6 +1015,10 @@
       dialogTitle: "تنظیمات هوش مصنوعی",
       providerLabel: "ارائه‌دهنده",
       modelLabel: "مدل",
+      refreshModels: "نوسازی فهرست مدل‌ها",
+      loadingModels: "در حال دریافت مدل‌ها…",
+      modelsAvailable: "مدل از Google در دسترس است.",
+      modelsLoadFailed: "دریافت مدل‌ها ممکن نشد. کلید API را بررسی کنید و دوباره تلاش کنید.",
       endpointLabel: "نشانی وب‌سرویس",
       endpointPlaceholder: "https://host/v1 (نشانی پایه سازگار با OpenAI)",
       modelPlaceholder: "نام مدل، مطابق فهرست سرور",
@@ -1092,7 +1099,7 @@
     opt.value = pSlug;
     if (pSlug === "anthropic") opt.textContent = "Anthropic (Claude)";
     else if (pSlug === "openai") opt.textContent = "OpenAI";
-    else if (pSlug === "gemini") opt.textContent = "Google Gemini";
+    else if (pSlug === "gemini") opt.textContent = "Google";
     else if (pSlug === "openai-compatible") opt.textContent = t.compatibleName;
     else opt.textContent = pSlug;
     providerSelect.appendChild(opt);
@@ -1113,6 +1120,20 @@
   modelInput.autocomplete = "off";
   modelField.appendChild(modelLbl);
   modelField.appendChild(modelInput);
+  var googleModelList = document.createElement("datalist");
+  googleModelList.id = "mx-ai-google-models";
+  modelField.appendChild(googleModelList);
+  var refreshModelsBtn = document.createElement("button");
+  refreshModelsBtn.id = "mx-ai-refresh-models";
+  refreshModelsBtn.type = "button";
+  refreshModelsBtn.className = "mx-ai-btn";
+  refreshModelsBtn.textContent = t.refreshModels;
+  modelField.appendChild(refreshModelsBtn);
+  var modelStatus = document.createElement("p");
+  modelStatus.id = "mx-ai-model-status";
+  modelStatus.className = "mx-ai-notice";
+  modelStatus.hidden = true;
+  modelField.appendChild(modelStatus);
   dialogBody.appendChild(modelField);
 
   // Endpoint URL field (for custom providers)
@@ -1194,10 +1215,81 @@
     }
   }
 
+  var googleModels = [];
+  var googleModelsKey = "";
+
+  function showModelStatus(message) {
+    modelStatus.textContent = message || "";
+    modelStatus.hidden = !message;
+  }
+
+  function renderGoogleModels() {
+    googleModelList.textContent = "";
+    for (var i = 0; i < googleModels.length; i++) {
+      var model = googleModels[i];
+      var option = document.createElement("option");
+      option.value = model.name;
+      option.label = model.displayName;
+      option.textContent = model.displayName;
+      googleModelList.appendChild(option);
+    }
+  }
+
+  async function refreshGoogleModels() {
+    var key = keyInput.value.trim() || ((readStorage().keys || {}).gemini || "").trim();
+    if (!key) {
+      showModelStatus(t.missingKeyNotice);
+      return;
+    }
+
+    refreshModelsBtn.disabled = true;
+    refreshModelsBtn.textContent = t.loadingModels;
+    showModelStatus("");
+    try {
+      var models = [];
+      var pageToken = "";
+      do {
+        var url = new URL("https://generativelanguage.googleapis.com/v1beta/models");
+        url.searchParams.set("pageSize", "1000");
+        if (pageToken) url.searchParams.set("pageToken", pageToken);
+        var response = await fetch(url.toString(), {
+          headers: { "x-goog-api-key": key }
+        });
+        if (!response.ok) throw new Error("models request failed");
+        var payload = await response.json();
+        var listed = Array.isArray(payload.models) ? payload.models : [];
+        for (var i = 0; i < listed.length; i++) {
+          var item = listed[i] || {};
+          if (!Array.isArray(item.supportedGenerationMethods) || item.supportedGenerationMethods.indexOf("generateContent") === -1) continue;
+          var name = String(item.name || "").replace(/^models\//, "");
+          if (name) models.push({ name: name, displayName: String(item.displayName || name) });
+        }
+        pageToken = typeof payload.nextPageToken === "string" ? payload.nextPageToken : "";
+      } while (pageToken);
+
+      models.sort(function (a, b) { return a.name.localeCompare(b.name); });
+      googleModels = models;
+      googleModelsKey = key;
+      renderGoogleModels();
+      if (!modelInput.value.trim() && googleModels.length) modelInput.value = googleModels[0].name;
+      showModelStatus(googleModels.length + " " + t.modelsAvailable);
+    } catch (error) {
+      showModelStatus(t.modelsLoadFailed);
+    } finally {
+      refreshModelsBtn.disabled = false;
+      refreshModelsBtn.textContent = t.refreshModels;
+    }
+  }
+
   function syncDialogFields() {
     var p = providerSelect.value;
     var s = readStorage();
     modelInput.value = (s.models && s.models[p]) || DEFAULT_MODELS[p] || "";
+    var isGoogle = p === "gemini";
+    modelInput.toggleAttribute("list", isGoogle);
+    if (isGoogle) modelInput.setAttribute("list", googleModelList.id);
+    refreshModelsBtn.hidden = !isGoogle;
+    if (!isGoogle) showModelStatus("");
     if (!isBuiltin(p)) {
       endpointField.style.display = "";
       endpointInput.value = (s.endpoints && s.endpoints[p]) || defaultEndpoints[p] || "";
@@ -1213,6 +1305,9 @@
     }
     keyInput.value = (s.keys && s.keys[p]) || "";
     updateDialogNotice();
+    if (isGoogle && keyInput.value.trim() && googleModelsKey !== keyInput.value.trim()) {
+      refreshGoogleModels();
+    }
   }
 
   function openSettings() {
@@ -1239,6 +1334,7 @@
 
   providerSelect.addEventListener("change", syncDialogFields);
   endpointInput.addEventListener("input", updateDialogNotice);
+  refreshModelsBtn.addEventListener("click", refreshGoogleModels);
 
   saveBtn.addEventListener("click", function () {
     var p = providerSelect.value;

@@ -231,7 +231,8 @@ describe("internals", () => {
 describe("settings", () => {
   test("key round-trip through the dialog, and forgetting it", async () => {
     const s = await open(pages.en);
-    const { page } = s;
+    const { page, context } = s;
+    await mock(context, GEMINI, JSON.stringify({ models: [] }));
     assert.deepEqual(await page.evaluate(() => window.Mathia.ai.providers), ["anthropic", "openai", "gemini", "openai-compatible"]);
     assert.deepEqual(await page.evaluate(() => window.Mathia.ai.settings()), {
       provider: "anthropic",
@@ -242,7 +243,8 @@ describe("settings", () => {
 
     await page.click("#mx-ai-toggle");
     await page.selectOption("#mx-ai-provider-select", "gemini");
-    assert.equal(await page.inputValue("#mx-ai-model-input"), "gemini-3.8-flash");
+    assert.equal(await page.inputValue("#mx-ai-model-input"), "");
+    assert.equal(await page.locator("#mx-ai-provider-select option:checked").textContent(), "Google");
     assert.ok(!(await page.isVisible("#mx-ai-endpoint-field")), "endpoint is for custom providers only");
     assert.match(await page.textContent("#mx-ai-notice"), /generativelanguage\.googleapis\.com/);
     assert.equal(await page.getAttribute("#mx-ai-key-input", "type"), "password");
@@ -279,6 +281,30 @@ describe("settings", () => {
       window.Mathia.ai.forgetKey();
     });
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem("mathia-ai")).keys), {});
+    await finish(s);
+  });
+
+  test("Google models are loaded from the API", async () => {
+    const s = await open(pages.en);
+    const { page, context } = s;
+    const requests = await mock(context, GEMINI, JSON.stringify({
+      models: [
+        { name: "models/gemini-available", displayName: "Gemini Available", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/embedding-only", supportedGenerationMethods: ["embedContent"] },
+      ],
+    }));
+
+    await page.click("#mx-ai-toggle");
+    await page.selectOption("#mx-ai-provider-select", "gemini");
+    await page.fill("#mx-ai-key-input", "google-key");
+    await page.click("#mx-ai-refresh-models");
+    await page.waitForFunction(() => document.querySelectorAll("#mx-ai-google-models option").length === 1);
+
+    assert.equal(await page.inputValue("#mx-ai-model-input"), "gemini-available");
+    assert.deepEqual(await page.locator("#mx-ai-google-models option").evaluateAll((options) => options.map((o) => o.value)), ["gemini-available"]);
+    assert.equal(requests.length, 1);
+    assert.match(requests[0].url, /\/v1beta\/models\?pageSize=1000/);
+    assert.equal(requests[0].headers["x-goog-api-key"], "google-key");
     await finish(s);
   });
 });

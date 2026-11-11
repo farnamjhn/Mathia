@@ -122,7 +122,7 @@ a short notice ("stored only in this browser; sent only to <origin>"), buttons S
 Forget key, Forget all, Close.
 
 Default models: anthropic `claude-sonnet-5-5`, openai `gpt-5-mini`, gemini
-`gemini-3.8-flash`. Model input is free text.
+the live Google Models API. Model input remains free text for custom or legacy IDs.
 
 **Providers** (`buildRequest(provider, model, key, {system, messages})` returns
 `{url, init}` for `fetch`; messages are `[{role: "user"|"assistant", content: string}]`):
