@@ -2,6 +2,7 @@
 <html lang="{{ lang }}" dir="{{ dir }}">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{{ csp|safe }}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="Mathia">
 <title>{{ title }}</title>
@@ -9,12 +10,13 @@
 {{ math_head|safe }}
 </head>
 <body>
+<button id="mx-theme-toggle" class="mx-theme-toggle" type="button" aria-label="{{ theme_label }}" title="{{ theme_label }}" hidden>◐</button>
 <button id="mx-toc-toggle" class="mx-toc-toggle" type="button" aria-controls="mx-toc" aria-expanded="true" aria-label="{{ toc_label }}">☰</button>
 <nav id="mx-toc" class="mx-toc" aria-label="{{ toc_label }}">
 <p class="mx-toc-title">{{ toc_label }}</p>
 <ol class="mx-toc-list">
 {%- for entry in toc %}
-<li class="mx-toc-item mx-toc-{{ entry.kind }}" style="--mx-depth: {{ entry.depth }}"><a href="#{{ entry.id }}" data-toc-target="{{ entry.id }}">{{ entry.title }}</a></li>
+<li class="mx-toc-item mx-toc-{{ entry.kind }}" style="--mx-depth: {{ entry.depth }}" data-depth="{{ entry.depth }}"><a href="#{{ entry.id }}" data-toc-target="{{ entry.id }}">{{ entry.title }}</a></li>
 {%- endfor %}
 </ol>
 </nav>
@@ -23,9 +25,9 @@
 {%- if block.heading_level > 0 %}
 <h{{ block.heading_level }} id="{{ block.id }}" class="mx-heading" data-block-id="{{ block.id }}" data-block-type="{{ block.kind }}" dir="{{ block.dir }}">{{ block.html|safe }}</h{{ block.heading_level }}>
 {%- else %}
-<section id="{{ block.id }}" class="mx-block mx-{{ block.kind }}" data-block-id="{{ block.id }}" data-block-type="{{ block.kind }}" dir="{{ block.dir }}"{% if block.semantic %} aria-label="{{ block.title }}"{% endif %}>
+<section id="{{ block.id }}" class="mx-block mx-{{ block.kind }}" data-block-id="{{ block.id }}" data-block-type="{{ block.kind }}" dir="{{ block.dir }}"{% if !block.proves.is_empty() %} data-proves="{{ block.proves }}"{% endif %}{% if block.semantic %} aria-label="{{ block.title }}"{% endif %}>
 {%- if block.semantic %}
-<header class="mx-block-head"><span class="mx-badge">{{ block.label }}</span><span class="mx-actions" data-block-actions="{{ block.id }}"></span></header>
+<header class="mx-block-head"><span class="mx-badge">{{ block.label }}</span>{% if !block.proves.is_empty() %}<a class="mx-proves" href="#{{ block.proves }}">{{ block.proves_title }}</a>{% endif %}<span class="mx-actions" data-block-actions="{{ block.id }}"></span></header>
 {%- endif %}
 <div class="mx-block-body">
 {{ block.html|safe }}</div>

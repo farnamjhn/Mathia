@@ -6,6 +6,7 @@ use askama::Template;
 
 use crate::error::{Error, Result};
 use crate::model::{BlockType, Document};
+use crate::sha256::sha256;
 
 const STYLE_CSS: &str = include_str!("../assets/style.css");
 const RUNTIME_JS: &str = include_str!("../assets/runtime.js");
@@ -34,11 +35,41 @@ pub enum MathAssets {
     None,
 }
 
+/// A text font embedded in the compiled file as a `data:` URI, so Persian
+/// renders the same on machines that do not have the font installed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedFont {
+    /// CSS family name, e.g. `Vazirmatn`. Put first in the document's font stack.
+    pub family: String,
+    /// CSS `font-weight` descriptor: `400`, or a range such as `100 900` for
+    /// a variable font.
+    pub weight: String,
+    pub woff2: Vec<u8>,
+}
+
+impl EmbeddedFont {
+    /// Reads a WOFF2 file (ideally a subset: every byte ends up in the output).
+    pub fn from_file(path: impl AsRef<Path>, family: &str, weight: &str) -> Result<Self> {
+        let path = path.as_ref();
+        let woff2 = std::fs::read(path).map_err(|source| Error::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        Ok(EmbeddedFont {
+            family: family.to_string(),
+            weight: weight.to_string(),
+            woff2,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct HtmlOptions {
     pub math: MathAssets,
     /// Overrides the title taken from the document's first heading.
     pub title: Option<String>,
+    /// Text fonts to embed; the first family leads the font stack.
+    pub fonts: Vec<EmbeddedFont>,
 }
 
 struct BlockView<'a> {
@@ -50,6 +81,9 @@ struct BlockView<'a> {
     /// 0 for anything that is not a structural heading.
     heading_level: u8,
     semantic: bool,
+    /// Id and title of the block this one proves or answers; empty if none.
+    proves: &'a str,
+    proves_title: &'a str,
     html: &'a str,
 }
 
@@ -67,8 +101,10 @@ struct DocumentTemplate<'a> {
     lang: &'static str,
     dir: &'static str,
     toc_label: &'static str,
-    css: &'a str,
-    runtime_js: &'a str,
+    theme_label: &'static str,
+    csp: String,
+    css: String,
+    runtime_js: String,
     math_head: String,
     toc: Vec<TocView<'a>>,
     blocks: Vec<BlockView<'a>>,
@@ -82,14 +118,34 @@ pub fn render(doc: &Document, options: &HtmlOptions) -> Result<String> {
         .or(doc.title.as_deref())
         .unwrap_or(if rtl { "جزوه" } else { "Study guide" });
 
+    let runtime_js = RUNTIME_JS.replace("</script", "<\\/script");
+    let katex = match &options.math {
+        MathAssets::Inline(katex) => Some(KatexAssets {
+            // Keep embedded sources from closing their own element.
+            css: katex.css.replace("</style", "<\\/style"),
+            js: katex.js.replace("</script", "<\\/script"),
+        }),
+        _ => None,
+    };
+    let mut inline_scripts = vec![runtime_js.as_str()];
+    inline_scripts.extend(katex.as_ref().map(|k| k.js.as_str()));
+    let mut css = font_css(&options.fonts);
+    css.push_str(STYLE_CSS);
+
     let template = DocumentTemplate {
         title,
         lang: if rtl { "fa" } else { "en" },
         dir: doc.direction.as_str(),
         toc_label: if rtl { "فهرست" } else { "Contents" },
-        css: STYLE_CSS,
-        runtime_js: RUNTIME_JS,
-        math_head: math_head(&options.math),
+        theme_label: if rtl {
+            "تغییر پوسته"
+        } else {
+            "Switch theme"
+        },
+        csp: content_security_policy(&inline_scripts, &options.math),
+        css: css.replace("</style", "<\\/style"),
+        math_head: math_head(&options.math, katex.as_ref()),
+        runtime_js,
         toc: doc
             .toc
             .iter()
@@ -115,6 +171,12 @@ pub fn render(doc: &Document, options: &HtmlOptions) -> Result<String> {
                     0
                 },
                 semantic: b.kind.is_semantic(),
+                proves: b.proves.as_deref().unwrap_or(""),
+                proves_title: b
+                    .proves
+                    .as_deref()
+                    .and_then(|id| doc.blocks.iter().find(|t| t.id == id))
+                    .map_or("", |t| t.title.as_str()),
                 html: &b.html,
             })
             .collect(),
@@ -122,26 +184,81 @@ pub fn render(doc: &Document, options: &HtmlOptions) -> Result<String> {
     Ok(template.render()?)
 }
 
-fn math_head(math: &MathAssets) -> String {
-    match math {
-        MathAssets::Inline(katex) => format!(
+fn math_head(math: &MathAssets, inline: Option<&KatexAssets>) -> String {
+    match (math, inline) {
+        (MathAssets::Inline(_), Some(katex)) => format!(
             "<style id=\"mx-katex-css\">{}</style>\n<script id=\"mx-katex-js\">{}</script>",
-            // Keep embedded sources from closing their own element.
-            katex.css.replace("</style", "<\\/style"),
-            katex.js.replace("</script", "<\\/script"),
+            katex.css, katex.js,
         ),
-        MathAssets::Cdn { version } => {
+        (MathAssets::Cdn { version }, _) => {
             let version: String = version
                 .chars()
                 .filter(|c| c.is_ascii_alphanumeric() || *c == '.')
                 .collect();
             format!(
-                "<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/katex@{version}/dist/katex.min.css\">\n\
-                 <script src=\"https://cdn.jsdelivr.net/npm/katex@{version}/dist/katex.min.js\"></script>"
+                "<link rel=\"stylesheet\" href=\"{KATEX_CDN}/npm/katex@{version}/dist/katex.min.css\">\n\
+                 <script src=\"{KATEX_CDN}/npm/katex@{version}/dist/katex.min.js\"></script>"
             )
         }
-        MathAssets::None => String::new(),
+        _ => String::new(),
     }
+}
+
+const KATEX_CDN: &str = "https://cdn.jsdelivr.net";
+
+/// The policy of the compiled file: nothing is loaded or executed except the
+/// scripts Mathia inlined itself (allowed by hash, so an injected `<script>`,
+/// event-handler attribute or `javascript:` URL cannot run), inline styles
+/// (KaTeX needs them), embedded fonts, and images.
+fn content_security_policy(inline_scripts: &[&str], math: &MathAssets) -> String {
+    let cdn = match math {
+        MathAssets::Cdn { .. } => format!(" {KATEX_CDN}"),
+        _ => String::new(),
+    };
+    let hashes: String = inline_scripts
+        .iter()
+        .map(|script| format!(" 'sha256-{}'", base64(&sha256(script.as_bytes()))))
+        .collect();
+    format!(
+        "default-src 'none'; script-src{hashes}{cdn}; style-src 'unsafe-inline'{cdn}; \
+         font-src data:{cdn}; img-src 'self' data: blob: https: http: file:; \
+         base-uri 'none'; form-action 'none'"
+    )
+}
+
+/// `@font-face` rules for the embedded fonts, plus the font stack led by them.
+fn font_css(fonts: &[EmbeddedFont]) -> String {
+    let clean = |text: &str, extra: &[char]| -> String {
+        text.chars()
+            .filter(|c| c.is_alphanumeric() || extra.contains(c))
+            .collect()
+    };
+    let mut css = String::new();
+    let mut families: Vec<String> = Vec::new();
+    for font in fonts {
+        let family = clean(&font.family, &[' ', '-', '_']);
+        if family.trim().is_empty() || font.woff2.is_empty() {
+            continue;
+        }
+        let weight = clean(&font.weight, &[' ']);
+        let weight = if weight.trim().is_empty() {
+            "400"
+        } else {
+            weight.trim()
+        };
+        css.push_str(&format!(
+            "@font-face{{font-family:\"{family}\";src:url(data:font/woff2;base64,{}) format(\"woff2\");font-weight:{weight};font-display:swap}}\n",
+            base64(&font.woff2)
+        ));
+        if !families.contains(&family) {
+            families.push(family);
+        }
+    }
+    if !families.is_empty() {
+        let stack: String = families.iter().map(|f| format!("\"{f}\", ")).collect();
+        css.push_str(&format!(":root{{--mx-font-embedded:{stack}}}\n"));
+    }
+    css
 }
 
 impl KatexAssets {
@@ -235,7 +352,14 @@ mod tests {
 
     fn render_sample(math: MathAssets) -> String {
         let doc = analyze(SAMPLE, &ScoringConfig::default());
-        render(&doc, &HtmlOptions { math, title: None }).unwrap()
+        render(
+            &doc,
+            &HtmlOptions {
+                math,
+                ..Default::default()
+            },
+        )
+        .unwrap()
     }
 
     #[test]
@@ -289,6 +413,86 @@ mod tests {
     }
 
     #[test]
+    fn policy_allows_exactly_the_inlined_scripts() {
+        let html = render_sample(MathAssets::Inline(KatexAssets {
+            css: ".katex{}".into(),
+            js: "window.katex={render:function(){}};".into(),
+        }));
+        let policy_at = html.find("Content-Security-Policy").expect("CSP meta tag");
+        assert!(
+            policy_at < html.find("<script").unwrap(),
+            "policy precedes every script"
+        );
+        assert!(policy_at < html.find("<style").unwrap());
+
+        // Every inline script in the file is listed by hash, and nothing else is.
+        let mut expected = 0;
+        let mut rest = html.as_str();
+        while let Some(open) = rest.find("<script") {
+            let body_start = open + rest[open..].find('>').unwrap() + 1;
+            let body_end = body_start + rest[body_start..].find("</script>").unwrap();
+            let hash = base64(&sha256(&rest.as_bytes()[body_start..body_end]));
+            assert!(html.contains(&format!("'sha256-{hash}'")), "missing hash");
+            expected += 1;
+            rest = &rest[body_end..];
+        }
+        assert_eq!(expected, 2);
+        assert_eq!(html.matches("'sha256-").count(), 2);
+        assert!(!html.contains("'unsafe-eval'"));
+        assert!(html.contains("script-src 'sha256-"));
+        assert!(html.contains("base-uri 'none'"));
+
+        let cdn = render_sample(MathAssets::Cdn {
+            version: "0.16.22".into(),
+        });
+        assert!(cdn.contains("https://cdn.jsdelivr.net; style-src"));
+    }
+
+    #[test]
+    fn raw_html_in_the_source_cannot_inject_markup() {
+        let doc = analyze(
+            "# T\n\n<script>alert(1)</script>\n\n**Theorem 1.** <img src=x onerror=alert(2)> [x](javascript:alert(3))\n",
+            &ScoringConfig::default(),
+        );
+        let html = render(&doc, &HtmlOptions::default()).unwrap();
+        let body = &html[html.find("<main").unwrap()..html.find("</main>").unwrap()];
+        assert!(!body.contains("<script") && !body.contains("<img"));
+        assert!(!body.contains("javascript:"));
+        assert!(body.contains("&lt;script&gt;alert(1)"));
+    }
+
+    #[test]
+    fn proofs_point_at_their_statement() {
+        let html = render_sample(MathAssets::None);
+        assert!(html.contains(
+            r#"data-block-id="block-proof-1" data-block-type="proof" dir="rtl" data-proves="block-theorem-1""#
+        ));
+        assert!(
+            html.contains(r##"<a class="mx-proves" href="#block-theorem-1">قضیه ۱ (رول)</a>"##)
+        );
+        assert_eq!(html.matches("data-proves=").count(), 1);
+    }
+
+    #[test]
+    fn embedded_fonts_lead_the_stack() {
+        let doc = analyze(SAMPLE, &ScoringConfig::default());
+        let options = HtmlOptions {
+            fonts: vec![EmbeddedFont {
+                family: "Vazirmatn\";}x{".into(),
+                weight: "100 900".into(),
+                woff2: b"foo".to_vec(),
+            }],
+            ..Default::default()
+        };
+        let html = render(&doc, &options).unwrap();
+        assert!(html.contains(
+            "@font-face{font-family:\"Vazirmatnx\";src:url(data:font/woff2;base64,Zm9v) format(\"woff2\");font-weight:100 900;font-display:swap}"
+        ));
+        assert!(html.contains(":root{--mx-font-embedded:\"Vazirmatnx\", }"));
+        assert!(!render_sample(MathAssets::None).contains("--mx-font-embedded:\""));
+    }
+
+    #[test]
     fn fonts_are_inlined_as_woff2_only() {
         let css = "@font-face{font-family:KaTeX_Main;src:url(fonts/A.woff2) format(\"woff2\"),\
                    url(fonts/A.woff) format(\"woff\"),url(fonts/A.ttf) format(\"truetype\");font-weight:400}.k{src:none}";
@@ -328,7 +532,7 @@ mod tests {
             &doc,
             &HtmlOptions {
                 math: MathAssets::Inline(fake_assets),
-                title: None,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -341,6 +545,7 @@ mod tests {
             !html.contains("https://"),
             "Inline build should contain no https:// URLs"
         );
+        assert!(html.contains("default-src 'none'"));
         assert!(html.contains("mx-katex-css"));
         assert!(html.contains("mx-katex-js"));
     }
@@ -357,7 +562,7 @@ mod tests {
                 &doc,
                 &HtmlOptions {
                     math: MathAssets::Inline(assets),
-                    title: None,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -391,7 +596,7 @@ mod tests {
             &doc,
             &HtmlOptions {
                 math: MathAssets::bundled(),
-                title: None,
+                ..Default::default()
             },
         )
         .unwrap();

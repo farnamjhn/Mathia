@@ -42,6 +42,64 @@
     });
   }
 
+  /* Sections of the sidebar fold: a heading hides the entries nested under it. */
+  function setupTocFolding() {
+    var items = Array.prototype.slice.call(document.querySelectorAll(".mx-toc-item"));
+    function depth(item) { return Number(item.dataset.depth) || 1; }
+    function refresh() {
+      var folded = []; /* depths of the collapsed headings we are inside */
+      items.forEach(function (item) {
+        var d = depth(item);
+        while (folded.length && folded[folded.length - 1] >= d) folded.pop();
+        item.hidden = folded.length > 0;
+        if (item.dataset.mxFolded === "1") folded.push(d);
+      });
+    }
+    items.forEach(function (item, index) {
+      var next = items[index + 1];
+      if (!item.classList.contains("mx-toc-heading") || !next || depth(next) <= depth(item)) return;
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "mx-toc-fold";
+      button.textContent = "▾";
+      button.setAttribute("aria-expanded", "true");
+      button.setAttribute("aria-label", item.textContent.trim());
+      button.addEventListener("click", function () {
+        var fold = item.dataset.mxFolded !== "1";
+        item.dataset.mxFolded = fold ? "1" : "0";
+        button.setAttribute("aria-expanded", String(!fold));
+        refresh();
+      });
+      item.insertBefore(button, item.firstChild);
+    });
+  }
+
+  /* Light / dark switch. The choice is remembered per browser; without one the
+     page follows the system setting. */
+  function setupTheme() {
+    var root = document.documentElement;
+    var toggle = document.getElementById("mx-theme-toggle");
+    var KEY = "mathia-theme";
+    function stored() {
+      try { return window.localStorage.getItem(KEY); } catch (err) { return null; }
+    }
+    function apply(theme) {
+      if (theme === "light" || theme === "dark") root.dataset.mxTheme = theme;
+      else delete root.dataset.mxTheme;
+    }
+    apply(stored());
+    if (!toggle) return;
+    toggle.hidden = false;
+    toggle.addEventListener("click", function () {
+      var dark = root.dataset.mxTheme
+        ? root.dataset.mxTheme === "dark"
+        : window.matchMedia("(prefers-color-scheme: dark)").matches;
+      var next = dark ? "light" : "dark";
+      apply(next);
+      try { window.localStorage.setItem(KEY, next); } catch (err) { /* private mode */ }
+    });
+  }
+
   function setupScrollSpy() {
     if (!("IntersectionObserver" in window)) return;
     var links = {};
@@ -71,6 +129,8 @@
     return {
       id: el.dataset.blockId,
       type: el.dataset.blockType,
+      /* Id of the statement a proof proves / the exercise a solution answers. */
+      proves: el.dataset.proves || null,
       element: el,
       /* LaTeX sources are restored so consumers get the text as authored. */
       get text() {
@@ -117,8 +177,10 @@
   };
 
   function start() {
+    setupTheme();
     renderMath();
     setupSidebar();
+    setupTocFolding();
     setupScrollSpy();
   }
   if (document.readyState === "loading") {
