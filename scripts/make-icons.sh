@@ -33,31 +33,43 @@ fs.writeFileSync(out, svg.render().asPng());
 EOF
 render() { node "$tmp/render.mjs" "$icons/source/mathia-$1.svg" "$2" "$3"; }
 
-# Bundle icons from the light master.
+# The artwork has fine grain (chalk, wool) that turns to speckle when the SVG
+# is rasterised small, so small sizes are scaled down from the 1024 render
+# where sips is available (macOS).
 render light "$tmp/light-1024.png" 1024
+render dark "$tmp/dark-1024.png" 1024
+small() {
+  if command -v sips >/dev/null; then
+    sips -z "$3" "$3" "$tmp/$1-1024.png" --out "$2" >/dev/null
+  else
+    render "$1" "$2" "$3"
+  fi
+}
+
+# Bundle icons from the light master.
 npx --yes @tauri-apps/cli icon "$tmp/light-1024.png" -o "$tmp/bundle" >/dev/null
 for f in 32x32.png 128x128.png 128x128@2x.png icon.png icon.ico icon.icns; do
   cp "$tmp/bundle/$f" "$icons/$f"
 done
 
 # Runtime Dock icons.
-render light "$icons/dock-light.png" 1024
-render dark "$icons/dock-dark.png" 1024
+cp "$tmp/light-1024.png" "$icons/dock-light.png"
+cp "$tmp/dark-1024.png" "$icons/dock-dark.png"
 
 # Dark .icns.
 if command -v iconutil >/dev/null; then
   set_dir="$tmp/dark.iconset"
   mkdir -p "$set_dir"
   for s in 16 32 128 256 512; do
-    render dark "$set_dir/icon_${s}x${s}.png" "$s"
-    render dark "$set_dir/icon_${s}x${s}@2x.png" "$((s * 2))"
+    small dark "$set_dir/icon_${s}x${s}.png" "$s"
+    small dark "$set_dir/icon_${s}x${s}@2x.png" "$((s * 2))"
   done
   iconutil -c icns "$set_dir" -o "$icons/icon-dark.icns"
 fi
 
 # In-app logo (also the favicon).
 mkdir -p "$root/ui/assets"
-render light "$root/ui/assets/mathia-light.png" 128
-render dark "$root/ui/assets/mathia-dark.png" 128
+small light "$root/ui/assets/mathia-light.png" 128
+small dark "$root/ui/assets/mathia-dark.png" 128
 
 echo "Icons written to $icons and $root/ui/assets"

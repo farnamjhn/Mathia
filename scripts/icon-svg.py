@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Writes the Mathia app icon as two SVGs, light and dark, on Apple's macOS
 icon grid: a 1024×1024 transparent canvas with the rounded-square body at
-100…924 (824 pt) and a soft drop shadow beneath it.
+100…924 (824 pt, corner radius 185) and a soft drop shadow beneath it.
 
-The artwork (chalkboard with formulas, suit, shirt and tie) is drawn in a
-680-unit box and scaled onto that grid. Only the palette differs between the
-two variants: the dark one is a slate chalkboard, the light one a pale
-whiteboard with graphite formulas.
+The picture is black on black: a headless black suit with a black tie, and
+behind it one slanted slab M as wide as the icon, its notch where the head would be.
+It is lit from above: every overlapping piece (collar on shirt, tie on shirt,
+lapel on jacket) casts a small blurred shadow, drawn as its own shape so that
+no large area passes through a filter. The two variants differ only in how
+bright the M is: paper white for the light one, dimmed for the dark one.
 
 Usage: scripts/icon-svg.py OUT_DIR   (writes mathia-light.svg, mathia-dark.svg)
 Then scripts/make-icons.sh renders and bundles them.
@@ -17,163 +19,218 @@ from pathlib import Path
 
 PALETTES = {
     "dark": {
-        "board": ("#2c3034", "#1b1e21", "#0f1113"),
-        "smudge": ("#ffffff", "0.03", "0.025"),
-        "chalk": "#a3a8af",
-        "chalk_opacity": "0.78",
-        "suit": ("#1e2024", "#0c0d0f", "#030304"),
-        "suit_stroke": "#2a2d32",
-        "shoulder": "#585d66",
-        "suit_shadow": "0.65",
-        "vignette": ("#000000", "0.55"),
-        "bezel": ("#3c4046", "#1c1e22"),
-        "drop": "0.45",
+        "letter": ("#a9adb4", "#5f636a"),
+        "rim": ("#c3c8d2", "0.5"),
+        "edge": ("#4a4d53", "#000000"),
+        "drop": "0.5",
     },
     "light": {
-        "board": ("#fbfaf6", "#eeece6", "#dddad2"),
-        "smudge": ("#8a8f98", "0.05", "0.04"),
-        "chalk": "#4d535c",
-        "chalk_opacity": "0.82",
-        "suit": ("#3a3f48", "#1d2026", "#0d0e11"),
-        "suit_stroke": "#454a53",
-        "shoulder": "#7d838d",
-        "suit_shadow": "0.35",
-        "vignette": ("#000000", "0.08"),
-        "bezel": ("#d4d5d9", "#ffffff"),
-        "drop": "0.28",
+        "letter": ("#ffffff", "#d8d9d5"),
+        "rim": ("#dfe3ea", "0.62"),
+        "edge": ("#5d6066", "#000000"),
+        "drop": "0.42",
     },
 }
 
-# Apple grid: body 824 at offset 100. Artwork box is 680 at offset 60.
-SCALE = 824 / 680
-OFFSET = 100 - 60 * SCALE
-RADIUS = 153  # 153 × 1.2118 ≈ 185, Apple's corner radius for an 824 body
+GROUND = ("#232427", "#0c0c0d", "#000000")
+SUIT = ("#2c2d31", "#111113", "#040404")
+LAPEL = ("#3b3d43", "#0d0d0f")
+TIE = ("#050506", "#4a4d55", "#030303")
+
+BODY = 'x="100" y="100" width="824" height="824" rx="185" ry="185"'
+
+JACKET = (
+    "M 150,940 C 152,800 168,690 196,632 C 214,596 300,566 418,508 "
+    "C 450,499 574,499 606,508 C 724,566 810,596 828,632 C 856,690 872,800 874,940 Z"
+)
+SHIRT = "M 424,500 C 428,602 470,712 512,792 C 554,712 596,602 600,500 Z"
+LAPEL_PATH = (
+    "M 420,505 C 424,610 466,716 512,796 L 512,816 C 438,752 370,676 336,612 "
+    "L 388,592 L 360,548 C 378,530 400,515 420,505 Z"
+)
+WING = "M 431,470 C 420,508 428,562 462,606 L 501,528 C 470,520 444,500 431,470 Z"
+BLADE = "M 497,568 L 527,568 L 558,762 L 512,816 L 466,762 Z"
+KNOT = "M 487,521 C 500,514 524,514 537,521 L 528,573 C 518,579 506,579 496,573 Z"
+# A slab M: stems as wide as the diagonals, the notch just above the collar.
+LETTER = (
+    "M 190,960 L 190,190 L 352,190 L 512,398 L 672,190 L 834,190 L 834,960 "
+    "L 684,960 L 684,372 L 512,596 L 340,372 L 340,960 Z"
+)
+
+# The M leans 12° to the right, pivoting at the height of the collar so it
+# stays centred on the figure, and is drawn a little smaller so its leading
+# corner clears the rounded corner of the icon.
+SLANT = "translate(93.5 0) skewX(-12) translate(512 440) scale(0.92) translate(-512 -440)"
+
+MIRROR = 'transform="translate(1024 0) scale(-1 1)"'
 
 
 def svg(p: dict) -> str:
-    b0, b1, b2 = p["board"]
-    sm, sm1, sm2 = p["smudge"]
-    s0, s1, s2 = p["suit"]
-    v, vo = p["vignette"]
-    z0, z1 = p["bezel"]
-    c = p["chalk"]
+    b0, b1, b2 = GROUND
+    s0, s1, s2 = SUIT
+    l0, l1 = LAPEL
+    m0, m1 = p["letter"]
+    rim, rim_o = p["rim"]
+    e0, e1 = p["edge"]
+    t0, t1, t2 = TIE
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
-    <clipPath id="icon-clip"><rect x="60" y="60" width="680" height="680" rx="{RADIUS}" ry="{RADIUS}"/></clipPath>
-    <radialGradient id="board" cx="50%" cy="35%" r="65%" fx="50%" fy="35%">
-      <stop offset="0%" stop-color="{b0}"/><stop offset="60%" stop-color="{b1}"/><stop offset="100%" stop-color="{b2}"/>
+    <clipPath id="body"><rect {BODY}/></clipPath>
+    <clipPath id="jacket"><path d="{JACKET}"/></clipPath>
+    <clipPath id="shirt"><path d="{SHIRT}"/></clipPath>
+    <clipPath id="blade"><path d="{BLADE}"/></clipPath>
+
+    <radialGradient id="board" gradientUnits="userSpaceOnUse" cx="512" cy="330" r="640">
+      <stop offset="0" stop-color="{b0}"/><stop offset="0.55" stop-color="{b1}"/><stop offset="1" stop-color="{b2}"/>
     </radialGradient>
-    <linearGradient id="suit-grad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="{s0}"/><stop offset="35%" stop-color="{s1}"/><stop offset="100%" stop-color="{s2}"/>
+    <linearGradient id="suit" gradientUnits="userSpaceOnUse" x1="0" y1="500" x2="0" y2="924">
+      <stop offset="0" stop-color="{s0}"/><stop offset="0.42" stop-color="{s1}"/><stop offset="1" stop-color="{s2}"/>
     </linearGradient>
-    <linearGradient id="shirt-grad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#ffffff"/><stop offset="65%" stop-color="#dcdde0"/><stop offset="100%" stop-color="#9ea2a8"/>
+    <!-- satin: a band of sheen across each lapel -->
+    <linearGradient id="lapel" gradientUnits="userSpaceOnUse" x1="350" y1="540" x2="500" y2="660">
+      <stop offset="0" stop-color="{l1}"/><stop offset="0.38" stop-color="{l0}"/><stop offset="0.55" stop-color="#5b5e66"/><stop offset="0.72" stop-color="{l0}"/><stop offset="1" stop-color="{l1}"/>
     </linearGradient>
-    <linearGradient id="collar-left" x1="0%" y1="0%" x2="100%" y2="80%">
-      <stop offset="0%" stop-color="#d4d7dc"/><stop offset="40%" stop-color="#ffffff"/><stop offset="100%" stop-color="#b8bcc2"/>
+    <linearGradient id="letter" gradientUnits="userSpaceOnUse" x1="0" y1="190" x2="0" y2="640">
+      <stop offset="0" stop-color="{m0}"/><stop offset="1" stop-color="{m1}"/>
     </linearGradient>
-    <linearGradient id="collar-right" x1="100%" y1="0%" x2="0%" y2="80%">
-      <stop offset="0%" stop-color="#d4d7dc"/><stop offset="40%" stop-color="#ffffff"/><stop offset="100%" stop-color="#b8bcc2"/>
+    <linearGradient id="shirt-fill" gradientUnits="userSpaceOnUse" x1="0" y1="500" x2="0" y2="792">
+      <stop offset="0" stop-color="#e3e6ea"/><stop offset="0.3" stop-color="#ffffff"/><stop offset="1" stop-color="#c3c8d0"/>
     </linearGradient>
-    <linearGradient id="neck-hole" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#3d4047"/><stop offset="50%" stop-color="#1e2024"/><stop offset="100%" stop-color="#0b0c0e"/>
+    <linearGradient id="wing" gradientUnits="userSpaceOnUse" x1="424" y1="470" x2="500" y2="600">
+      <stop offset="0" stop-color="#dfe2e7"/><stop offset="0.45" stop-color="#ffffff"/><stop offset="1" stop-color="#cdd1d8"/>
     </linearGradient>
-    <linearGradient id="tie-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#32353b"/><stop offset="45%" stop-color="#16181b"/><stop offset="100%" stop-color="#08090b"/>
+    <linearGradient id="stand" gradientUnits="userSpaceOnUse" x1="0" y1="440" x2="0" y2="496">
+      <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#c6cad1"/>
     </linearGradient>
-    <filter id="drop-shadow" x="-15%" y="-15%" width="130%" height="130%">
-      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#000000" flood-opacity="{p["suit_shadow"]}"/>
-    </filter>
-    <filter id="chalk-effect" x="-10%" y="-10%" width="120%" height="120%">
-      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" result="noise"/>
-      <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.6" xChannelSelector="R" yChannelSelector="G"/>
-    </filter>
-    <filter id="icon-shadow" x="-10%" y="-10%" width="120%" height="125%">
-      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="{p["drop"]}"/>
+    <linearGradient id="hollow" gradientUnits="userSpaceOnUse" x1="0" y1="452" x2="0" y2="496">
+      <stop offset="0" stop-color="#b9bec6"/><stop offset="0.5" stop-color="#555a62"/><stop offset="1" stop-color="#16181b"/>
+    </linearGradient>
+    <linearGradient id="tie" gradientUnits="userSpaceOnUse" x1="466" y1="0" x2="558" y2="0">
+      <stop offset="0" stop-color="{t0}"/><stop offset="0.45" stop-color="{t1}"/><stop offset="1" stop-color="{t2}"/>
+    </linearGradient>
+    <linearGradient id="knot" gradientUnits="userSpaceOnUse" x1="487" y1="514" x2="537" y2="579">
+      <stop offset="0" stop-color="{t1}"/><stop offset="1" stop-color="{t0}"/>
+    </linearGradient>
+    <linearGradient id="gloss" gradientUnits="userSpaceOnUse" x1="0" y1="100" x2="0" y2="520">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="edge" gradientUnits="userSpaceOnUse" x1="0" y1="100" x2="0" y2="924">
+      <stop offset="0" stop-color="{e0}"/><stop offset="1" stop-color="{e1}"/>
+    </linearGradient>
+
+    <filter id="blur-4" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4"/></filter>
+    <filter id="blur-9" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9"/></filter>
+    <filter id="blur-22" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="22"/></filter>
+    <!-- Wool: fine light grain over the jacket. -->
+    <filter id="wool" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves="2" seed="3"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.13 -0.03"/>
     </filter>
   </defs>
 
-  <g transform="translate({OFFSET:.3f} {OFFSET:.3f}) scale({SCALE:.6f})">
-    <!-- Body with the macOS drop shadow -->
-    <rect x="60" y="60" width="680" height="680" rx="{RADIUS}" ry="{RADIUS}" fill="url(#board)" filter="url(#icon-shadow)"/>
+  <!-- The macOS drop shadow -->
+  <rect x="112" y="124" width="800" height="806" rx="180" fill="#000000" opacity="{p["drop"]}" filter="url(#blur-22)"/>
 
-    <g clip-path="url(#icon-clip)">
-      <ellipse cx="400" cy="240" rx="260" ry="120" fill="{sm}" opacity="{sm1}" filter="url(#chalk-effect)"/>
-      <ellipse cx="260" cy="180" rx="120" ry="70" fill="{sm}" opacity="{sm2}"/>
-      <ellipse cx="560" cy="240" rx="140" ry="90" fill="{sm}" opacity="{sm2}"/>
+  <g clip-path="url(#body)">
+    <rect {BODY} fill="url(#board)"/>
 
-      <!-- Formulas: e^(iπ) = -1, ∞, π, Av = λv, Gaussian integral, ℵ₀ -->
-      <g fill="{c}" stroke="{c}" font-family="'Chalkboard SE', 'Bradley Hand', 'Segoe Print', 'Comic Sans MS', cursive, serif" font-style="italic" opacity="{p["chalk_opacity"]}" filter="url(#chalk-effect)">
-        <g transform="translate(175, 195) rotate(-10)">
-          <text x="0" y="0" font-size="52" stroke-width="0.8">e</text>
-          <text x="28" y="-26" font-size="34" stroke-width="0.6">iπ</text>
-          <text x="68" y="-4" font-size="44" font-style="normal" stroke-width="0.6">=</text>
-          <text x="102" y="-6" font-size="44" font-style="normal" stroke-width="0.6">-1</text>
-        </g>
-        <g transform="translate(212, 268) rotate(-8)">
-          <path d="M 18,12 C 6,0 0,24 14,26 C 24,27 32,4 44,12 C 54,19 46,34 35,26 C 26,20 24,18 18,12 Z" fill="none" stroke-width="3.5" stroke-linecap="round"/>
-        </g>
-        <g transform="translate(278, 240) rotate(-12)">
-          <path d="M 4,2 Q 22,-2 40,0 M 14,1 L 10,32 M 30,1 C 29,16 28,28 34,31 C 38,32 41,28 42,25" fill="none" stroke-width="3.6" stroke-linecap="round"/>
-        </g>
-        <g transform="translate(368, 224) rotate(-14)">
-          <text x="0" y="0" font-size="50" stroke-width="0.7">Av</text>
-          <text x="64" y="-4" font-size="42" font-style="normal" stroke-width="0.6">=</text>
-          <text x="96" y="0" font-size="50" stroke-width="0.7">λv</text>
-        </g>
-        <g transform="translate(515, 165) rotate(3)">
-          <path d="M 32,2 C 23,-2 19,8 18,22 L 15,62 C 13,78 8,86 0,82" fill="none" stroke-width="3.5" stroke-linecap="round"/>
-          <path d="M 39,4 C 33,-2 30,10 37,11 C 42,12 46,0 52,4 C 57,8 53,15 47,11 C 43,8 42,7 39,4 Z" fill="none" stroke-width="2"/>
-          <line x1="19" y1="81" x2="29" y2="81" stroke-width="2.2" stroke-linecap="round"/>
-          <path d="M 38,77 C 32,71 29,83 36,84 C 41,85 45,73 51,77 C 56,81 52,88 46,84 C 42,81 41,80 38,77 Z" fill="none" stroke-width="2"/>
-          <text x="55" y="45" font-size="46" stroke-width="0.7">e</text>
-          <text x="80" y="24" font-size="28" font-style="normal" stroke-width="0.5">-</text>
-          <text x="93" y="24" font-size="30" stroke-width="0.5">x</text>
-          <text x="110" y="10" font-size="22" font-style="normal" stroke-width="0.5">2</text>
-          <text x="116" y="48" font-size="38" stroke-width="0.6">dx</text>
-        </g>
-        <g transform="translate(535, 255) rotate(-5)">
-          <path d="M 4,4 L 26,38 M 4,36 C 4,24 10,18 14,19 M 26,4 C 26,16 20,22 16,21" fill="none" stroke-width="3.8" stroke-linecap="round"/>
-          <text x="30" y="48" font-size="28" font-style="normal" stroke-width="0.6">0</text>
-        </g>
-      </g>
-
-      <!-- Suit, shirt and tie -->
-      <g filter="url(#drop-shadow)">
-        <path d="M 105,750 C 105,600 120,440 142,382 C 155,348 250,318 308,292 L 492,292 C 550,318 645,348 658,382 C 680,440 695,600 695,750 Z" fill="url(#suit-grad)" stroke="{p["suit_stroke"]}" stroke-width="2"/>
-        <path d="M 142,382 C 155,348 250,318 306,293" fill="none" stroke="{p["shoulder"]}" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
-        <path d="M 658,382 C 645,348 550,318 494,293" fill="none" stroke="{p["shoulder"]}" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
-        <path d="M 295,295 C 285,395 340,485 400,542 C 460,485 515,395 505,295 Z" fill="#070809"/>
-        <path d="M 304,310 C 304,400 348,478 400,532 C 452,478 496,400 496,310 Z" fill="url(#shirt-grad)"/>
-        <path d="M 335,440 Q 355,410 365,370" fill="none" stroke="#b0b5bd" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
-        <path d="M 465,440 Q 445,410 435,370" fill="none" stroke="#b0b5bd" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
-        <path d="M 368,340 L 352,415 L 400,536 L 448,415 L 432,340 Z" fill="#000000" opacity="0.35"/>
-        <path d="M 384,375 L 366,488 L 400,534 L 434,488 L 416,375 Z" fill="url(#tie-grad)" stroke="#2e3136" stroke-width="1.5"/>
-        <path d="M 378,425 L 415,400 L 420,418 L 373,448 Z" fill="#2c3036" opacity="0.65"/>
-        <path d="M 370,468 L 424,435 L 428,455 L 368,486 Z" fill="#2c3036" opacity="0.55"/>
-        <path d="M 382,504 L 430,474 L 420,498 L 392,516 Z" fill="#2c3036" opacity="0.45"/>
-        <path d="M 365,335 L 382,382 L 418,382 L 435,335 Z" fill="#060708"/>
-        <path d="M 372,326 C 386,322 414,322 428,326 L 418,378 C 406,383 394,383 382,378 Z" fill="url(#tie-grad)" stroke="#383c42" stroke-width="1.5"/>
-        <path d="M 378,332 C 390,328 405,330 412,338 L 406,370 C 396,370 388,366 384,354 Z" fill="#3a3e45" opacity="0.5"/>
-        <path d="M 312,288 C 312,238 488,238 488,288 C 488,318 450,336 400,336 C 350,336 312,318 312,288 Z" fill="url(#neck-hole)"/>
-        <path d="M 312,288 C 312,238 488,238 488,288" fill="none" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round"/>
-        <path d="M 304,310 C 304,365 348,408 354,412 L 375,345 L 400,332 L 425,345 L 446,412 C 452,408 496,365 496,310 Z" fill="#000000" opacity="0.4"/>
-        <path d="M 312,288 C 300,322 315,368 352,404 L 374,332 C 342,324 320,306 312,288 Z" fill="url(#collar-left)" stroke="#b0b4ba" stroke-width="1.5"/>
-        <path d="M 310,304 C 306,334 322,368 350,396" fill="none" stroke="#7c8087" stroke-width="1.8"/>
-        <path d="M 488,288 C 500,322 485,368 448,404 L 426,332 C 458,324 480,306 488,288 Z" fill="url(#collar-right)" stroke="#b0b4ba" stroke-width="1.5"/>
-        <path d="M 490,304 C 494,334 478,368 450,396" fill="none" stroke="#7c8087" stroke-width="1.8"/>
-        <path d="M 298,302 C 292,388 342,478 400,536" fill="none" stroke="#2c3036" stroke-width="2.5" opacity="0.8"/>
-        <path d="M 502,302 C 508,388 458,478 400,536" fill="none" stroke="#2c3036" stroke-width="2.5" opacity="0.8"/>
-        <path d="M 195,470 C 205,530 200,620 190,720" fill="none" stroke="#000000" stroke-width="6" opacity="0.6"/>
-        <path d="M 605,470 C 595,530 600,620 610,720" fill="none" stroke="#000000" stroke-width="6" opacity="0.6"/>
-      </g>
-
-      <rect x="60" y="60" width="680" height="680" rx="{RADIUS}" ry="{RADIUS}" fill="none" stroke="{v}" stroke-width="18" opacity="{vo}"/>
+    <!-- The M -->
+    <g transform="{SLANT}">
+      <path d="{LETTER}" fill="url(#letter)"/>
+      <path d="M 190,192 L 352,192 M 672,192 L 834,192" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.5"/>
     </g>
 
-    <rect x="60" y="60" width="680" height="680" rx="{RADIUS}" ry="{RADIUS}" fill="none" stroke="{z0}" stroke-width="4"/>
-    <rect x="62" y="62" width="676" height="676" rx="{RADIUS - 2}" ry="{RADIUS - 2}" fill="none" stroke="{z1}" stroke-width="1.5" opacity="0.6"/>
+    <!-- Shadow the figure throws on the M -->
+    <path d="{JACKET}" fill="#000000" opacity="0.62" filter="url(#blur-22)" transform="translate(0 16)"/>
+
+    <!-- Jacket -->
+    <path d="{JACKET}" fill="url(#suit)"/>
+    <rect x="150" y="490" width="724" height="440" clip-path="url(#jacket)" filter="url(#wool)"/>
+    <g clip-path="url(#jacket)" fill="none" stroke-linecap="round">
+      <!-- light catching the shoulders -->
+      <g stroke="{rim}" opacity="{rim_o}" filter="url(#blur-4)">
+        <path d="M 204,628 C 226,598 304,570 416,514" stroke-width="9"/>
+        <path d="M 204,628 C 226,598 304,570 416,514" stroke-width="9" {MIRROR}/>
+      </g>
+      <!-- where the sleeves meet the body -->
+      <g stroke="#000000" opacity="0.6" filter="url(#blur-4)">
+        <path d="M 262,712 C 274,790 270,870 260,940" stroke-width="12"/>
+        <path d="M 262,712 C 274,790 270,870 260,940" stroke-width="12" {MIRROR}/>
+      </g>
+      <g stroke="{rim}" opacity="0.14">
+        <path d="M 272,716 C 284,792 280,870 270,940" stroke-width="2.5"/>
+        <path d="M 272,716 C 284,792 280,870 270,940" stroke-width="2.5" {MIRROR}/>
+      </g>
+    </g>
+
+    <!-- Shirt, with the shade of the lapels and collar on it -->
+    <path d="{SHIRT}" fill="url(#shirt-fill)"/>
+    <g clip-path="url(#shirt)">
+      <path d="M 404,500 C 410,610 452,716 512,800" fill="none" stroke="#131417" stroke-width="30" opacity="0.3" filter="url(#blur-9)"/>
+      <path d="M 404,500 C 410,610 452,716 512,800" fill="none" stroke="#131417" stroke-width="30" opacity="0.3" filter="url(#blur-9)" {MIRROR}/>
+      <path d="{BLADE}" fill="#0b0b0d" opacity="0.45" filter="url(#blur-9)" transform="translate(9 6)"/>
+    </g>
+
+    <!-- Tie blade -->
+    <g clip-path="url(#shirt)">
+      <path d="{BLADE}" fill="url(#tie)"/>
+      <g clip-path="url(#blade)" stroke="#ffffff" stroke-width="13" opacity="0.07">
+        <path d="M 440,640 L 590,560"/><path d="M 440,700 L 590,620"/><path d="M 440,760 L 590,680"/><path d="M 440,820 L 590,740"/>
+      </g>
+      <!-- the dimple under the knot -->
+      <path d="M 512,574 C 507,600 507,636 512,668 C 517,636 517,600 512,574 Z" fill="#000000" opacity="0.6" filter="url(#blur-4)"/>
+      <path d="M 494,566 L 530,566 L 532,590 L 492,590 Z" fill="#000000" opacity="0.6" filter="url(#blur-4)"/>
+    </g>
+
+    <!-- Lapels: the wearer's left lies over the right -->
+    <g clip-path="url(#jacket)">
+      <path d="{LAPEL_PATH}" fill="#000000" opacity="0.62" filter="url(#blur-9)" transform="translate(-8 12)"/>
+      <path d="{LAPEL_PATH}" fill="#000000" opacity="0.62" filter="url(#blur-9)" transform="translate(1032 12) scale(-1 1)"/>
+    </g>
+    <path d="{LAPEL_PATH}" fill="url(#lapel)"/>
+    <path d="M 336,612 L 388,592 L 360,548 C 378,530 400,515 420,505" fill="none" stroke="{rim}" stroke-width="2.5" stroke-linejoin="round" opacity="0.4"/>
+    <g {MIRROR}>
+      <path d="{LAPEL_PATH}" fill="url(#lapel)"/>
+      <path d="M 336,612 L 388,592 L 360,548 C 378,530 400,515 420,505" fill="none" stroke="{rim}" stroke-width="2.5" stroke-linejoin="round" opacity="0.4"/>
+      <path d="M 420,505 C 424,610 466,716 512,796" fill="none" stroke="#000000" stroke-width="3" opacity="0.5"/>
+    </g>
+    <path d="M 420,505 C 424,610 466,716 512,796" fill="none" stroke="#000000" stroke-width="3" opacity="0.5"/>
+    <g fill="none" stroke="{rim}" stroke-width="2" stroke-dasharray="7 7" stroke-linecap="round" opacity="0.3">
+      <path d="M 352,620 C 388,682 446,748 504,800"/>
+      <path d="M 352,620 C 388,682 446,748 504,800" {MIRROR}/>
+    </g>
+
+    <!-- The one fastened button -->
+    <ellipse cx="514" cy="874" rx="17" ry="16" fill="#000000" opacity="0.6" filter="url(#blur-4)"/>
+    <circle cx="512" cy="868" r="14" fill="{s1}" stroke="{l0}" stroke-width="2.5"/>
+    <circle cx="507" cy="868" r="1.8" fill="#000000" opacity="0.7"/><circle cx="517" cy="868" r="1.8" fill="#000000" opacity="0.7"/>
+    <path d="M 512,818 C 512,840 512,880 512,940" fill="none" stroke="#000000" stroke-width="3" opacity="0.45"/>
+
+    <!-- Pocket square -->
+    <path d="M 652,716 L 660,690 L 678,704 L 692,684 L 706,702 L 722,690 L 726,706 Z" fill="#f4f5f7"/>
+    <path d="M 678,704 L 692,684 L 706,702 Z" fill="#d5d9df"/>
+    <path d="M 646,718 L 730,705" fill="none" stroke="#000000" stroke-width="5" stroke-linecap="round" opacity="0.7"/>
+    <path d="M 647,722 L 731,709" fill="none" stroke="{rim}" stroke-width="1.5" stroke-linecap="round" opacity="0.25"/>
+
+    <!-- Collar: the stand, the empty inside, then the two wings and the knot -->
+    <ellipse cx="512" cy="468" rx="82" ry="28" fill="url(#stand)"/>
+    <ellipse cx="512" cy="475" rx="71" ry="20" fill="url(#hollow)"/>
+    <path d="M 430,468 A 82,28 0 0 1 594,468" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
+    <g clip-path="url(#shirt)">
+      <path d="{WING}" fill="#131417" opacity="0.4" filter="url(#blur-9)" transform="translate(4 12)"/>
+      <path d="{WING}" fill="#131417" opacity="0.4" filter="url(#blur-9)" transform="translate(1020 12) scale(-1 1)"/>
+    </g>
+    <path d="{KNOT}" fill="url(#knot)"/>
+    <path d="M 493,523 C 503,518 521,518 531,523" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
+    <path d="{WING}" fill="url(#wing)" stroke="#aab0b9" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="{WING}" fill="url(#wing)" stroke="#aab0b9" stroke-width="1.5" stroke-linejoin="round" {MIRROR}/>
+
+    <!-- Light from above on the body, and a darkened rim -->
+    <rect {BODY} fill="url(#gloss)" opacity="0.5"/>
+    <rect {BODY} fill="none" stroke="#000000" stroke-width="30" opacity="0.35" filter="url(#blur-9)"/>
   </g>
+
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none" stroke="url(#edge)" stroke-width="3"/>
 </svg>
 """
 
