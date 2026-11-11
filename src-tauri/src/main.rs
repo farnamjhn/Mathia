@@ -19,7 +19,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use math_core::{ConfigFormat, ScopeOverrides, ScoringConfig};
 use tauri::{
-    AppHandle, DragDropEvent, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, DragDropEvent, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder,
+    WindowEvent,
 };
 use tauri_plugin_dialog::DialogExt;
 
@@ -58,7 +59,10 @@ fn lock(state: &Shared) -> MutexGuard<'_, Session> {
 
 /// Where the recent list is kept between runs.
 fn recent_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|dir| dir.join("recent.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("recent.json"))
 }
 
 /// Best effort: a recent list that cannot be saved is not worth an error.
@@ -491,7 +495,8 @@ async fn run_decision_model(
     // Network calls run off the UI thread with no lock held.
     let run = tauri::async_runtime::spawn_blocking(move || {
         let version = math_judge::ApiJudge::new(config.clone()).model_version();
-        let build = || math_judge::CachedJudge::new(math_judge::ApiJudge::new(config.clone()), &version);
+        let build =
+            || math_judge::CachedJudge::new(math_judge::ApiJudge::new(config.clone()), &version);
         let judge = build().load(&cache).unwrap_or_else(|_| build());
         let (_, overrides, log) = math_core::analyze_with_judge_detailed(
             &markdown,

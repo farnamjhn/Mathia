@@ -164,7 +164,11 @@ impl Session {
 
     /// The recent files that still exist, most recent first.
     pub fn recent(&self) -> Vec<PathBuf> {
-        self.recent.iter().filter(|p| p.is_file()).cloned().collect()
+        self.recent
+            .iter()
+            .filter(|p| p.is_file())
+            .cloned()
+            .collect()
     }
 
     /// Opens a file from the recent list. A path that is not in the list is
@@ -174,7 +178,8 @@ impl Session {
         if !self.recent.iter().any(|p| p == path) {
             return Err(format!("{}: not a recent file", path.display()));
         }
-        self.grant(path).inspect_err(|_| self.recent.retain(|p| p != path))
+        self.grant(path)
+            .inspect_err(|_| self.recent.retain(|p| p != path))
     }
 
     pub fn clear_recent(&mut self) {

@@ -42,7 +42,9 @@ impl DecisionSettings {
         }
         let url = self.base_url.trim();
         if !url.is_empty() && !(url.starts_with("https://") || url.starts_with("http://")) {
-            return Err("the API address must start with https:// (or http:// for a local server)".into());
+            return Err(
+                "the API address must start with https:// (or http:// for a local server)".into(),
+            );
         }
         Ok(())
     }
@@ -157,8 +159,14 @@ impl Decision {
         DecisionView {
             settings: self.settings.clone(),
             has_key,
-            key_hint: has_key
-                .then(|| format!("…{}", chars[chars.len().saturating_sub(4)..].iter().collect::<String>())),
+            key_hint: has_key.then(|| {
+                format!(
+                    "…{}",
+                    chars[chars.len().saturating_sub(4)..]
+                        .iter()
+                        .collect::<String>()
+                )
+            }),
             // A custom OpenAI-compatible address (Ollama, LM Studio) may need no key.
             ready: self.settings.validate().is_ok() && (has_key || local),
         }
@@ -217,7 +225,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(dir.join(KEY_FILE)).unwrap().permissions().mode();
+            let mode = std::fs::metadata(dir.join(KEY_FILE))
+                .unwrap()
+                .permissions()
+                .mode();
             assert_eq!(mode & 0o077, 0);
         }
 
@@ -233,15 +244,26 @@ mod tests {
     #[test]
     fn bad_input_is_refused() {
         let mut decision = Decision::default();
-        assert!(decision.update(DecisionSettings::default(), KeyChange::Keep).is_err());
+        assert!(
+            decision
+                .update(DecisionSettings::default(), KeyChange::Keep)
+                .is_err()
+        );
         let bad_url = DecisionSettings {
             model: "m".into(),
             base_url: "ftp://x".into(),
             ..Default::default()
         };
         assert!(decision.update(bad_url, KeyChange::Keep).is_err());
-        let ok = DecisionSettings { model: "m".into(), ..Default::default() };
-        assert!(decision.update(ok.clone(), KeyChange::Set("a b".into())).is_err());
+        let ok = DecisionSettings {
+            model: "m".into(),
+            ..Default::default()
+        };
+        assert!(
+            decision
+                .update(ok.clone(), KeyChange::Set("a b".into()))
+                .is_err()
+        );
         // A local OpenAI-compatible server needs no key.
         let local = DecisionSettings {
             provider: ApiProvider::OpenAiCompatible,

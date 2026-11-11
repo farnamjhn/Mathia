@@ -318,7 +318,10 @@ impl std::fmt::Debug for ApiConfig {
             .field("provider", &self.provider)
             .field("base_url", &self.base_url)
             .field("model", &self.model)
-            .field("api_key", &if self.api_key.is_empty() { "" } else { "<set>" })
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() { "" } else { "<set>" },
+            )
             .finish()
     }
 }
@@ -381,7 +384,10 @@ impl ApiJudge {
     }
 
     pub fn errors(&self) -> Vec<String> {
-        self.errors.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.errors
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn error(&self, message: String) {
@@ -427,7 +433,10 @@ impl ApiJudge {
                 }),
             ),
         };
-        let mut request = self.agent.post(&url).header("content-type", "application/json");
+        let mut request = self
+            .agent
+            .post(&url)
+            .header("content-type", "application/json");
         match self.config.provider {
             ApiProvider::Anthropic => {
                 request = request
@@ -435,8 +444,8 @@ impl ApiJudge {
                     .header("anthropic-version", "2023-06-01");
             }
             ApiProvider::OpenAiCompatible if !self.config.api_key.is_empty() => {
-                request = request
-                    .header("authorization", &format!("Bearer {}", self.config.api_key));
+                request =
+                    request.header("authorization", &format!("Bearer {}", self.config.api_key));
             }
             ApiProvider::OpenAiCompatible => {}
         }
@@ -815,10 +824,19 @@ mod tests {
 
     #[test]
     fn replies_are_parsed_out_of_prose_and_fences() {
-        let r = parse_reply("Sure:\n```json\n{\"verdict\": {\"retype\": \"lemma\"}, \"confidence\": 0.8}\n```", "b").unwrap();
+        let r = parse_reply(
+            "Sure:\n```json\n{\"verdict\": {\"retype\": \"lemma\"}, \"confidence\": 0.8}\n```",
+            "b",
+        )
+        .unwrap();
         assert_eq!(r.verdict, Verdict::Retype(BlockType::Lemma));
         assert_eq!(r.confidence, Some(0.8));
-        assert_eq!(parse_reply("{\"verdict\":\"accept\"}", "b").unwrap().verdict, Verdict::Accept);
+        assert_eq!(
+            parse_reply("{\"verdict\":\"accept\"}", "b")
+                .unwrap()
+                .verdict,
+            Verdict::Accept
+        );
         assert!(parse_reply("no idea", "b").is_err());
         assert!(parse_reply("{\"verdict\":\"maybe\"}", "b").is_err());
         let config = ApiConfig {
