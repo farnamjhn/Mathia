@@ -1,4 +1,4 @@
-/* Mathia AI interactive runtime styles (S2: settings toggle & dialog) */
+/* Mathia AI interactive runtime styles: settings, Ask panel, Illustrate figure */
 
 /* Settings toggle button (next to #mx-theme-toggle at inset-inline-end: 18px) */
 #mx-ai-toggle,
@@ -179,8 +179,409 @@
   font-weight: 600;
 }
 
-.mx-ai-btn-primary:hover {
-  opacity: 0.88;
+/* ==========================================================================
+   S3: Ask Action & Conversational Panel Styles
+   ========================================================================== */
+
+/* Active toggle indicator on block action buttons */
+.mx-actions button.mx-active,
+.mx-actions button[aria-expanded="true"] {
+  background: var(--mx-text);
+  border-color: var(--mx-text);
+  color: var(--mx-bg);
+}
+
+/* S3 Conversational Panel Container */
+.mx-ai-panel {
+  margin-block-start: 14px;
+  padding: 14px 16px;
+  background: var(--mx-bg-secondary);
+  border: 1px solid var(--mx-border);
+  border-radius: 6px;
+  font-family: var(--mx-font-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+
+.mx-ai-panel[hidden] {
+  display: none !important;
+}
+
+/* Missing API Key Notice within Panel */
+.mx-ai-panel-notice,
+.mx-ai-notice.mx-ai-missing-key {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-block-end: 12px;
+  background: var(--mx-bg);
+  border: 1px solid var(--mx-border);
+  border-radius: 5px;
+  color: var(--mx-gray-700);
+  font-size: 13px;
+  word-break: normal;
+}
+
+.mx-ai-panel-notice-text {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Chat Log Conversation History */
+.mx-ai-chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 28rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 2px;
+  margin-block-end: 12px;
+  scroll-behavior: smooth;
+}
+
+/* Completely collapse empty chat log */
+.mx-ai-chat-log:empty {
+  display: none;
+  margin-block-end: 0;
+  padding: 0;
+}
+
+/* Base Chat Bubble */
+.mx-ai-bubble {
+  max-width: 88%;
+  padding: 9px 13px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  box-sizing: border-box;
+}
+
+/* User Message Bubble */
+.mx-ai-bubble-user {
+  align-self: flex-end;
+  margin-inline-start: auto;
+  margin-inline-end: 0;
+  background: var(--mx-gray-100);
+  border: 1px solid var(--mx-border);
+  color: var(--mx-text);
+  white-space: pre-wrap;
+}
+
+/* Assistant Message Bubble */
+.mx-ai-bubble-assistant {
+  align-self: flex-start;
+  margin-inline-start: 0;
+  margin-inline-end: auto;
+  max-width: 96%;
+  background: var(--mx-bg);
+  border: 1px solid var(--mx-border);
+  color: var(--mx-text);
+}
+
+/* Prose formatting inside assistant bubbles */
+.mx-ai-bubble-assistant > :first-child {
+  margin-block-start: 0;
+}
+
+.mx-ai-bubble-assistant > :last-child {
+  margin-block-end: 0;
+}
+
+.mx-ai-bubble-assistant p {
+  margin: 0.5em 0;
+}
+
+.mx-ai-bubble-assistant h1,
+.mx-ai-bubble-assistant h2,
+.mx-ai-bubble-assistant h3,
+.mx-ai-bubble-assistant h4 {
+  margin: 0.8em 0 0.35em;
+  font-size: 1.05em;
+  font-weight: 700;
+  color: var(--mx-text);
+}
+
+.mx-ai-bubble-assistant ul,
+.mx-ai-bubble-assistant ol {
+  margin: 0.5em 0;
+  padding-inline-start: 1.4em;
+}
+
+.mx-ai-bubble-assistant li {
+  margin: 0.25em 0;
+}
+
+.mx-ai-bubble-assistant code {
+  font-family: var(--mx-font-mono);
+  font-size: 0.88em;
+  padding: 1px 5px;
+  border: 1px solid var(--mx-border);
+  border-radius: 4px;
+  background: var(--mx-gray-100);
+  color: var(--mx-text);
+}
+
+.mx-ai-bubble-assistant pre {
+  margin: 0.7em 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  background: var(--mx-code-bg);
+  border: 1px solid var(--mx-border);
+  border-radius: 6px;
+  color: var(--mx-code-fg);
+  font-family: var(--mx-font-mono);
+  font-size: 0.88em;
+  line-height: 1.45;
+}
+
+.mx-ai-bubble-assistant pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.mx-ai-bubble-assistant .math-display {
+  margin: 0.7em 0;
+  padding: 10px 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  background: var(--mx-bg-secondary);
+  border: 1px solid var(--mx-border);
+  border-radius: 6px;
+}
+
+/* Error Bubble / Notification */
+.mx-ai-error {
+  color: #c00;
+  border-color: #c00 !important;
+  background: rgba(255, 0, 0, 0.05) !important;
+  font-family: var(--mx-font-mono);
+  font-size: 12.5px;
+  padding: 8px 12px;
+  border-radius: 5px;
+  word-break: break-word;
+}
+
+:root[data-mx-theme="dark"] .mx-ai-error,
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mx-theme="light"]) .mx-ai-error {
+    color: #ff6b6b;
+    border-color: #ff6b6b !important;
+    background: rgba(255, 107, 107, 0.09) !important;
+  }
+}
+
+/* Question Input Textarea */
+.mx-ai-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mx-ai-textarea,
+.mx-ai-input {
+  width: 100%;
+  min-height: 4.25rem;
+  max-height: 16rem;
+  resize: vertical;
+  padding: 9px 11px;
+  border: 1px solid var(--mx-border);
+  border-radius: 5px;
+  background: var(--mx-bg);
+  color: var(--mx-text);
+  font-family: var(--mx-font-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  box-sizing: border-box;
+  margin-block-end: 10px;
+  transition: border-color 0.15s ease;
+}
+
+.mx-ai-textarea:focus,
+.mx-ai-input:focus {
+  outline: 2px solid var(--mx-text);
+  outline-offset: -1px;
+  border-color: var(--mx-text);
+}
+
+.mx-ai-textarea::placeholder,
+.mx-ai-input::placeholder {
+  color: var(--mx-gray-500);
+}
+
+.mx-ai-textarea:disabled,
+.mx-ai-input:disabled {
+  background: var(--mx-gray-100);
+  color: var(--mx-gray-500);
+  cursor: not-allowed;
+}
+
+/* Controls Bar */
+.mx-ai-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Checkbox Label & Input */
+.mx-ai-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--mx-gray-700);
+  cursor: pointer;
+  user-select: none;
+}
+
+.mx-ai-checkbox-label input[type="checkbox"],
+.mx-ai-context-toggle {
+  accent-color: var(--mx-text);
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+}
+
+/* Button Group inside Controls */
+.mx-ai-btn-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: auto;
+}
+
+.mx-ai-btn-sm {
+  padding: 4px 8px;
+  font-size: 11.5px;
+}
+
+/* Stop Button Styling */
+.mx-ai-btn-stop {
+  color: #c00;
+  border-color: var(--mx-border);
+}
+
+.mx-ai-btn-stop:hover {
+  background: #c00;
+  border-color: #c00;
+  color: #fff;
+}
+
+:root[data-mx-theme="dark"] .mx-ai-btn-stop,
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mx-theme="light"]) .mx-ai-btn-stop {
+    color: #ff6b6b;
+  }
+  :root:not([data-mx-theme="light"]) .mx-ai-btn-stop:hover {
+    background: #ff6b6b;
+    border-color: #ff6b6b;
+    color: #000;
+  }
+}
+
+/* Disabled button state */
+.mx-ai-btn:disabled,
+.mx-ai-btn[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   S4: Illustrate Action (explanatory figure)
+   ========================================================================== */
+
+.mx-ai-figure-wrap {
+  margin-block-start: 14px;
+  padding: 14px 16px;
+  background: var(--mx-bg-secondary);
+  border: 1px solid var(--mx-border);
+  border-radius: 6px;
+  font-family: var(--mx-font-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+
+.mx-ai-figure-wrap[hidden],
+.mx-ai-figure-wrap [hidden] {
+  display: none !important;
+}
+
+.mx-ai-figure-status {
+  color: var(--mx-gray-600);
+  margin-block-end: 10px;
+}
+
+/* Always white, in dark mode too: figures are drawn with black strokes. */
+.mx-ai-figure-box {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid var(--mx-border);
+  border-radius: 8px;
+}
+
+.mx-ai-figure {
+  display: block;
+  width: 100%;
+  max-width: 34rem;
+  height: auto;
+  max-height: 30rem;
+}
+
+.mx-ai-figure-caption {
+  margin-block-start: 10px;
+  color: var(--mx-gray-700);
+  font-size: 13px;
+}
+
+.mx-ai-figure-caption > :first-child { margin-block-start: 0; }
+.mx-ai-figure-caption > :last-child { margin-block-end: 0; }
+
+.mx-ai-figure-controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-block-start: 10px;
+}
+
+.mx-ai-figure-controls:not(:has(button:not([hidden]))) {
+  display: none;
+}
+
+/* Mobile & Small Screens (< 40rem) */
+@media (max-width: 40rem) {
+  .mx-ai-panel {
+    padding: 12px;
+  }
+  .mx-ai-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .mx-ai-btn-group {
+    justify-content: flex-end;
+    margin-inline-start: 0;
+  }
+  .mx-ai-bubble {
+    max-width: 95%;
+  }
 }
 
 /* Print styles: completely hide AI elements */
@@ -190,8 +591,17 @@
   #mx-ai-dialog,
   .mx-ai-dialog,
   [data-mx-ai-action],
-  .mx-ai-panel {
+  .mx-ai-panel,
+  .mx-ai-figure-controls,
+  .mx-ai-figure-status,
+  .mx-ai-figure-wrap .mx-ai-missing-key {
     display: none !important;
+  }
+  .mx-ai-figure-wrap {
+    border: 0;
+    padding: 0;
+    background: none;
+    break-inside: avoid;
   }
 }
 

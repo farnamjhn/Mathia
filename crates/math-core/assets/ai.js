@@ -1,4 +1,5 @@
-/* Mathia AI interactive runtime (S2: settings, providers, streaming, safe rendering). */
+/* Mathia AI interactive runtime: settings, providers, streaming, safe rendering,
+   and the per-block Ask and Illustrate actions. See docs/phase2-spec.md. */
 (function () {
   "use strict";
 
@@ -34,6 +35,9 @@
   function updateOnlineStatus() {
     var isOffline = typeof navigator !== "undefined" && navigator.onLine === false;
     document.documentElement.classList.toggle("mx-ai-offline", isOffline);
+    if (typeof updateAllPanelKeyNotices === "function") {
+      updateAllPanelKeyNotices();
+    }
   }
   updateOnlineStatus();
   window.addEventListener("online", updateOnlineStatus);
@@ -473,6 +477,11 @@
           function pump() {
             return reader.read().then(function (chunk) {
               if (chunk.done) {
+                if (options.signal && options.signal.aborted) {
+                  var abortErr = new Error("Aborted");
+                  abortErr.name = "AbortError";
+                  throw abortErr;
+                }
                 return fullText;
               }
               var chunkText = decoder.decode(chunk.value, { stream: true });
@@ -503,89 +512,109 @@
   }
 
   // sanitizeSvg(string) -> string | null
-  var ALLOWED_SVG_ELEMENTS = [
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var XLINK_NS = "http://www.w3.org/1999/xlink";
+
+  function toSet(list) {
+    var set = Object.create(null);
+    for (var i = 0; i < list.length; i++) set[list[i]] = true;
+    return set;
+  }
+
+  var ALLOWED_SVG_ELEMENTS = toSet([
     "svg", "g", "defs", "title", "desc", "path", "rect", "circle", "ellipse",
     "line", "polyline", "polygon", "text", "tspan", "marker", "linearGradient",
     "radialGradient", "stop", "clipPath", "mask", "pattern", "symbol", "use"
-  ];
+  ]);
+
+  /* Geometry and presentation attributes only: nothing that can run script or
+     name an outside resource. */
+  var ALLOWED_SVG_ATTRIBUTES = toSet([
+    "id", "class", "xmlns", "xmlns:xlink", "version", "viewBox", "preserveAspectRatio",
+    "width", "height", "x", "y", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "ry",
+    "d", "points", "dx", "dy", "rotate", "pathLength", "transform",
+    "fill", "fill-opacity", "fill-rule", "stroke", "stroke-width", "stroke-linecap",
+    "stroke-linejoin", "stroke-dasharray", "stroke-dashoffset", "stroke-opacity",
+    "stroke-miterlimit", "opacity", "color", "display", "visibility", "vector-effect",
+    "paint-order", "shape-rendering", "text-rendering",
+    "font-family", "font-size", "font-weight", "font-style", "text-anchor",
+    "dominant-baseline", "alignment-baseline", "baseline-shift", "letter-spacing",
+    "word-spacing", "text-decoration", "direction", "unicode-bidi", "writing-mode",
+    "textLength", "lengthAdjust", "xml:space", "xml:lang", "lang",
+    "marker-start", "marker-mid", "marker-end", "markerWidth", "markerHeight",
+    "markerUnits", "refX", "refY", "orient",
+    "offset", "stop-color", "stop-opacity", "gradientUnits", "gradientTransform",
+    "spreadMethod", "fx", "fy", "fr",
+    "clip-path", "clip-rule", "clipPathUnits", "mask", "maskUnits", "maskContentUnits",
+    "patternUnits", "patternContentUnits", "patternTransform",
+    "href", "xlink:href", "style", "role", "aria-label", "aria-hidden"
+  ]);
+
+  /* Every url(...) in the value must point inside the figure: url(#id). */
+  function hasOnlyLocalUrls(value) {
+    var urls = value.match(/url\s*\([^)]*\)?/gi) || [];
+    for (var i = 0; i < urls.length; i++) {
+      if (!/^url\s*\(\s*(['"]?)#[^'")\s]*\1\s*\)$/i.test(urls[i])) return false;
+    }
+    return true;
+  }
+
+  function isSafeSvgAttribute(name, value) {
+    if (!ALLOWED_SVG_ATTRIBUTES[name]) return false;
+    if (name === "xmlns") return value === SVG_NS;
+    if (name === "xmlns:xlink") return value === XLINK_NS;
+    if (name === "href" || name === "xlink:href") return value.trim().charAt(0) === "#";
+    if (!hasOnlyLocalUrls(value)) return false;
+    /* A backslash can spell "url" with CSS escapes, so it is refused outright. */
+    if (name === "style" && /\\|@import|expression|javascript:|behavior/i.test(value)) return false;
+    return true;
+  }
 
   function sanitizeSvg(svgText) {
     if (typeof svgText !== "string" || !svgText.trim()) return null;
+    if (typeof DOMParser === "undefined" || typeof XMLSerializer === "undefined") return null;
 
-    var parser = new DOMParser();
-    var doc = parser.parseFromString(svgText, "image/svg+xml");
-    if (doc.querySelector("parsererror")) {
+    /* Models often leave the namespaces out; without them the figure would not
+       parse (xlink) or not draw (svg). */
+    var open = svgText.match(/<svg\b[^>]*>/i);
+    if (!open) return null;
+    var extra = "";
+    if (!/\sxmlns\s*=/.test(open[0])) extra += ' xmlns="' + SVG_NS + '"';
+    if (/xlink:/.test(svgText) && !/\sxmlns:xlink\s*=/.test(open[0])) extra += ' xmlns:xlink="' + XLINK_NS + '"';
+    if (extra) {
+      svgText = svgText.slice(0, open.index + 4) + extra + svgText.slice(open.index + 4);
+    }
+
+    var doc;
+    try {
+      doc = new DOMParser().parseFromString(svgText, "image/svg+xml");
+    } catch (e) {
       return null;
     }
+    if (!doc || doc.getElementsByTagName("parsererror").length > 0) return null;
 
     var root = doc.documentElement;
-    if (!root || root.tagName.toLowerCase() !== "svg") {
-      return null;
-    }
-
-    var allowedTags = {};
-    for (var i = 0; i < ALLOWED_SVG_ELEMENTS.length; i++) {
-      allowedTags[ALLOWED_SVG_ELEMENTS[i].toLowerCase()] = true;
-    }
+    if (!root || root.localName !== "svg" || root.namespaceURI !== SVG_NS) return null;
 
     function sanitizeElement(el) {
-      var tag = el.tagName.toLowerCase();
-      if (!allowedTags[tag]) {
-        el.parentNode.removeChild(el);
-        return;
-      }
-
       var attrs = Array.prototype.slice.call(el.attributes);
       for (var j = 0; j < attrs.length; j++) {
-        var attr = attrs[j];
-        var name = attr.name.toLowerCase();
-        var val = attr.value;
-
-        // Disallow on* event handlers
-        if (name.indexOf("on") === 0) {
-          el.removeAttribute(attr.name);
-          continue;
-        }
-
-        // href and xlink:href must start with #
-        if (name === "href" || name === "xlink:href" || name.slice(-5) === ":href") {
-          if (!val.trim().startsWith("#")) {
-            el.removeAttribute(attr.name);
-            continue;
-          }
-        }
-
-        // Check style and url(...)
-        if (name === "style" || /url\s*\(/i.test(val)) {
-          if (/url\s*\(/i.test(val)) {
-            var urls = val.match(/url\s*\([^)]*\)/gi) || [];
-            var safe = true;
-            for (var u = 0; u < urls.length; u++) {
-              if (!/^url\s*\(\s*['"]?#[^'"]*['"]?\s*\)$/i.test(urls[u])) {
-                safe = false;
-                break;
-              }
-            }
-            if (!safe) {
-              el.removeAttribute(attr.name);
-              continue;
-            }
-          }
-          if (name === "style" && /javascript:|expression|behavior/i.test(val)) {
-            el.removeAttribute(attr.name);
-            continue;
-          }
+        if (!isSafeSvgAttribute(attrs[j].name, attrs[j].value)) {
+          el.removeAttributeNode(attrs[j]);
         }
       }
-
       var children = Array.prototype.slice.call(el.childNodes);
       for (var k = 0; k < children.length; k++) {
         var child = children[k];
-        if (child.nodeType === 1 /* Element */) {
-          sanitizeElement(child);
-        } else if (child.nodeType === 7 || child.nodeType === 8) {
-          // comments and processing instructions
-          child.parentNode.removeChild(child);
+        if (child.nodeType === 1) {
+          if (child.namespaceURI === SVG_NS && ALLOWED_SVG_ELEMENTS[child.localName]) {
+            sanitizeElement(child);
+          } else {
+            el.removeChild(child);
+          }
+        } else if (child.nodeType !== 3 && child.nodeType !== 4) {
+          /* comments, processing instructions, entity references */
+          el.removeChild(child);
         }
       }
     }
@@ -914,8 +943,28 @@
     }
     var frag = markdownToNodes(markdownText);
     container.appendChild(frag);
-    if (window.Mathia && typeof window.Mathia.renderMath === "function") {
-      window.Mathia.renderMath();
+    renderMathIn(container);
+  }
+
+  /* Same as Mathia.renderMath, but scoped to one container, which may not be
+     attached to the document yet (a restored conversation is built detached). */
+  function renderMathIn(container) {
+    if (!window.katex) return;
+    var nodes = container.querySelectorAll(".math");
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (el.dataset.mxTex !== undefined) continue;
+      var tex = el.textContent;
+      el.dataset.mxTex = tex;
+      try {
+        window.katex.render(tex, el, {
+          displayMode: el.classList.contains("math-display"),
+          throwOnError: false
+        });
+      } catch (err) {
+        el.classList.add("mx-math-error");
+        el.title = String(err);
+      }
     }
   }
 
@@ -934,7 +983,29 @@
       save: "Save",
       forgetKey: "Forget key",
       forgetAll: "Forget all",
-      close: "Close"
+      close: "Close",
+
+      // S3 Ask Action & Conversational Panel
+      askAction: "Ask",
+      send: "Send",
+      stop: "Stop",
+      clear: "Clear",
+      includeNeighbours: "Include neighbouring blocks",
+      askPlaceholder: "Ask a question about this block...",
+      missingKeyNotice: "API key required to ask questions.",
+      configureKey: "Configure API Key...",
+      chatLogAria: "Conversation history",
+      inputAria: "Question about this block",
+      emptyAnswer: "The model returned an empty answer.",
+      offlineNotice: "You are offline; AI features need a network connection.",
+
+      // S4 Illustrate Action
+      illustrateAction: "Illustrate",
+      regenerate: "Regenerate",
+      drawing: "Drawing a figure…",
+      noFigure: "The model did not return a usable figure.",
+      figureAlt: "Explanatory figure",
+      figureAria: "Figure"
     },
     fa: {
       toggleAria: "تنظیمات هوش مصنوعی",
@@ -948,7 +1019,29 @@
       save: "ذخیره",
       forgetKey: "فراموشی کلید",
       forgetAll: "فراموشی همه",
-      close: "بستن"
+      close: "بستن",
+
+      // S3 Ask Action & Conversational Panel
+      askAction: "پرسش",
+      send: "ارسال",
+      stop: "توقف",
+      clear: "پاک کردن",
+      includeNeighbours: "شامل بخش‌های مجاور",
+      askPlaceholder: "درباره این بخش سوال کنید...",
+      missingKeyNotice: "برای پرسش، کلید دسترسی (API Key) لازم است.",
+      configureKey: "تنظیم کلید API...",
+      chatLogAria: "تاریخچه گفتگو",
+      inputAria: "متن پرسش درباره این بخش",
+      emptyAnswer: "مدل پاسخی برنگرداند.",
+      offlineNotice: "اتصال اینترنت برقرار نیست؛ امکانات هوش مصنوعی به شبکه نیاز دارند.",
+
+      // S4 Illustrate Action
+      illustrateAction: "شکل",
+      regenerate: "رسم دوباره",
+      drawing: "در حال رسم شکل…",
+      noFigure: "مدل شکل قابل‌استفاده‌ای برنگرداند.",
+      figureAlt: "شکل توضیحی",
+      figureAria: "شکل"
     }
   };
   var t = isRtl ? STRINGS.fa : STRINGS.en;
@@ -1147,27 +1240,32 @@
       endpoint: ep
     });
     closeSettings();
+    updateAllPanelKeyNotices();
   });
 
   forgetKeyBtn.addEventListener("click", function () {
     var p = providerSelect.value;
     forgetKey(p);
     keyInput.value = "";
+    updateAllPanelKeyNotices();
   });
 
   forgetAllBtn.addEventListener("click", function () {
     forgetKey();
     keyInput.value = "";
+    updateAllPanelKeyNotices();
   });
 
   closeBtn.addEventListener("click", closeSettings);
 
   dialog.addEventListener("close", function () {
     keyInput.value = "";
+    updateAllPanelKeyNotices();
   });
 
   dialog.addEventListener("cancel", function () {
     keyInput.value = "";
+    updateAllPanelKeyNotices();
   });
 
   dialog.addEventListener("click", function (e) {
@@ -1175,6 +1273,1053 @@
       closeSettings();
     }
   });
+
+  // =========================================================================
+  // S3: "Ask" Action per Block
+  // =========================================================================
+
+  var ASK_SYSTEM_PROMPT =
+    "You are a mathematics tutor helping a student read a study guide. " +
+    "Answer in the language of the question. " +
+    "Use $...$ for inline math and $$...$$ for display math. " +
+    "Be concise, clear, and rigorous.";
+
+  var MAX_CONTEXT_CHARS = 4000;
+  var MAX_PRIMARY_CHARS = 8000;
+  var CHAT_STORAGE_PREFIX = "mathia-ai-chat:";
+  var conversationStore = {};
+
+  function isValidConversationItem(item) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    try {
+      if (item.role !== "user" && item.role !== "assistant") return false;
+      if (typeof item.content !== "string") return false;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function sanitizeConversationItem(item) {
+    if (!isValidConversationItem(item)) return null;
+    try {
+      var clean = {
+        role: item.role,
+        content: item.content
+      };
+      if (typeof item.display === "string") clean.display = item.display;
+      if (item.isError === true) clean.isError = true;
+      return clean;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function sanitizeConversationList(list) {
+    if (!list || !Array.isArray(list)) return [];
+    var cleanList = [];
+    for (var i = 0; i < list.length; i++) {
+      try {
+        var clean = sanitizeConversationItem(list[i]);
+        if (clean) cleanList.push(clean);
+      } catch (e) {}
+    }
+    return cleanList;
+  }
+
+  function getChatStorageKey(blockId) {
+    var path = "";
+    try {
+      path = (window.location && window.location.pathname) ? window.location.pathname : "";
+    } catch (e) {}
+    return CHAT_STORAGE_PREFIX + path + ":" + blockId;
+  }
+
+  function getConversation(blockId) {
+    if (blockId === null || blockId === undefined) return [];
+    var strId = String(blockId);
+    if (!strId) return [];
+
+    if (Array.isArray(conversationStore[strId])) {
+      return conversationStore[strId].slice();
+    }
+    var key = getChatStorageKey(strId);
+    var list = [];
+    try {
+      if (typeof window !== "undefined" && window.sessionStorage) {
+        var raw = window.sessionStorage.getItem(key);
+        if (raw) {
+          var parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            list = sanitizeConversationList(parsed);
+          }
+        }
+      }
+    } catch (e) {}
+    conversationStore[strId] = list;
+    return list.slice();
+  }
+  var loadConversation = getConversation;
+
+  function saveConversation(blockId, list) {
+    if (blockId === null || blockId === undefined) return;
+    var strId = String(blockId);
+    if (!strId) return;
+
+    var cleanList = sanitizeConversationList(list);
+    conversationStore[strId] = cleanList;
+    var key = getChatStorageKey(strId);
+    try {
+      if (typeof window !== "undefined" && window.sessionStorage) {
+        window.sessionStorage.setItem(key, JSON.stringify(cleanList));
+      }
+    } catch (e) {}
+  }
+
+  function clearConversation(blockId) {
+    if (blockId === null || blockId === undefined) return;
+    var strId = String(blockId);
+    delete conversationStore[strId];
+    var key = getChatStorageKey(strId);
+    try {
+      if (typeof window !== "undefined" && window.sessionStorage) {
+        window.sessionStorage.removeItem(key);
+      }
+    } catch (e) {}
+  }
+
+  function isSemanticBlock(block) {
+    if (!block || !block.type) return false;
+    return block.type !== "heading" && block.type !== "text";
+  }
+
+  function getSemanticBlocks() {
+    var all = [];
+    if (window.Mathia && typeof window.Mathia.blocks === "function") {
+      all = window.Mathia.blocks();
+    } else {
+      var elements = document.querySelectorAll("[data-block-id]");
+      for (var i = 0; i < elements.length; i++) {
+        var el = elements[i];
+        all.push({
+          id: el.dataset.blockId,
+          type: el.dataset.blockType,
+          proves: el.dataset.proves || null,
+          element: el
+        });
+      }
+    }
+    var result = [];
+    for (var j = 0; j < all.length; j++) {
+      if (isSemanticBlock(all[j])) {
+        result.push(all[j]);
+      }
+    }
+    return result;
+  }
+
+  function getBlockTitle(block) {
+    if (!block || !block.element) return "";
+    var aria = block.element.getAttribute("aria-label");
+    if (aria && aria.trim()) {
+      return aria.trim();
+    }
+    var badge = block.element.querySelector(".mx-badge");
+    var titleEl = block.element.querySelector(".mx-block-title");
+    var parts = [];
+    if (badge && badge.textContent.trim()) parts.push(badge.textContent.trim());
+    if (titleEl && titleEl.textContent.trim()) parts.push(titleEl.textContent.trim());
+    if (parts.length > 0) return parts.join(" - ");
+    return block.type || block.id || "";
+  }
+
+  function extractCleanBlockText(block) {
+    if (!block) return "";
+    var el = block.element;
+    if (!el) {
+      if (typeof block.text === "string") return block.text;
+      return "";
+    }
+
+    var bodyEl = el.querySelector(".mx-block-body");
+    var target = bodyEl || el;
+    var clone = target.cloneNode(true);
+
+    // Strip block header, AI panels, and AI figures
+    var unwanted = clone.querySelectorAll(".mx-block-head, .mx-ai-panel, .mx-ai-figure-wrap, [data-mx-ai-panel]");
+    for (var i = 0; i < unwanted.length; i++) {
+      if (unwanted[i].parentNode) {
+        unwanted[i].parentNode.removeChild(unwanted[i]);
+      }
+    }
+
+    // Restore LaTeX formulas
+    var mathNodes = clone.querySelectorAll(".math");
+    for (var j = 0; j < mathNodes.length; j++) {
+      var m = mathNodes[j];
+      var tex = m.dataset.mxTex !== undefined ? m.dataset.mxTex : m.textContent;
+      m.textContent = m.classList.contains("math-display") ? ("$$" + tex + "$$") : ("$" + tex + "$");
+    }
+
+    return clone.textContent.trim();
+  }
+
+  function truncateText(text, limit) {
+    if (typeof text !== "string") return "";
+    var max = (typeof limit === "number" && !isNaN(limit)) ? Math.max(0, Math.floor(limit)) : MAX_CONTEXT_CHARS;
+    if (text.length <= max) return text;
+    if (max > 0 && text.charCodeAt(max - 1) >= 0xD800 && text.charCodeAt(max - 1) <= 0xDBFF) {
+      max--;
+    }
+    return text.slice(0, max);
+  }
+
+  function assembleInitialPrompt(currentBlock, userQuestion, includeNeighbours) {
+    var parts = [];
+
+    // 1. Primary Block
+    var type = (currentBlock && currentBlock.type) || "block";
+    var title = currentBlock ? getBlockTitle(currentBlock) : "";
+    var header = title ? (type + " (" + title + ")") : type;
+    var rawText = currentBlock ? extractCleanBlockText(currentBlock) : "";
+    var text = truncateText(rawText, MAX_PRIMARY_CHARS);
+
+    parts.push("Block: " + header);
+    if (text) {
+      parts.push(text);
+    }
+
+    // 2. Neighbouring Context
+    if (includeNeighbours) {
+      var semantics = getSemanticBlocks();
+      var idx = -1;
+      for (var i = 0; i < semantics.length; i++) {
+        if (semantics[i].id === currentBlock.id) {
+          idx = i;
+          break;
+        }
+      }
+
+      var prev = (idx > 0) ? semantics[idx - 1] : null;
+      var next = (idx >= 0 && idx < semantics.length - 1) ? semantics[idx + 1] : null;
+      var proved = null;
+      if (currentBlock.proves) {
+        if (window.Mathia && typeof window.Mathia.block === "function") {
+          proved = window.Mathia.block(currentBlock.proves);
+        }
+        if (!proved) {
+          for (var j = 0; j < semantics.length; j++) {
+            if (semantics[j].id === currentBlock.proves) {
+              proved = semantics[j];
+              break;
+            }
+          }
+        }
+      }
+
+      var contextSections = [];
+
+      if (prev) {
+        var pTitle = getBlockTitle(prev);
+        var pType = prev.type || "block";
+        var pHead = pTitle ? (pType + " (" + pTitle + ")") : pType;
+        var pText = truncateText(extractCleanBlockText(prev), MAX_CONTEXT_CHARS);
+        if (pText) {
+          contextSections.push("Preceding block: " + pHead + "\n" + pText);
+        }
+      }
+
+      if (next) {
+        var nTitle = getBlockTitle(next);
+        var nType = next.type || "block";
+        var nHead = nTitle ? (nType + " (" + nTitle + ")") : nType;
+        var nText = truncateText(extractCleanBlockText(next), MAX_CONTEXT_CHARS);
+        if (nText) {
+          contextSections.push("Next block: " + nHead + "\n" + nText);
+        }
+      }
+
+      if (proved) {
+        var pvTitle = getBlockTitle(proved);
+        var pvType = proved.type || "block";
+        var pvHead = pvTitle ? (pvType + " (" + pvTitle + ")") : pvType;
+        var pvText = truncateText(extractCleanBlockText(proved), MAX_CONTEXT_CHARS);
+        if (pvText) {
+          contextSections.push("Proved block: " + pvHead + "\n" + pvText);
+        }
+      }
+
+      if (contextSections.length > 0) {
+        parts.push("Context:\n" + contextSections.join("\n\n"));
+      }
+    }
+
+    // 3. User Question
+    parts.push("Question: " + userQuestion.trim());
+
+    return parts.join("\n\n");
+  }
+
+  var raf = (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function")
+    ? window.requestAnimationFrame.bind(window)
+    : function (cb) { return setTimeout(cb, 16); };
+
+  var cancelRaf = (typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function")
+    ? window.cancelAnimationFrame.bind(window)
+    : clearTimeout;
+
+  function createThrottledRenderer(container) {
+    var rafId = null;
+    var pendingText = "";
+
+    function flush() {
+      if (rafId !== null) {
+        cancelRaf(rafId);
+        rafId = null;
+      }
+      renderRich(container, pendingText);
+    }
+
+    function update(text) {
+      pendingText = text;
+      if (rafId === null) {
+        rafId = raf(function () {
+          rafId = null;
+          renderRich(container, pendingText);
+        });
+      }
+    }
+
+    function finish(finalText) {
+      if (finalText !== undefined) {
+        pendingText = finalText;
+      }
+      flush();
+    }
+
+    function cancel() {
+      if (rafId !== null) {
+        cancelRaf(rafId);
+        rafId = null;
+      }
+    }
+
+    return {
+      update: update,
+      finish: finish,
+      cancel: cancel,
+      flush: flush
+    };
+  }
+
+  function isOffline() {
+    return typeof navigator !== "undefined" && navigator.onLine === false;
+  }
+
+  /* The one-line "cannot ask right now" message: no key (with a button that
+     opens the settings) or no network. Returns the notice element. */
+  function showUnavailableNotice(host, before) {
+    var notice = null;
+    for (var i = 0; i < host.children.length; i++) {
+      if (host.children[i].classList.contains("mx-ai-missing-key")) notice = host.children[i];
+    }
+    if (!notice) {
+      notice = document.createElement("div");
+      notice.className = "mx-ai-notice mx-ai-missing-key";
+
+      var noticeSpan = document.createElement("span");
+      noticeSpan.className = "mx-ai-panel-notice-text";
+      notice.appendChild(noticeSpan);
+
+      var configBtn = document.createElement("button");
+      configBtn.type = "button";
+      configBtn.className = "mx-ai-btn mx-ai-btn-sm";
+      configBtn.textContent = t.configureKey;
+      configBtn.addEventListener("click", function () {
+        openSettings();
+      });
+      notice.appendChild(configBtn);
+      host.insertBefore(notice, before || host.firstChild);
+    }
+    var offline = isOffline();
+    notice.firstChild.textContent = (offline ? t.offlineNotice : t.missingKeyNotice) + " ";
+    notice.lastChild.hidden = offline;
+    return notice;
+  }
+
+  function hideUnavailableNotice(host) {
+    for (var i = host.children.length - 1; i >= 0; i--) {
+      if (host.children[i].classList.contains("mx-ai-missing-key")) {
+        host.removeChild(host.children[i]);
+      }
+    }
+  }
+
+  function updatePanelKeyNotice(panel) {
+    if (!panel) return;
+    var isAvail = available();
+    var input = panel.querySelector(".mx-ai-input");
+    var sendBtn = panel.querySelector(".mx-ai-btn-send");
+    var streaming = Boolean(panel._state && panel._state.isStreaming);
+
+    if (isAvail) {
+      hideUnavailableNotice(panel);
+    } else {
+      showUnavailableNotice(panel, panel.querySelector(".mx-ai-chat-log"));
+    }
+    if (input) input.disabled = !isAvail || streaming;
+    if (sendBtn) sendBtn.disabled = !isAvail;
+  }
+
+  function updateAllPanelKeyNotices() {
+    var panels = document.querySelectorAll(".mx-ai-panel");
+    for (var i = 0; i < panels.length; i++) {
+      updatePanelKeyNotice(panels[i]);
+    }
+    var figures = document.querySelectorAll(".mx-ai-figure-wrap");
+    for (var j = 0; j < figures.length; j++) {
+      if (typeof figures[j]._refresh === "function") figures[j]._refresh();
+    }
+  }
+
+  function restoreChatLog(chatLog, blockId) {
+    if (!chatLog || typeof chatLog.appendChild !== "function") return;
+    try {
+      while (chatLog.firstChild) {
+        chatLog.removeChild(chatLog.firstChild);
+      }
+    } catch (e) {}
+
+    var list;
+    try {
+      list = getConversation(blockId);
+    } catch (e) {
+      list = [];
+    }
+    if (!Array.isArray(list)) return;
+
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i];
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+
+      var role;
+      try { role = item.role; } catch (e) { continue; }
+      if (role !== "assistant" && role !== "user") continue;
+
+      var content;
+      try { content = item.content; } catch (e) { continue; }
+      if (typeof content !== "string") continue;
+
+      try {
+        var bubble = document.createElement("div");
+        bubble.className = "mx-ai-bubble mx-ai-bubble-" + role;
+        bubble.setAttribute("dir", "auto");
+
+        if (item.isError === true) {
+          bubble.classList.add("mx-ai-error");
+          bubble.textContent = content;
+        } else if (role === "assistant") {
+          try {
+            renderRich(bubble, content);
+          } catch (errRich) {
+            bubble.textContent = content;
+          }
+        } else {
+          var displayText = (typeof item.display === "string" && item.display) ? item.display : content;
+          bubble.textContent = displayText;
+        }
+        chatLog.appendChild(bubble);
+      } catch (e) {}
+    }
+
+    try {
+      chatLog.scrollTop = chatLog.scrollHeight;
+    } catch (e) {}
+  }
+
+  function createAskPanel(block) {
+    var blockId = block.id;
+    var panel = document.createElement("div");
+    panel.className = "mx-ai-panel";
+    panel.setAttribute("data-mx-ai-panel", blockId);
+    panel.id = "mx-ai-panel-" + blockId;
+    panel.setAttribute("role", "region");
+    panel.setAttribute("aria-label", t.askAction + ": " + (getBlockTitle(block) || blockId));
+
+    var panelState = {
+      history: getConversation(blockId).slice(),
+      isStreaming: false,
+      abortController: null
+    };
+    panel._state = panelState;
+
+    // 1. Conversation Log
+    var chatLog = document.createElement("div");
+    chatLog.className = "mx-ai-chat-log";
+    chatLog.setAttribute("role", "log");
+    chatLog.setAttribute("aria-live", "polite");
+    chatLog.setAttribute("aria-atomic", "false");
+    chatLog.setAttribute("aria-label", t.chatLogAria);
+    panel.appendChild(chatLog);
+
+    // 2. Question Textarea
+    var textarea = document.createElement("textarea");
+    textarea.className = "mx-ai-input mx-ai-textarea";
+    textarea.rows = 2;
+    textarea.setAttribute("dir", "auto");
+    textarea.placeholder = t.askPlaceholder;
+    textarea.setAttribute("aria-label", t.inputAria);
+    panel.appendChild(textarea);
+
+    // 3. Controls Bar
+    var controls = document.createElement("div");
+    controls.className = "mx-ai-controls";
+
+    // 3a. Context toggle checkbox
+    var checkLabel = document.createElement("label");
+    checkLabel.className = "mx-ai-checkbox-label";
+    var checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "mx-ai-context-toggle";
+    checkbox.checked = true;
+    var checkText = document.createElement("span");
+    checkText.className = "mx-ai-checkbox-text";
+    checkText.textContent = t.includeNeighbours;
+    checkLabel.appendChild(checkbox);
+    checkLabel.appendChild(checkText);
+    controls.appendChild(checkLabel);
+
+    // 3b. Button Group
+    var btnGroup = document.createElement("div");
+    btnGroup.className = "mx-ai-btn-group";
+
+    var sendBtn = document.createElement("button");
+    sendBtn.type = "button";
+    sendBtn.className = "mx-ai-btn mx-ai-btn-send mx-ai-btn-primary";
+    sendBtn.textContent = t.send;
+    btnGroup.appendChild(sendBtn);
+
+    var stopBtn = document.createElement("button");
+    stopBtn.type = "button";
+    stopBtn.className = "mx-ai-btn mx-ai-btn-stop";
+    stopBtn.textContent = t.stop;
+    stopBtn.hidden = true;
+    btnGroup.appendChild(stopBtn);
+
+    var clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.className = "mx-ai-btn mx-ai-btn-clear";
+    clearBtn.textContent = t.clear;
+    btnGroup.appendChild(clearBtn);
+
+    controls.appendChild(btnGroup);
+    panel.appendChild(controls);
+
+    function triggerSend() {
+      var question = textarea.value.trim();
+      if (!question || panelState.isStreaming) return;
+
+      if (!available()) {
+        updatePanelKeyNotice(panel);
+        return;
+      }
+
+      var isFirstTurn = (panelState.history.length === 0);
+      var promptContent = isFirstTurn
+        ? assembleInitialPrompt(block, question, checkbox.checked)
+        : question;
+
+      var userTurn = {
+        role: "user",
+        content: promptContent,
+        display: question
+      };
+      panelState.history.push(userTurn);
+
+      var userBubble = document.createElement("div");
+      userBubble.className = "mx-ai-bubble mx-ai-bubble-user";
+      userBubble.setAttribute("dir", "auto");
+      userBubble.textContent = question;
+      chatLog.appendChild(userBubble);
+
+      textarea.value = "";
+      textarea.disabled = true;
+
+      var assistantBubble = document.createElement("div");
+      assistantBubble.className = "mx-ai-bubble mx-ai-bubble-assistant";
+      assistantBubble.setAttribute("dir", "auto");
+      chatLog.appendChild(assistantBubble);
+      chatLog.scrollTop = chatLog.scrollHeight;
+
+      sendBtn.hidden = true;
+      stopBtn.hidden = false;
+      panelState.isStreaming = true;
+
+      var controller = new AbortController();
+      panelState.abortController = controller;
+
+      var renderer = createThrottledRenderer(assistantBubble);
+      var accumulatedText = "";
+
+      var apiMessages = [];
+      for (var mIdx = 0; mIdx < panelState.history.length; mIdx++) {
+        var mItem = panelState.history[mIdx];
+        if (mItem && typeof mItem === "object" && (mItem.role === "user" || mItem.role === "assistant") && typeof mItem.content === "string") {
+          apiMessages.push({ role: mItem.role, content: mItem.content });
+        }
+      }
+
+      complete({
+        system: ASK_SYSTEM_PROMPT,
+        messages: apiMessages,
+        signal: controller.signal,
+        onDelta: function (delta, fullText) {
+          accumulatedText = fullText;
+          renderer.update(fullText);
+          chatLog.scrollTop = chatLog.scrollHeight;
+        }
+      })
+      .then(function (finalText) {
+        if (!finalText || !finalText.trim()) {
+          throw new Error(t.emptyAnswer);
+        }
+        if (panelState.history.length > 0 && panelState.history[panelState.history.length - 1] === userTurn) {
+          renderer.finish(finalText);
+          panelState.history.push({
+            role: "assistant",
+            content: finalText
+          });
+          saveConversation(blockId, panelState.history);
+        }
+      })
+      .catch(function (err) {
+        renderer.cancel();
+        var isAborted = (controller.signal && controller.signal.aborted) ||
+                        (err && (err.name === "AbortError" || err.message === "Aborted"));
+        var hasActiveUserTurn = (panelState.history.length > 0 &&
+                                 panelState.history[panelState.history.length - 1] === userTurn);
+
+        if (isAborted) {
+          if (accumulatedText.trim() && hasActiveUserTurn) {
+            renderer.finish(accumulatedText);
+            panelState.history.push({
+              role: "assistant",
+              content: accumulatedText
+            });
+            saveConversation(blockId, panelState.history);
+          } else {
+            if (hasActiveUserTurn) {
+              panelState.history.pop();
+              saveConversation(blockId, panelState.history);
+            }
+            if (assistantBubble.parentNode) {
+              assistantBubble.parentNode.removeChild(assistantBubble);
+            }
+          }
+        } else {
+          if (hasActiveUserTurn) {
+            panelState.history.pop();
+            saveConversation(blockId, panelState.history);
+          }
+          assistantBubble.classList.add("mx-ai-error");
+          assistantBubble.textContent = (err && err.message) ? err.message : "Error generating answer.";
+        }
+      })
+      .then(function () {
+        if (panelState.abortController === controller) {
+          panelState.isStreaming = false;
+          panelState.abortController = null;
+          sendBtn.hidden = false;
+          stopBtn.hidden = true;
+          textarea.disabled = !available();
+          if (!textarea.disabled) {
+            textarea.focus();
+          }
+        }
+      });
+    }
+
+    sendBtn.addEventListener("click", triggerSend);
+
+    stopBtn.addEventListener("click", function () {
+      if (panelState.abortController) {
+        try { panelState.abortController.abort(); } catch (e) {}
+      }
+    });
+
+    clearBtn.addEventListener("click", function () {
+      if (panelState.isStreaming && panelState.abortController) {
+        try { panelState.abortController.abort(); } catch (e) {}
+      }
+      panelState.isStreaming = false;
+      panelState.abortController = null;
+      panelState.history = [];
+      clearConversation(blockId);
+      while (chatLog.firstChild) {
+        chatLog.removeChild(chatLog.firstChild);
+      }
+      sendBtn.hidden = false;
+      stopBtn.hidden = true;
+      textarea.value = "";
+      textarea.disabled = !available();
+      if (!textarea.disabled) {
+        textarea.focus();
+      }
+    });
+
+    textarea.addEventListener("keydown", function (e) {
+      if (e.isComposing || e.keyCode === 229) return;
+
+      if (e.key === "Escape") {
+        if (panelState.isStreaming && panelState.abortController) {
+          try { panelState.abortController.abort(); } catch (err) {}
+        }
+        return;
+      }
+
+      var isEnterSubmit = (e.key === "Enter" && !e.shiftKey) ||
+                          (e.key === "Enter" && (e.ctrlKey || e.metaKey));
+      if (isEnterSubmit) {
+        e.preventDefault();
+        if (!sendBtn.disabled && !sendBtn.hidden) {
+          triggerSend();
+        }
+      }
+    });
+
+    try { restoreChatLog(chatLog, blockId); } catch (e) {}
+    updatePanelKeyNotice(panel);
+
+    return panel;
+  }
+
+  function toggleAskPanel(block) {
+    if (!block) return;
+    var blockEl = (block.nodeType === 1) ? block : block.element;
+    if (!blockEl) return;
+    var blockId = (block.nodeType === 1) ? ((block.dataset && block.dataset.blockId) || block.id) : block.id;
+    var blockDesc = (block.nodeType === 1) ? { id: blockId, element: blockEl, type: (block.dataset && block.dataset.blockType) || "block" } : block;
+    var panel = blockEl.querySelector('.mx-ai-panel[data-mx-ai-panel="' + blockId + '"]');
+    var askBtn = blockEl.querySelector('button[data-mx-action="ask"]');
+
+    if (panel) {
+      var willOpen = panel.hidden;
+      panel.hidden = !willOpen;
+      if (askBtn) {
+        askBtn.setAttribute("aria-expanded", String(willOpen));
+        askBtn.classList.toggle("mx-active", willOpen);
+      }
+      if (willOpen) {
+        updatePanelKeyNotice(panel);
+        var input = panel.querySelector(".mx-ai-input");
+        if (input && !input.disabled) {
+          input.focus();
+        }
+      }
+      return;
+    }
+
+    panel = createAskPanel(blockDesc);
+    blockEl.appendChild(panel);
+
+    if (askBtn) {
+      askBtn.setAttribute("aria-expanded", "true");
+      askBtn.setAttribute("aria-controls", panel.id);
+      askBtn.classList.add("mx-active");
+    }
+
+    var textarea = panel.querySelector(".mx-ai-input");
+    if (textarea && !textarea.disabled) {
+      textarea.focus();
+    }
+  }
+
+  // =========================================================================
+  // S4: "Illustrate" Action (explanatory SVG)
+  // =========================================================================
+
+  var ILLUSTRATE_SYSTEM_PROMPT =
+    "You draw explanatory figures for a mathematics study guide. " +
+    "Reply with exactly one self-contained SVG inside a ```svg fence, followed by a caption of at most three sentences. " +
+    "The SVG must have a viewBox and the xmlns attribute, and must not contain scripts, style elements, " +
+    "foreignObject, images, animations or references to external resources. " +
+    "Use only basic shapes, paths, markers, gradients and text; use currentColor for strokes and text " +
+    "and assume a white background. " +
+    "LaTeX is not rendered inside the figure: write labels as plain Unicode text. " +
+    "Write the labels and the caption in the language of the block; the caption may use $...$ for math.";
+
+  var SVG_STORAGE_PREFIX = "mathia-ai-svg:";
+
+  function fnv1a(text) {
+    var h = 0x811c9dc5;
+    for (var i = 0; i < text.length; i++) {
+      h ^= text.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return ("0000000" + h.toString(16)).slice(-8);
+  }
+
+  function getSvgStoragePrefix(blockId) {
+    var path = "";
+    try {
+      path = (window.location && window.location.pathname) ? window.location.pathname : "";
+    } catch (e) {}
+    return SVG_STORAGE_PREFIX + path + ":" + blockId + ":";
+  }
+
+  /* The key carries a hash of the block text, so a recompiled document with a
+     changed block does not show a figure drawn for the old text. */
+  function getSvgStorageKey(block) {
+    return getSvgStoragePrefix(block.id) + fnv1a(extractCleanBlockText(block));
+  }
+
+  function loadFigure(block) {
+    try {
+      var raw = window.localStorage.getItem(getSvgStorageKey(block));
+      if (!raw) return null;
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed.svg !== "string") return null;
+      /* Stored data is not trusted either: it goes through the sanitiser again. */
+      var svg = sanitizeSvg(parsed.svg);
+      if (!svg) return null;
+      return { svg: svg, caption: typeof parsed.caption === "string" ? parsed.caption : "" };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function saveFigure(block, figure) {
+    try {
+      var store = window.localStorage;
+      var key = getSvgStorageKey(block);
+      var prefix = getSvgStoragePrefix(block.id);
+      var stale = [];
+      for (var i = 0; i < store.length; i++) {
+        var k = store.key(i);
+        if (k && k !== key && k.indexOf(prefix) === 0) stale.push(k);
+      }
+      for (var j = 0; j < stale.length; j++) store.removeItem(stale[j]);
+      store.setItem(key, JSON.stringify({ svg: figure.svg, caption: figure.caption }));
+    } catch (e) {
+      /* quota exceeded or private mode: the figure just is not cached */
+    }
+  }
+
+  /* Model answer -> {svg, caption}, or null when there is no usable SVG. */
+  function parseFigureResponse(text) {
+    if (typeof text !== "string") return null;
+    var match = text.match(/<svg\b[\s\S]*?<\/svg\s*>/i);
+    if (!match) return null;
+    var svg = sanitizeSvg(match[0]);
+    if (!svg) return null;
+    var caption = text.slice(match.index + match[0].length)
+      .replace(/^\s*```[^\n]*/, "")
+      .trim();
+    return { svg: svg, caption: caption };
+  }
+
+  function svgDataUrl(svg) {
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  }
+
+  function assembleIllustratePrompt(block) {
+    var title = getBlockTitle(block);
+    var type = block.type || "block";
+    var rtl = block.element && block.element.getAttribute("dir") === "rtl";
+    return [
+      "Block: " + (title ? type + " (" + title + ")" : type),
+      truncateText(extractCleanBlockText(block), MAX_PRIMARY_CHARS),
+      "Language of the block: " + (rtl ? "Persian" : "English") + ".",
+      "Draw one figure that helps a student understand this block."
+    ].join("\n\n");
+  }
+
+  function createFigureWrap(block) {
+    var wrap = document.createElement("div");
+    wrap.className = "mx-ai-figure-wrap";
+    wrap.setAttribute("data-mx-ai-figure", block.id);
+    wrap.id = "mx-ai-figure-" + block.id;
+    wrap.setAttribute("role", "region");
+    wrap.setAttribute("aria-label", t.figureAria + ": " + (getBlockTitle(block) || block.id));
+
+    var state = { figure: loadFigure(block), controller: null };
+    wrap._state = state;
+
+    var status = document.createElement("div");
+    status.className = "mx-ai-figure-status";
+    status.setAttribute("role", "status");
+    status.setAttribute("dir", "auto");
+    status.hidden = true;
+    wrap.appendChild(status);
+
+    /* The figure is shown through <img>: an SVG loaded that way cannot run
+       script or fetch anything, whatever got past the sanitiser. */
+    var box = document.createElement("div");
+    box.className = "mx-ai-figure-box";
+    var img = document.createElement("img");
+    img.className = "mx-ai-figure";
+    box.appendChild(img);
+    wrap.appendChild(box);
+
+    var caption = document.createElement("div");
+    caption.className = "mx-ai-figure-caption";
+    wrap.appendChild(caption);
+
+    var controls = document.createElement("div");
+    controls.className = "mx-ai-figure-controls";
+    var regenBtn = document.createElement("button");
+    regenBtn.type = "button";
+    regenBtn.className = "mx-ai-btn mx-ai-btn-sm mx-ai-btn-regenerate";
+    regenBtn.setAttribute("data-mx-ai-action", "illustrate-regenerate");
+    var stopBtn = document.createElement("button");
+    stopBtn.type = "button";
+    stopBtn.className = "mx-ai-btn mx-ai-btn-sm mx-ai-btn-stop";
+    stopBtn.textContent = t.stop;
+    controls.appendChild(regenBtn);
+    controls.appendChild(stopBtn);
+    wrap.appendChild(controls);
+
+    function setStatus(text, isError) {
+      status.textContent = text || "";
+      status.hidden = !text;
+      status.classList.toggle("mx-ai-error", Boolean(text && isError));
+    }
+
+    function refresh() {
+      var busy = Boolean(state.controller);
+      var avail = available();
+      var fig = state.figure;
+      if (fig) {
+        var src = svgDataUrl(fig.svg);
+        if (img.getAttribute("src") !== src) img.setAttribute("src", src);
+        img.setAttribute("alt", fig.caption || t.figureAlt);
+        if (caption._text !== fig.caption) {
+          caption._text = fig.caption;
+          renderRich(caption, fig.caption);
+        }
+      }
+      box.hidden = !fig;
+      caption.hidden = !(fig && fig.caption);
+      regenBtn.textContent = fig ? t.regenerate : t.illustrateAction;
+      regenBtn.hidden = busy || !avail;
+      stopBtn.hidden = !busy;
+      if (!avail && !fig && !busy) {
+        showUnavailableNotice(wrap, wrap.firstChild);
+      } else {
+        hideUnavailableNotice(wrap);
+      }
+    }
+
+    function generate() {
+      if (state.controller) return;
+      if (!available()) {
+        refresh();
+        return;
+      }
+      var controller = new AbortController();
+      state.controller = controller;
+      setStatus(t.drawing, false);
+      refresh();
+
+      complete({
+        system: ILLUSTRATE_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: assembleIllustratePrompt(block) }],
+        signal: controller.signal
+      })
+        .then(function (text) {
+          var figure = parseFigureResponse(text);
+          if (!figure) throw new Error(t.noFigure);
+          state.figure = figure;
+          saveFigure(block, figure);
+          setStatus("", false);
+        })
+        .catch(function (err) {
+          if (controller.signal.aborted) {
+            setStatus("", false);
+          } else {
+            setStatus((err && err.message) ? err.message : t.noFigure, true);
+          }
+        })
+        .then(function () {
+          if (state.controller === controller) state.controller = null;
+          refresh();
+        });
+    }
+
+    regenBtn.addEventListener("click", generate);
+    stopBtn.addEventListener("click", function () {
+      if (state.controller) {
+        try { state.controller.abort(); } catch (e) {}
+      }
+    });
+
+    wrap._refresh = refresh;
+    wrap._generate = generate;
+    refresh();
+    return wrap;
+  }
+
+  function toggleFigure(block) {
+    if (!block || !block.element) return;
+    var blockEl = block.element;
+    var button = blockEl.querySelector('button[data-mx-action="illustrate"]');
+    var wrap = null;
+    for (var i = 0; i < blockEl.children.length; i++) {
+      if (blockEl.children[i].classList.contains("mx-ai-figure-wrap")) wrap = blockEl.children[i];
+    }
+
+    if (wrap) {
+      var willOpen = wrap.hidden;
+      wrap.hidden = !willOpen;
+      if (button) button.setAttribute("aria-expanded", String(willOpen));
+      if (willOpen) {
+        wrap._refresh();
+        if (!wrap._state.figure) wrap._generate();
+      }
+      return;
+    }
+
+    wrap = createFigureWrap(block);
+    var bodyEl = blockEl.querySelector(".mx-block-body");
+    blockEl.insertBefore(wrap, bodyEl ? bodyEl.nextSibling : null);
+    if (button) {
+      button.setAttribute("aria-expanded", "true");
+      button.setAttribute("aria-controls", wrap.id);
+    }
+    /* A cached figure shows at once; otherwise ask for one. */
+    if (!wrap._state.figure) wrap._generate();
+  }
+
+  function tagAiActionButtons(actionId) {
+    var buttons = document.querySelectorAll('button[data-mx-action="' + actionId + '"]');
+    for (var i = 0; i < buttons.length; i++) {
+      var btn = buttons[i];
+      btn.setAttribute("data-mx-ai-action", actionId);
+      if (!btn.hasAttribute("aria-expanded")) {
+        btn.setAttribute("aria-expanded", "false");
+      }
+    }
+  }
+
+  if (window.Mathia && typeof window.Mathia.registerAction === "function") {
+    window.Mathia.registerAction({
+      id: "ask",
+      label: t.askAction,
+      run: function (block) {
+        toggleAskPanel(block);
+      }
+    });
+    tagAiActionButtons("ask");
+
+    window.Mathia.registerAction({
+      id: "illustrate",
+      label: t.illustrateAction,
+      run: function (block) {
+        toggleFigure(block);
+      }
+    });
+    tagAiActionButtons("illustrate");
+  }
 
   // Expose Mathia.ai
   if (!window.Mathia) {
@@ -1194,7 +2339,27 @@
       buildRequest: buildRequest,
       extractDelta: extractDelta,
       sanitizeSvg: sanitizeSvg,
-      markdownToNodes: markdownToNodes
+      markdownToNodes: markdownToNodes,
+      assembleInitialPrompt: assembleInitialPrompt,
+      extractCleanBlockText: extractCleanBlockText,
+      getSemanticBlocks: getSemanticBlocks,
+      truncateText: truncateText,
+      createThrottledRenderer: createThrottledRenderer,
+      ASK_SYSTEM_PROMPT: ASK_SYSTEM_PROMPT,
+      getChatStorageKey: getChatStorageKey,
+      MAX_CONTEXT_CHARS: MAX_CONTEXT_CHARS,
+      MAX_PRIMARY_CHARS: MAX_PRIMARY_CHARS,
+      getConversation: getConversation,
+      loadConversation: getConversation,
+      saveConversation: saveConversation,
+      clearConversation: clearConversation,
+      restoreChatLog: restoreChatLog,
+      sanitizeConversationList: sanitizeConversationList,
+      ILLUSTRATE_SYSTEM_PROMPT: ILLUSTRATE_SYSTEM_PROMPT,
+      assembleIllustratePrompt: assembleIllustratePrompt,
+      parseFigureResponse: parseFigureResponse,
+      getSvgStorageKey: getSvgStorageKey,
+      fnv1a: fnv1a
     }
   };
 })();
