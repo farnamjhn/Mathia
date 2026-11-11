@@ -8,6 +8,9 @@ definitions, proofs, examples and remarks — and renders them as styled callout
 sidebar table of contents and KaTeX-rendered math. Output is deterministic: the same input
 and configuration always produce the same document.
 
+although the application is labeled with math all over everything, you can probably use this for any other field of study.
+probably computer science fits this suite the best in fileds other than math but i'm pretty sure any field like physics, chemistry and... would fit this compiler well.
+
 ## Layout
 
 | Path | Purpose |
