@@ -1,5 +1,6 @@
 /target
 /crates/math-core/assets/katex
+/crates/math-core/assets/fonts
 *.html.tmp
 .DS_Store
 .agents
