@@ -119,9 +119,15 @@ impl HeuristicClassifier {
                 best = (kind, s);
             }
         }
-        let can_open =
-            matches!(node.kind, NodeKind::Paragraph | NodeKind::Heading(_) | NodeKind::Quote);
-        NodeScore { opens: can_open && best.1 >= self.config.threshold, features, best }
+        let can_open = matches!(
+            node.kind,
+            NodeKind::Paragraph | NodeKind::Heading(_) | NodeKind::Quote
+        );
+        NodeScore {
+            opens: can_open && best.1 >= self.config.threshold,
+            features,
+            best,
+        }
     }
 
     /// Classifies with the default scoping.
@@ -143,7 +149,9 @@ impl HeuristicClassifier {
         let mut i = 0;
         while i < nodes.len() {
             // Nothing absorbs past the next opener or heading.
-            let limit = (i + 1..nodes.len()).find(|&j| boundary(j)).unwrap_or(nodes.len());
+            let limit = (i + 1..nodes.len())
+                .find(|&j| boundary(j))
+                .unwrap_or(nodes.len());
 
             if opens(i) {
                 let kind = scores[i].best.0;
@@ -210,7 +218,10 @@ impl HeuristicClassifier {
                 break;
             }
             let next = self.classify_with_overrides(nodes, &overrides);
-            let stuck = next.iter().map(|b| (&b.span, b.kind)).eq(blocks.iter().map(|b| (&b.span, b.kind)));
+            let stuck = next
+                .iter()
+                .map(|b| (&b.span, b.kind))
+                .eq(blocks.iter().map(|b| (&b.span, b.kind)));
             blocks = next;
             if stuck {
                 // The requested change hit a hard boundary; asking again cannot help.
@@ -223,7 +234,9 @@ impl HeuristicClassifier {
     /// A proof runs through its QED marker, or to `limit` / the size cap.
     fn proof_end(&self, scores: &[NodeScore], start: usize, limit: usize) -> usize {
         let cap = (start + self.config.scope.proof_max_nodes.max(1)).min(limit);
-        (start..cap).find(|&j| scores[j].features.qed).map_or(cap, |j| j + 1)
+        (start..cap)
+            .find(|&j| scores[j].features.qed)
+            .map_or(cap, |j| j + 1)
     }
 
     /// A statement keeps the display math, lists and quotes that follow it,
@@ -236,8 +249,11 @@ impl HeuristicClassifier {
         limit: usize,
     ) -> usize {
         let cap = (start + self.config.scope.statement_max_nodes.max(1)).min(limit);
-        let mut needs_body =
-            scores[start].features.lead.as_ref().is_some_and(|hit| hit.body_empty);
+        let mut needs_body = scores[start]
+            .features
+            .lead
+            .as_ref()
+            .is_some_and(|hit| hit.body_empty);
         let mut end = start + 1;
         while end < cap {
             let take = match nodes[end].kind {
@@ -288,14 +304,20 @@ impl<'a> Builder<'a> {
         };
 
         let nodes = &self.nodes[span.clone()];
-        let text: String = nodes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>().join(" ");
+        let text: String = nodes
+            .iter()
+            .map(|n| n.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
         let direction = Direction::detect(&text).unwrap_or(self.fallback_dir);
 
         let heading_level = match (kind, nodes[0].kind) {
             (BlockType::Heading, NodeKind::Heading(level)) => Some(level),
             _ => None,
         };
-        let lead = score.and_then(|s| s.features.lead.as_ref()).filter(|hit| hit.kind == kind);
+        let lead = score
+            .and_then(|s| s.features.lead.as_ref())
+            .filter(|hit| hit.kind == kind);
         let number = lead.and_then(|hit| hit.number.clone());
         let name = lead.and_then(|hit| hit.name.clone());
 
@@ -362,18 +384,33 @@ mod tests {
     fn labelled_keywords_open_blocks() {
         for (md, kind) in [
             ("**قضیه ۱.** اگر $a>0$ آنگاه $a^2>0$.", BlockType::Theorem),
-            ("لم ۲: هر دنبالهٔ کراندار زیردنبالهٔ همگرا دارد.", BlockType::Lemma),
-            ("**تعریف.** مجموعهٔ $A$ را باز گوییم هرگاه ...", BlockType::Definition),
+            (
+                "لم ۲: هر دنبالهٔ کراندار زیردنبالهٔ همگرا دارد.",
+                BlockType::Lemma,
+            ),
+            (
+                "**تعریف.** مجموعهٔ $A$ را باز گوییم هرگاه ...",
+                BlockType::Definition,
+            ),
             ("برهان. فرض کنید $x \\in A$.", BlockType::Proof),
             ("اثبات: بدیهی است.", BlockType::Proof),
             ("گزاره ۳. هر گروه دوری آبلی است.", BlockType::Proposition),
             ("نتیجه ۴. پس $f$ کراندار است.", BlockType::Corollary),
-            ("مثال ۵. تابع $f(x)=x^2$ را در نظر بگیرید.", BlockType::Example),
+            (
+                "مثال ۵. تابع $f(x)=x^2$ را در نظر بگیرید.",
+                BlockType::Example,
+            ),
             ("تذکر. عکس این حکم درست نیست.", BlockType::Remark),
-            ("Theorem 1. Every bounded sequence has a convergent subsequence.", BlockType::Theorem),
+            (
+                "Theorem 1. Every bounded sequence has a convergent subsequence.",
+                BlockType::Theorem,
+            ),
             ("**Proof.** Suppose not.", BlockType::Proof),
             ("Definition 2. A set is open if ...", BlockType::Definition),
-            ("Lemma 3 (Zorn). Every chain has an upper bound.", BlockType::Lemma),
+            (
+                "Lemma 3 (Zorn). Every chain has an upper bound.",
+                BlockType::Lemma,
+            ),
             ("Corollary. Hence $f$ is bounded.", BlockType::Corollary),
         ] {
             let s = best(md);
@@ -405,7 +442,11 @@ mod tests {
         let s = best("**Proof.** Suppose not. Then $a \\implies b$, a contradiction.");
         let expected = w.lead + w.label + w.emphasis + w.logic / 3.0 + w.cue;
         assert_eq!(s.best.0, BlockType::Proof);
-        assert!((s.best.1 - expected).abs() < 1e-6, "{} vs {expected}", s.best.1);
+        assert!(
+            (s.best.1 - expected).abs() < 1e-6,
+            "{} vs {expected}",
+            s.best.1
+        );
     }
 
     #[test]
@@ -414,7 +455,10 @@ mod tests {
         let strict = HeuristicClassifier::default();
         assert_eq!(kinds(&strict.classify(&nodes)), [BlockType::Text]);
 
-        let lenient = HeuristicClassifier::new(ScoringConfig { threshold: 0.4, ..Default::default() });
+        let lenient = HeuristicClassifier::new(ScoringConfig {
+            threshold: 0.4,
+            ..Default::default()
+        });
         assert_eq!(kinds(&lenient.classify(&nodes)), [BlockType::Remark]);
     }
 
@@ -427,7 +471,10 @@ mod tests {
              که تناقض است. حکم ثابت شد. $\\blacksquare$\n\n\
              این بند دیگر جزو برهان نیست.",
         );
-        assert_eq!(kinds(&blocks), [BlockType::Theorem, BlockType::Proof, BlockType::Text]);
+        assert_eq!(
+            kinds(&blocks),
+            [BlockType::Theorem, BlockType::Proof, BlockType::Text]
+        );
         assert_eq!(blocks[1].span, 1..4);
         assert_eq!(blocks[1].id, "block-proof-1");
     }
@@ -466,7 +513,13 @@ mod tests {
         let first = ids(classify(md));
         assert_eq!(
             first,
-            ["block-lemma-1", "block-proof-1", "block-lemma-2", "block-proof-2", "block-theorem-1"]
+            [
+                "block-lemma-1",
+                "block-proof-1",
+                "block-lemma-2",
+                "block-proof-2",
+                "block-theorem-1"
+            ]
         );
         assert_eq!(first, ids(classify(md)));
     }
@@ -503,7 +556,10 @@ mod tests {
 
         let nodes = parse_markdown("Proof. One.\n\nTwo.\n\nThree. □");
         assert_eq!(c.classify(&nodes)[0].span, 0..3);
-        assert_eq!(c.classify_with_judge(&nodes, &WantNodes(2), 8)[0].span, 0..2);
+        assert_eq!(
+            c.classify_with_judge(&nodes, &WantNodes(2), 8)[0].span,
+            0..2
+        );
     }
 
     #[test]
@@ -528,12 +584,19 @@ mod tests {
         struct RejectRemarks;
         impl BlockJudge for RejectRemarks {
             fn judge(&self, block: &SemanticBlock, _: &[Node]) -> Verdict {
-                if block.kind == BlockType::Remark { Verdict::Reject } else { Verdict::Accept }
+                if block.kind == BlockType::Remark {
+                    Verdict::Reject
+                } else {
+                    Verdict::Accept
+                }
             }
         }
         let c = HeuristicClassifier::default();
         let nodes = parse_markdown("Theorem 1. A.\n\nNote: this is just prose.");
-        assert_eq!(kinds(&c.classify(&nodes)), [BlockType::Theorem, BlockType::Remark]);
+        assert_eq!(
+            kinds(&c.classify(&nodes)),
+            [BlockType::Theorem, BlockType::Remark]
+        );
         assert_eq!(
             kinds(&c.classify_with_judge(&nodes, &RejectRemarks, 4)),
             [BlockType::Theorem, BlockType::Text]

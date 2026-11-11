@@ -246,7 +246,13 @@ impl Document {
                 }),
             }
         }
-        Document { title, direction, nodes, blocks, toc }
+        Document {
+            title,
+            direction,
+            nodes,
+            blocks,
+            toc,
+        }
     }
 
     pub fn blocks_of(&self, kind: BlockType) -> impl Iterator<Item = &SemanticBlock> {

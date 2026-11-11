@@ -16,7 +16,9 @@ fn semantic(md: &str) -> Vec<(String, BlockType, usize)> {
 }
 
 fn expect(rows: &[(&str, BlockType, usize)]) -> Vec<(String, BlockType, usize)> {
-    rows.iter().map(|(id, kind, len)| (id.to_string(), *kind, *len)).collect()
+    rows.iter()
+        .map(|(id, kind, len)| (id.to_string(), *kind, *len))
+        .collect()
 }
 
 #[test]
@@ -58,13 +60,26 @@ fn persian_labels_and_direction() {
 #[test]
 fn persian_prose_using_keywords_is_not_a_block() {
     let doc = analyze(ANALYSIS_FA, &ScoringConfig::default());
-    let text: String = doc.blocks_of(BlockType::Text).map(|b| b.html.as_str()).collect();
-    for prose in ["قضیهٔ هاینه–کانتور را ثابت می‌کنیم", "نتیجه می‌گیریم", "طبق قضیه ۳.۳"] {
+    let text: String = doc
+        .blocks_of(BlockType::Text)
+        .map(|b| b.html.as_str())
+        .collect();
+    for prose in [
+        "قضیهٔ هاینه–کانتور را ثابت می‌کنیم",
+        "نتیجه می‌گیریم",
+        "طبق قضیه ۳.۳",
+    ] {
         assert!(text.contains(prose), "should be plain text: {prose}");
     }
     // The structural heading "قضیهٔ اصلی" is a section, not a theorem.
-    let headings: Vec<_> = doc.blocks_of(BlockType::Heading).map(|b| b.title.as_str()).collect();
-    assert_eq!(headings, ["آنالیز ریاضی — جلسهٔ سوم", "پیوستگی یکنواخت", "قضیهٔ اصلی"]);
+    let headings: Vec<_> = doc
+        .blocks_of(BlockType::Heading)
+        .map(|b| b.title.as_str())
+        .collect();
+    assert_eq!(
+        headings,
+        ["آنالیز ریاضی — جلسهٔ سوم", "پیوستگی یکنواخت", "قضیهٔ اصلی"]
+    );
 }
 
 #[test]
@@ -87,8 +102,15 @@ fn english_algebra_notes() {
 
     let doc = analyze(ALGEBRA_EN, &ScoringConfig::default());
     assert_eq!(doc.direction, Direction::Ltr);
-    let text: String = doc.blocks_of(BlockType::Text).map(|b| b.html.as_str()).collect();
-    for prose in ["Definitions vary", "Note that the operation", "By Theorem 1.3"] {
+    let text: String = doc
+        .blocks_of(BlockType::Text)
+        .map(|b| b.html.as_str())
+        .collect();
+    for prose in [
+        "Definitions vary",
+        "Note that the operation",
+        "By Theorem 1.3",
+    ] {
         assert!(text.contains(prose), "should be plain text: {prose}");
     }
 }
@@ -96,7 +118,11 @@ fn english_algebra_notes() {
 #[test]
 fn table_of_contents_nests_blocks_under_sections() {
     let doc = analyze(ALGEBRA_EN, &ScoringConfig::default());
-    let toc: Vec<_> = doc.toc.iter().map(|e| (e.depth, e.title.as_str())).collect();
+    let toc: Vec<_> = doc
+        .toc
+        .iter()
+        .map(|e| (e.depth, e.title.as_str()))
+        .collect();
     assert_eq!(
         toc,
         [
@@ -124,7 +150,10 @@ fn table_of_contents_nests_blocks_under_sections() {
 fn classification_is_deterministic() {
     let config = ScoringConfig::default();
     assert_eq!(analyze(ANALYSIS_FA, &config), analyze(ANALYSIS_FA, &config));
-    let options = HtmlOptions { math: MathAssets::None, title: None };
+    let options = HtmlOptions {
+        math: MathAssets::None,
+        title: None,
+    };
     assert_eq!(
         compile(ALGEBRA_EN, &config, &options).unwrap(),
         compile(ALGEBRA_EN, &config, &options).unwrap()
@@ -137,7 +166,11 @@ fn compiled_html_has_a_hook_for_every_block() {
     let doc = analyze(ANALYSIS_FA, &config);
     let html = compile(ANALYSIS_FA, &config, &HtmlOptions::default()).unwrap();
     for block in &doc.blocks {
-        assert!(html.contains(&format!("data-block-id=\"{}\"", block.id)), "{}", block.id);
+        assert!(
+            html.contains(&format!("data-block-id=\"{}\"", block.id)),
+            "{}",
+            block.id
+        );
     }
     assert_eq!(html.matches("data-block-actions=").count(), 8);
 }

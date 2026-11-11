@@ -61,7 +61,11 @@ pub struct Lexicon {
 }
 
 fn fold_all(items: &[String]) -> Vec<String> {
-    items.iter().map(|s| fold(s)).filter(|s| !s.is_empty()).collect()
+    items
+        .iter()
+        .map(|s| fold(s))
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn skip_ws(chars: &[char], mut p: usize) -> usize {
@@ -113,8 +117,11 @@ impl Lexicon {
             total => math_chars as f32 / total as f32,
         };
 
-        let logic_count: usize =
-            self.logic.iter().map(|sym| count_symbol(&node.flat, sym)).sum();
+        let logic_count: usize = self
+            .logic
+            .iter()
+            .map(|sym| count_symbol(&node.flat, sym))
+            .sum();
 
         let qed_tail = tail(low_flat.trim_end(), QED_TAIL_CHARS);
         let has = |cues: &[String]| cues.iter().any(|c| low_flat.contains(c.as_str()));
@@ -132,9 +139,9 @@ impl Lexicon {
             proof_cue: has(&self.proof_cues),
             statement_cue: has(&self.statement_cues),
             continuation: self.continuation.iter().any(|c| {
-                lead_text.strip_prefix(c.as_str()).is_some_and(|rest| {
-                    !rest.chars().next().is_some_and(char::is_alphanumeric)
-                })
+                lead_text
+                    .strip_prefix(c.as_str())
+                    .is_some_and(|rest| !rest.chars().next().is_some_and(char::is_alphanumeric))
             }),
         }
     }
@@ -145,7 +152,9 @@ impl Lexicon {
             .iter()
             .filter(|(_, word, _)| {
                 low[at..].starts_with(word)
-                    && !low.get(at + word.len()).is_some_and(|c| c.is_alphanumeric())
+                    && !low
+                        .get(at + word.len())
+                        .is_some_and(|c| c.is_alphanumeric())
             })
             .max_by_key(|(_, word, _)| word.len())
             .map(|(kind, word, _)| (*kind, word.len()))
@@ -188,11 +197,15 @@ impl Lexicon {
                 q = skip_ws(low, q + 3);
             }
             if q < n {
-                refers = self.keyword_at(low, q).is_some_and(|(k, _)| k != BlockType::Proof);
+                refers = self
+                    .keyword_at(low, q)
+                    .is_some_and(|(k, _)| k != BlockType::Proof);
             }
         }
 
-        let punct = norm.get(p).is_some_and(|c| matches!(c, ':' | '.' | '-' | '–' | '—'));
+        let punct = norm
+            .get(p)
+            .is_some_and(|c| matches!(c, ':' | '.' | '-' | '–' | '—'));
         if punct {
             p += 1;
         }
@@ -215,7 +228,10 @@ fn count_symbol(hay: &str, symbol: &str) -> usize {
     hay.match_indices(symbol)
         .filter(|(i, m)| {
             !is_command
-                || !hay[i + m.len()..].chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                || !hay[i + m.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic())
         })
         .count()
 }
@@ -243,7 +259,9 @@ mod tests {
 
     #[test]
     fn english_label_keeps_name_case() {
-        let lead = features("Theorem 1 (Cauchy). Let $G$ be a finite group.").lead.unwrap();
+        let lead = features("Theorem 1 (Cauchy). Let $G$ be a finite group.")
+            .lead
+            .unwrap();
         assert_eq!(lead.kind, BlockType::Theorem);
         assert_eq!(lead.number.as_deref(), Some("1"));
         assert_eq!(lead.name.as_deref(), Some("Cauchy"));
@@ -252,8 +270,14 @@ mod tests {
     #[test]
     fn arabic_letter_variants_from_ocr_still_match() {
         // "تعريف" typed with Arabic yeh, "قضيه" likewise.
-        assert_eq!(features("تعريف ۱. گروه").lead.unwrap().kind, BlockType::Definition);
-        assert_eq!(features("قضيه ۲: متن").lead.unwrap().kind, BlockType::Theorem);
+        assert_eq!(
+            features("تعريف ۱. گروه").lead.unwrap().kind,
+            BlockType::Definition
+        );
+        assert_eq!(
+            features("قضيه ۲: متن").lead.unwrap().kind,
+            BlockType::Theorem
+        );
     }
 
     #[test]
@@ -265,7 +289,9 @@ mod tests {
 
     #[test]
     fn unlabelled_lead_is_flagged() {
-        let lead = features("Note that $f$ is continuous on the interval.").lead.unwrap();
+        let lead = features("Note that $f$ is continuous on the interval.")
+            .lead
+            .unwrap();
         assert_eq!(lead.kind, BlockType::Remark);
         assert!(!lead.labelled);
     }
@@ -274,7 +300,12 @@ mod tests {
     fn proof_referring_to_a_statement_is_labelled() {
         assert!(features("اثبات قضیه ۲.۱ را می‌آوریم").lead.unwrap().labelled);
         assert!(features("Proof of Lemma 3 follows").lead.unwrap().labelled);
-        assert!(!features("Proof techniques vary widely").lead.unwrap().labelled);
+        assert!(
+            !features("Proof techniques vary widely")
+                .lead
+                .unwrap()
+                .labelled
+        );
     }
 
     #[test]

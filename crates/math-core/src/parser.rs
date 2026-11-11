@@ -100,7 +100,15 @@ fn build(events: Vec<Event>, source: Range<usize>) -> Node {
         html::push_html(&mut out, events.into_iter());
     }
 
-    Node { kind, text, flat, math, leading_emphasis, html: out, source }
+    Node {
+        kind,
+        text,
+        flat,
+        math,
+        leading_emphasis,
+        html: out,
+        source,
+    }
 }
 
 #[cfg(test)]
@@ -109,12 +117,18 @@ mod tests {
 
     #[test]
     fn splits_top_level_nodes_and_extracts_math() {
-        let src = "# عنوان\n\n**قضیه ۱.** اگر $x > 0$ آنگاه\n$$x^2 > 0.$$\n\n$$a = b$$\n\n- یک\n- دو\n";
+        let src =
+            "# عنوان\n\n**قضیه ۱.** اگر $x > 0$ آنگاه\n$$x^2 > 0.$$\n\n$$a = b$$\n\n- یک\n- دو\n";
         let nodes = parse_markdown(src);
         let kinds: Vec<_> = nodes.iter().map(|n| n.kind).collect();
         assert_eq!(
             kinds,
-            [NodeKind::Heading(1), NodeKind::Paragraph, NodeKind::DisplayMath, NodeKind::List]
+            [
+                NodeKind::Heading(1),
+                NodeKind::Paragraph,
+                NodeKind::DisplayMath,
+                NodeKind::List
+            ]
         );
 
         assert_eq!(nodes[0].html, "عنوان");
@@ -125,8 +139,14 @@ mod tests {
         assert!(thm.flat.contains("x^2 > 0."));
         assert_eq!(thm.math.len(), 2);
         assert!(!thm.math[0].display && thm.math[1].display);
-        assert!(thm.html.contains(r#"<span class="math math-inline">x &gt; 0</span>"#));
-        assert_eq!(&src[thm.source.clone()].chars().take(2).collect::<String>(), "**");
+        assert!(
+            thm.html
+                .contains(r#"<span class="math math-inline">x &gt; 0</span>"#)
+        );
+        assert_eq!(
+            &src[thm.source.clone()].chars().take(2).collect::<String>(),
+            "**"
+        );
     }
 
     #[test]
