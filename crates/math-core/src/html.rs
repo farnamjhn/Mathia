@@ -10,6 +10,11 @@ use crate::model::{BlockType, Document};
 const STYLE_CSS: &str = include_str!("../assets/style.css");
 const RUNTIME_JS: &str = include_str!("../assets/runtime.js");
 
+#[cfg(feature = "bundled-katex")]
+const BUNDLED_KATEX_CSS: &str = include_str!("../assets/katex/katex.prepared.css");
+#[cfg(feature = "bundled-katex")]
+const BUNDLED_KATEX_JS: &str = include_str!("../assets/katex/katex.min.js");
+
 /// KaTeX stylesheet (fonts already inlined as `data:` URIs) and script.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KatexAssets {
@@ -88,7 +93,12 @@ pub fn render(doc: &Document, options: &HtmlOptions) -> Result<String> {
         toc: doc
             .toc
             .iter()
-            .map(|e| TocView { id: &e.id, kind: e.kind.slug(), depth: e.depth.max(1), title: &e.title })
+            .map(|e| TocView {
+                id: &e.id,
+                kind: e.kind.slug(),
+                depth: e.depth.max(1),
+                title: &e.title,
+            })
             .collect(),
         blocks: doc
             .blocks
@@ -121,8 +131,10 @@ fn math_head(math: &MathAssets) -> String {
             katex.js.replace("</script", "<\\/script"),
         ),
         MathAssets::Cdn { version } => {
-            let version: String =
-                version.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '.').collect();
+            let version: String = version
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '.')
+                .collect();
             format!(
                 "<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/katex@{version}/dist/katex.min.css\">\n\
                  <script src=\"https://cdn.jsdelivr.net/npm/katex@{version}/dist/katex.min.js\"></script>"
@@ -145,6 +157,23 @@ impl KatexAssets {
         let js = String::from_utf8_lossy(&read("katex.min.js")?).into_owned();
         let css = inline_fonts(&css, |file| read(file))?;
         Ok(KatexAssets { css, js })
+    }
+
+    /// Pre-bundled KaTeX assets embedded at compile time (requires `bundled-katex` feature).
+    #[cfg(feature = "bundled-katex")]
+    pub fn bundled() -> Self {
+        KatexAssets {
+            css: BUNDLED_KATEX_CSS.to_string(),
+            js: BUNDLED_KATEX_JS.to_string(),
+        }
+    }
+}
+
+impl MathAssets {
+    /// Offline inline KaTeX assets embedded at compile time (requires `bundled-katex` feature).
+    #[cfg(feature = "bundled-katex")]
+    pub fn bundled() -> Self {
+        MathAssets::Inline(KatexAssets::bundled())
     }
 }
 
@@ -225,7 +254,9 @@ mod tests {
             r#"<section id="block-theorem-1" class="mx-block mx-theorem" data-block-id="block-theorem-1" data-block-type="theorem" dir="rtl""#
         ));
         assert!(html.contains(r#"data-block-id="block-proof-1""#));
-        assert!(html.contains(r#"data-block-id="block-theorem-2" data-block-type="theorem" dir="ltr""#));
+        assert!(
+            html.contains(r#"data-block-id="block-theorem-2" data-block-type="theorem" dir="ltr""#)
+        );
         assert!(html.contains("data-block-actions"));
         assert!(html.contains(r#"<span class="math math-inline">f(a)=f(b)</span>"#));
     }
@@ -243,7 +274,9 @@ mod tests {
     #[test]
     fn math_assets_modes() {
         assert!(!render_sample(MathAssets::None).contains("katex.min.js"));
-        let cdn = render_sample(MathAssets::Cdn { version: "0.16.22\"><x".into() });
+        let cdn = render_sample(MathAssets::Cdn {
+            version: "0.16.22\"><x".into(),
+        });
         assert!(cdn.contains("katex@0.16.22x/dist/katex.min.js"));
 
         let inline = render_sample(MathAssets::Inline(KatexAssets {
@@ -279,5 +312,105 @@ mod tests {
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn inline_build_contains_no_http_urls() {
+        let sample = "# آنالیز\n\n**قضیه ۱ (رول).** اگر $f(a)=f(b)$ آنگاه $f'(c)=0$.\n\n$$\\int_a^b f(x) dx = 0$$\n";
+        let doc = analyze(sample, &ScoringConfig::default());
+
+        let fake_assets = KatexAssets {
+            css: "@font-face{font-family:KaTeX_Main;src:url(data:font/woff2;base64,dGVzdA==) format(\"woff2\");}\n.katex{font-size:1em;}".into(),
+            js: "window.katex={render:function(){}};".into(),
+        };
+
+        let html = render(
+            &doc,
+            &HtmlOptions {
+                math: MathAssets::Inline(fake_assets),
+                title: None,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !html.contains("http://"),
+            "Inline build should contain no http:// URLs"
+        );
+        assert!(
+            !html.contains("https://"),
+            "Inline build should contain no https:// URLs"
+        );
+        assert!(html.contains("mx-katex-css"));
+        assert!(html.contains("mx-katex-js"));
+    }
+
+    #[test]
+    fn vendored_from_dir_build_contains_no_http_urls() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let vendored_dir = manifest_dir.join("assets/katex");
+        if vendored_dir.join("katex.min.css").is_file() {
+            let assets = KatexAssets::from_dir(&vendored_dir)
+                .expect("failed to load vendored KaTeX from dir");
+            let doc = analyze("# آنالیز\n\n$f(x) = x^2$", &ScoringConfig::default());
+            let html = render(
+                &doc,
+                &HtmlOptions {
+                    math: MathAssets::Inline(assets),
+                    title: None,
+                },
+            )
+            .unwrap();
+
+            // KaTeX JS contains W3C XML namespace strings (e.g. xmlns="http://www.w3.org/2000/svg").
+            // We ensure there are zero external HTTP/HTTPS network URLs.
+            assert!(!html.contains("https://"), "No external HTTPS URLs allowed");
+            assert!(!html.contains("cdn.jsdelivr.net"), "Must not depend on CDN");
+            assert!(
+                !html.contains("src=\"http"),
+                "Must not load external scripts"
+            );
+            assert!(
+                !html.contains("href=\"http"),
+                "Must not link external stylesheets"
+            );
+            let non_xmlns_http = html
+                .match_indices("http://")
+                .filter(|&(idx, _)| !html[idx..].starts_with("http://www.w3.org/"))
+                .count();
+            assert_eq!(non_xmlns_http, 0, "No external HTTP URLs allowed");
+            assert!(html.contains("KaTeX_Main"));
+        }
+    }
+
+    #[cfg(feature = "bundled-katex")]
+    #[test]
+    fn bundled_katex_build_contains_no_http_urls() {
+        let doc = analyze("# آنالیز\n\n$f(x) = x^2$", &ScoringConfig::default());
+        let html = render(
+            &doc,
+            &HtmlOptions {
+                math: MathAssets::bundled(),
+                title: None,
+            },
+        )
+        .unwrap();
+
+        assert!(!html.contains("https://"), "No external HTTPS URLs allowed");
+        assert!(!html.contains("cdn.jsdelivr.net"), "Must not depend on CDN");
+        assert!(
+            !html.contains("src=\"http"),
+            "Must not load external scripts"
+        );
+        assert!(
+            !html.contains("href=\"http"),
+            "Must not link external stylesheets"
+        );
+        let non_xmlns_http = html
+            .match_indices("http://")
+            .filter(|&(idx, _)| !html[idx..].starts_with("http://www.w3.org/"))
+            .count();
+        assert_eq!(non_xmlns_http, 0, "No external HTTP URLs allowed");
+        assert!(html.contains("KaTeX_Main"));
     }
 }

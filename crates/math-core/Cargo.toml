@@ -12,3 +12,7 @@ pulldown-cmark.workspace = true
 askama.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+
+[features]
+default = []
+bundled-katex = []

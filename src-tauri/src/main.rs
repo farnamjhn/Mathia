@@ -10,6 +10,7 @@ use std::process::ExitCode;
 
 use math_core::{HtmlOptions, KatexAssets, MathAssets, ScoringConfig};
 
+#[cfg(not(feature = "bundled-katex"))]
 const KATEX_CDN_VERSION: &str = "0.16.22";
 
 fn run() -> Result<(), String> {
@@ -22,7 +23,9 @@ fn run() -> Result<(), String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-o" | "--output" => output = Some(args.next().ok_or("-o needs a path")?.into()),
-            "--katex-dir" => katex_dir = Some(args.next().ok_or("--katex-dir needs a path")?.into()),
+            "--katex-dir" => {
+                katex_dir = Some(args.next().ok_or("--katex-dir needs a path")?.into())
+            }
             "--no-math" => no_math = true,
             "-h" | "--help" => {
                 println!("usage: mathia <input.md> [-o out.html] [--katex-dir DIR] [--no-math]");
@@ -32,26 +35,51 @@ fn run() -> Result<(), String> {
             other => return Err(format!("unexpected argument: {other}")),
         }
     }
-    let input = input.ok_or("usage: mathia <input.md> [-o out.html] [--katex-dir DIR] [--no-math]")?;
+    let input =
+        input.ok_or("usage: mathia <input.md> [-o out.html] [--katex-dir DIR] [--no-math]")?;
     let output = output.unwrap_or_else(|| input.with_extension("html"));
 
     let math = match (no_math, katex_dir) {
         (true, _) => MathAssets::None,
-        (false, Some(dir)) => MathAssets::Inline(KatexAssets::from_dir(dir).map_err(|e| e.to_string())?),
+        (false, Some(dir)) => {
+            MathAssets::Inline(KatexAssets::from_dir(dir).map_err(|e| e.to_string())?)
+        }
+        #[cfg(feature = "bundled-katex")]
+        (false, None) => MathAssets::bundled(),
+        #[cfg(not(feature = "bundled-katex"))]
         (false, None) => {
-            eprintln!("note: no --katex-dir given; the output loads KaTeX from a CDN and needs a network");
-            MathAssets::Cdn { version: KATEX_CDN_VERSION.into() }
+            let vendored =
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../crates/math-core/assets/katex");
+            if vendored.join("katex.min.css").is_file() {
+                MathAssets::Inline(KatexAssets::from_dir(&vendored).map_err(|e| e.to_string())?)
+            } else {
+                eprintln!(
+                    "note: no --katex-dir given; the output loads KaTeX from a CDN and needs a network"
+                );
+                MathAssets::Cdn {
+                    version: KATEX_CDN_VERSION.into(),
+                }
+            }
         }
     };
 
-    let markdown = std::fs::read_to_string(&input).map_err(|e| format!("{}: {e}", input.display()))?;
+    let markdown =
+        std::fs::read_to_string(&input).map_err(|e| format!("{}: {e}", input.display()))?;
     let document = math_core::analyze(&markdown, &ScoringConfig::default());
     let html = math_core::html::render(&document, &HtmlOptions { math, title: None })
         .map_err(|e| e.to_string())?;
     std::fs::write(&output, html).map_err(|e| format!("{}: {e}", output.display()))?;
 
-    let semantic = document.blocks.iter().filter(|b| b.kind.is_semantic()).count();
-    println!("{} -> {} ({semantic} semantic blocks)", input.display(), output.display());
+    let semantic = document
+        .blocks
+        .iter()
+        .filter(|b| b.kind.is_semantic())
+        .count();
+    println!(
+        "{} -> {} ({semantic} semantic blocks)",
+        input.display(),
+        output.display()
+    );
     Ok(())
 }
 

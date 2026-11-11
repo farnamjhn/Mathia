@@ -41,11 +41,11 @@ label, emphasis, or supporting features.
 
 ## Phase 1 — finish the deterministic compiler
 
-1. **Vendor KaTeX.** Add `scripts/vendor-katex.sh` that fetches a pinned KaTeX release into
-   `crates/math-core/assets/katex/` (git-ignored) and records its checksum. Then either
-   `include_str!` the prepared CSS/JS behind a `bundled-katex` cargo feature, or have the Tauri
-   shell call `KatexAssets::from_dir` on its resource directory. Add a test that an inline
-   build contains no `http` URL.
+1. [x] **Vendor KaTeX.** Added `scripts/vendor-katex.sh` that fetches pinned KaTeX v0.16.22 into
+   `crates/math-core/assets/katex/` (git-ignored) with SHA-256 verification and inlines WOFF2 fonts
+   into `katex.prepared.css`. Added `bundled-katex` cargo feature with `KatexAssets::bundled()`,
+   `MathAssets::bundled()`, and automatic fallback to vendored assets in `mathia` CLI.
+   Tests verify that inline/bundled output contains zero external HTTP/HTTPS network URLs.
 2. **OCR input normalisation** (new `src/normalize.rs`, run before the parser):
    - `\( … \)` → `$ … $` and `\[ … \]` → `$$ … $$` (Mathpix-style delimiters);
    - `\begin{equation|align|gather}` environments outside `$$` wrapped as display math;

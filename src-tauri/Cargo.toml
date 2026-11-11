@@ -9,3 +9,7 @@ authors.workspace = true
 [dependencies]
 math-core.workspace = true
 # tauri / tauri-build are added in Phase 3 (PLAN.md).
+
+[features]
+default = ["bundled-katex"]
+bundled-katex = ["math-core/bundled-katex"]
