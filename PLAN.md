@@ -12,11 +12,12 @@ Done (Task 1 — the foundation, all in `crates/math-core`, `cargo test` green):
 | Workspace | `Cargo.toml` | members `crates/math-core`, `src-tauri`; shared dependency versions |
 | Domain model | `src/model.rs` | `Document`, `SemanticBlock`, `BlockType`, `TocEntry`, `Node`, `Direction` |
 | Config | `src/config.rs` | `ScoringConfig`: threshold, weights, keyword tables, cue lists, scope limits — all data, serde-ready |
-| Parser | `src/parser.rs` | `pulldown-cmark` with `ENABLE_MATH`; one `Node` per top-level Markdown element |
+| Normaliser | `src/normalize.rs` | OCR artefacts → clean Markdown, before parsing |
+| Parser | `src/parser.rs` | `pulldown-cmark` with `ENABLE_MATH`; one `Node` per top-level Markdown element; LaTeX environments; raw HTML escaped |
 | Features | `src/features.rs` | lead keyword + label, mentions, math density, logic symbols, QED ending, cues |
-| Classifier | `src/classifier.rs` | scoring → openers → scoping; `ScopeOverrides`, `BlockJudge`, `classify_with_judge` |
+| Classifier | `src/classifier.rs`, `src/crossref.rs` | scoring → openers → scoping → proof links → reference links; `ScopeOverrides`, `BlockJudge`, `classify_with_judge` |
 | HTML | `src/html.rs`, `templates/document.html`, `assets/` | `askama` template, callouts, sidebar TOC, `data-block-id` hooks, micro-runtime |
-| CLI stand-in | `src-tauri/src/main.rs` | `mathia in.md [-o out.html] [--katex-dir DIR]`; no Tauri dependency yet |
+| CLI stand-in | `src-tauri/src/main.rs` | `mathia in.md [-o out.html] [--config F] [--explain] [--font F] [--katex-dir DIR]`; no Tauri dependency yet |
 
 Decisions taken (change here first if they are revisited):
 
@@ -24,8 +25,10 @@ Decisions taken (change here first if they are revisited):
   base64 WOFF2. `MathAssets::Cdn` exists for development only.
 - **Block scope:** an opener absorbs following nodes until a terminator (QED marker, next
   opener, heading, size cap). Scope is an explicit node range (`SemanticBlock::span`).
-- **Block types:** Theorem, Lemma, Proposition, Corollary, Definition, Proof, Example, Remark
-  (+ structural Heading, Text).
+- **Block types:** Theorem, Lemma, Proposition, Corollary, Definition, Proof, Example, Remark,
+  Exercise, Solution, Claim, Notation (+ structural Heading, Text).
+- **Raw HTML** in the source is always escaped, never passed through.
+- **Persian digits** are kept as written in the output; they are folded only for matching.
 - **`src-tauri`:** placeholder binary until Phase 3.
 - **Libraries:** `pulldown-cmark` (byte offsets and native `$`/`$$` events) and `askama`
   (templates checked at compile time, no runtime template loading).
@@ -37,7 +40,8 @@ type is a weighted sum (`lead 0.45 + label 0.20 + emphasis 0.15`, or `mention 0.
 type-specific terms: QED/logic/cue for proofs, definitional cue/math for definitions,
 math/logic/cue for statements). A paragraph, heading or block quote whose best score reaches
 `threshold` (0.5) opens a block. A bare keyword (0.45) is deliberately not enough: it needs a
-label, emphasis, or supporting features.
+label, emphasis, or supporting features. A label is punctuation, a `(name)` or a title-only
+line — a bare number is not ("Theorem 2 gives…" is prose).
 
 ## Phase 1 — finish the deterministic compiler
 
@@ -46,37 +50,53 @@ label, emphasis, or supporting features.
    into `katex.prepared.css`. Added `bundled-katex` cargo feature with `KatexAssets::bundled()`,
    `MathAssets::bundled()`, and automatic fallback to vendored assets in `mathia` CLI.
    Tests verify that inline/bundled output contains zero external HTTP/HTTPS network URLs.
-2. **OCR input normalisation** (new `src/normalize.rs`, run before the parser):
-   - `\( … \)` → `$ … $` and `\[ … \]` → `$$ … $$` (Mathpix-style delimiters);
-   - `\begin{equation|align|gather}` environments outside `$$` wrapped as display math;
-   - unbalanced `$`, stray `\\`, and broken bold markers (`* *قضیه* *`);
-   - Persian/Arabic digit and letter variants are already folded for matching (`text.rs`);
-     decide whether to also normalise them in the output.
-3. **LaTeX theorem environments.** Treat `\begin{theorem} … \end{theorem}` (and `proof`,
-   `definition`, `lemma`, …) as explicit, score-1.0 blocks with exact scope.
+2. [x] **OCR input normalisation.** `src/normalize.rs`, run by `analyze` before the parser
+   (offsets in `Node::source` refer to the normalised text). Passes, all skipping code and
+   existing `$` math: `\( … \)` / `\[ … \]` → dollars (only when the content looks like
+   math, so `\[1\]` citations survive); bare `equation|align|alignat|gather` wrapped in `$$`;
+   prose-level `\\` → hard break; spaced bold markers (`* *قضیه* *`, `** قضیه **متن`);
+   unbalanced `$` / `$$`. Idempotent. Digits in the output are kept as written.
+3. [x] **LaTeX theorem environments.** The parser cuts `\begin{theorem}[Name] … \end{theorem}`
+   (names in `BlockType::from_env_name`) out of the source; the first body node carries an
+   `EnvSpan`, and the classifier turns it into a score-1.0 block with exactly that scope
+   (`EndReason::Environment`). Not nested; `\begin` must start its line.
 4. **Classifier coverage.**
-   - Known weak spot: an unpunctuated reference at the start of a paragraph
-     ("قضیه ۲ نتیجه می‌دهد که…") scores as a labelled theorem. Add a feature for a verb/cue
-     directly after the label, or lower `label` when no punctuation follows the number.
-   - Solutions (`حل`, `Solution`) attached to examples; exercises (`تمرین`); claims; notation.
-   - Proofs with no keyword but a strong QED/logic profile directly after a statement
-     ("previous block is a statement" as a feature).
-   - Link each proof to the statement it proves (`proves: Option<BlockId>`), by adjacency and
-     by "Proof of Theorem 2" references; expose it in HTML as `data-proves`.
-   - Optional static decision tree over the same `Features` as an alternative to the linear
+   - [x] Reference weak spot: a bare number is no longer a label, and a verb right after the
+     label (`reference_cues`: "نتیجه می‌دهد", "implies", "is", …) demotes the lead to a mention.
+   - [x] New types `Exercise`, `Solution`, `Claim`, `Notation` (keywords, labels, env names).
+     A solution without a QED mark is scoped like a statement.
+   - [x] Keyword-less proofs: a paragraph directly after a statement scores
+     `after_statement 0.25 + qed + logic + cue`, with the QED looked for up to the next boundary.
+   - [x] `SemanticBlock::proves`: by "Proof of Theorem 2" reference, else adjacency (plain
+     text may sit in between); solutions link to their example/exercise. HTML: `data-proves`,
+     a back-link in the block head, `Mathia.block(id).proves`.
+   - [ ] Optional static decision tree over the same `Features` as an alternative to the linear
      scorer, selected in `ScoringConfig`.
-5. **Config I/O.** Load/save `ScoringConfig` as TOML/JSON (types already derive serde), with
-   validation (threshold in `[0,1]`, non-empty keywords) and a versioned schema.
-6. **Diagnostics.** `analyze` returns per-node scores and the reason a block ended, so the UI
-   can show "why is this a theorem" and so thresholds can be tuned on real files.
-7. **Corpus tests.** Collect real OCR output into `tests/fixtures/`, store expected
-   classifications as snapshot files, and track precision/recall per type.
-8. **HTML hardening.** Sanitise raw HTML coming from the Markdown (or disable it), escape
-   `</script` in all inlined assets (done for KaTeX), add a restrictive `Content-Security-Policy`
-   meta tag compatible with the runtime.
-9. **Typography.** Embed a subset Persian font (Vazirmatn) as WOFF2; cross-reference links
-   ("طبق قضیه ۳.۳" → `#block-theorem-…`); numbered equations; print stylesheet polish;
-   nested, collapsible TOC sections; optional theme switch.
+5. [x] **Config I/O.** `ScoringConfig::{parse, serialize, load, save, validate}` for TOML and
+   JSON, `schema_version` (currently 1; newer files are rejected), unknown fields rejected,
+   partial files keep defaults. CLI: `--config FILE`, `--dump-config`.
+6. [x] **Diagnostics.** `analyze_detailed` returns `Analysis { document, scores, block_of }`
+   (all type scores per node); every block records `end: EndReason`. `Analysis::explain` /
+   `mathia --explain` print the table.
+7. [x] **Corpus tests.** `tests/corpus.rs`: snapshots in `tests/snapshots/*.snap`
+   (`MATHIA_UPDATE_SNAPSHOTS=1` regenerates) and hand-labelled `tests/fixtures/*.gold` files
+   giving precision/recall per type (floor 0.9, currently 1.00 on 33 blocks).
+   - [ ] The four fixtures are written by hand in OCR style. Replace/extend with real OCR
+     output; that is where the floor starts to mean something.
+8. [x] **HTML hardening.** Raw HTML in the Markdown is shown as text; link/image URLs are
+   limited to http(s), mailto, relative and `data:image/`; `</script` / `</style` escaped in
+   every inlined asset; `Content-Security-Policy` meta tag with `default-src 'none'` and
+   inline scripts allowed by SHA-256 hash only (`src/sha256.rs`).
+9. **Typography.**
+   - [x] Cross-reference links (`src/crossref.rs`): "طبق قضیه ۳.۳" → `<a class="mx-ref">`.
+   - [x] Numbered equations: `equation` → `equation*` + `\tag{n}` across the document, with
+     `\label` / `\eqref` / `\ref` resolved. `align` / `gather` are still numbered by KaTeX
+     per formula (each restarts at 1).
+   - [x] Print stylesheet, collapsible TOC sections, light/dark switch (remembered in
+     `localStorage`). Not yet checked in a real browser — only syntax-checked.
+   - [x] `HtmlOptions::fonts` / `mathia --font F.woff2` embed a WOFF2 text font.
+   - [ ] Vendor and subset Vazirmatn (`scripts/vendor-fonts.sh`, pinned + checksummed like
+     KaTeX) and make it the bundled default.
 
 ## Phase 1b — decision models (jev, clef, laya, …)
 
@@ -128,8 +148,6 @@ semantic block (`[data-block-actions]`).
 
 ## Open questions
 
-- Should Persian digits in labels be normalised in the output, or always kept as written?
 - One HTML per Markdown file, or multi-file books with a shared TOC?
-- Is raw HTML inside the OCR Markdown ever wanted, or should it always be escaped?
 - Which providers must the in-page AI features support first, and may requests go direct
   from the browser (CORS) or do they need the desktop app as a relay?

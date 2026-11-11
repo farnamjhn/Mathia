@@ -22,7 +22,12 @@ and configuration always produce the same document.
 cargo run -p mathia -- input.md -o output.html
 ```
 
-Optionally pass `--katex-dir DIR` to inline a local KaTeX distribution.
+Options:
+
+- `--config scoring.toml` — scoring configuration (TOML or JSON); `--dump-config` prints the defaults.
+- `--explain` — print every node's scores and why each block ended where it did.
+- `--font Vazirmatn.woff2` — embed a WOFF2 text font in the output.
+- `--katex-dir DIR` — inline a local KaTeX distribution; `--no-math` leaves LaTeX unrendered.
 
 ## Development
 
