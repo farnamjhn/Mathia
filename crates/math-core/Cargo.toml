@@ -12,6 +12,8 @@ pulldown-cmark.workspace = true
 askama.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+toml.workspace = true
+serde_json.workspace = true
 
 [features]
 default = []
