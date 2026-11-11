@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/math-core", "src-tauri"]
+members = ["crates/math-core", "crates/mathia-cli", "src-tauri"]
+# Plain `cargo build` / `cargo test` leave the desktop app (and Tauri's system
+# dependencies) out; use `-p mathia-app` or `--workspace` to include it.
+default-members = ["crates/math-core", "crates/mathia-cli"]
 
 [workspace.package]
 version = "0.1.0"

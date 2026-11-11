@@ -1,4 +1,4 @@
-//! Placeholder for the Tauri v2 shell (PLAN.md, Phase 3). Until then this is
+//! Command-line front end: the desktop app lives in `src-tauri`. This is
 //! a thin CLI over `math-core`, handy for trying the compiler on real files:
 //!
 //! ```text
@@ -154,7 +154,7 @@ fn run() -> Result<(), String> {
         #[cfg(not(feature = "bundled-katex"))]
         (false, None) => {
             let vendored =
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../crates/math-core/assets/katex");
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../math-core/assets/katex");
             if vendored.join("katex.min.css").is_file() {
                 MathAssets::Inline(KatexAssets::from_dir(&vendored).map_err(|e| e.to_string())?)
             } else {
