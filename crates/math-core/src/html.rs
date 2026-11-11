@@ -259,6 +259,7 @@ struct DocumentTemplate<'a> {
     dir: &'static str,
     toc_label: &'static str,
     theme_label: &'static str,
+    print_label: &'static str,
     search_label: &'static str,
     search_none: &'static str,
     search_prev: &'static str,
@@ -356,6 +357,7 @@ pub fn render(doc: &Document, options: &HtmlOptions) -> Result<String> {
         } else {
             "Switch theme"
         },
+        print_label: if rtl { "چاپ" } else { "Print" },
         search_label: if rtl {
             "جستجو در متن…"
         } else {

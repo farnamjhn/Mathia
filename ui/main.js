@@ -32,6 +32,7 @@
     viewPrompt: $("view-prompt"), promptText: $("prompt-text"),
     copyPrompt: $("copy-prompt"), copyPromptEmpty: $("copy-prompt-empty"),
     exportFolder: $("export-folder"),
+    exportPdf: $("export-pdf"),
     recent: $("recent"), recentList: $("recent-list"), recentClear: $("recent-clear"),
     recentWrap: $("recent-wrap"), recentButton: $("recent-button"), recentMenu: $("recent-menu"),
     corrections: $("corrections"), correctionsCount: $("corrections-count"),
@@ -122,7 +123,7 @@
     el.preview.hidden = !has || !previewOpen;
     el.panes.classList.toggle("preview-closed", has && !previewOpen);
     el.previewToggle.disabled = !has;
-    el.reload.disabled = el.export.disabled = !has;
+    el.reload.disabled = el.export.disabled = el.exportPdf.disabled = !has;
   }
 
   function node(tag, className, text) {
@@ -258,6 +259,16 @@
     try {
       const dest = await invoke("export", { source, options: options() });
       if (dest) setStatus("Exported to " + dest);
+    } catch (error) {
+      setStatus(String(error), true);
+    }
+  }
+
+  async function exportPdf() {
+    if (!source) return;
+    try {
+      await invoke("export_pdf", { source, options: options() });
+      setStatus("Opened the print dialog: choose “Save as PDF”.");
     } catch (error) {
       setStatus(String(error), true);
     }
@@ -548,6 +559,10 @@
   window.addEventListener("message", (event) => {
     if (event.source !== el.frame.contentWindow) return;
     const data = event.data;
+    if (data && data.mathia === "print") {
+      exportPdf();
+      return;
+    }
     if (!data || data.mathia !== "select" || typeof data.id !== "string") return;
     if (analysis && analysis.document.blocks.some((b) => b.id === data.id)) select(data.id, true);
   });
@@ -818,6 +833,7 @@
   el.correctionsLoad.addEventListener("click", loadCorrections);
   el.correctionsClear.addEventListener("click", clearCorrections);
   el.exportFolder.addEventListener("click", exportFolder);
+  el.exportPdf.addEventListener("click", exportPdf);
 
   window.addEventListener("keydown", (event) => {
     if (el.guideDialog.open || el.configDialog.open) return;
@@ -827,6 +843,7 @@
     if (key === "o") open();
     else if (key === "f" && analysis) el.filter.focus();
     else if (key === "e") exportHtml();
+    else if (key === "p") exportPdf();
     else if (key === "r") refresh();
     else return;
     event.preventDefault();

@@ -17,7 +17,9 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use math_core::{ConfigFormat, ScopeOverrides, ScoringConfig};
-use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, State, WindowEvent};
+use tauri::{
+    AppHandle, DragDropEvent, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+};
 use tauri_plugin_dialog::DialogExt;
 
 use session::{AnalysisView, CompileOptions, Compiled, MARKDOWN_EXTENSIONS, Session, Source};
@@ -27,6 +29,16 @@ use session::{AnalysisView, CompileOptions, Compiled, MARKDOWN_EXTENSIONS, Sessi
 const PREVIEW_SCHEME: &str = "mathia-preview";
 
 type Shared = Mutex<Session>;
+
+/// The document waiting in the print window. Kept apart from the session's
+/// preview so printing never disturbs the preview frame's revision.
+#[derive(Default)]
+struct PrintDoc(Mutex<String>);
+
+/// Path of the print document on the preview scheme; every other path serves
+/// the preview.
+const PRINT_PATH: &str = "/print";
+const PRINT_LABEL: &str = "print";
 
 fn lock(state: &Shared) -> MutexGuard<'_, Session> {
     state
@@ -165,6 +177,65 @@ async fn export(
     let dest = dest.into_path().map_err(|e| e.to_string())?;
     std::fs::write(&dest, html).map_err(|e| format!("{}: {e}", dest.display()))?;
     Ok(Some(display(&dest)))
+}
+
+/// Compiles `source` and opens it in a window of its own, with the system print
+/// dialog on top: choose "Save as PDF" there. A window without any permission
+/// (no capability names it) shows the document, so it cannot reach the app's
+/// commands. The compiled page's print stylesheet lays out the pages.
+#[tauri::command]
+async fn export_pdf(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    print: State<'_, PrintDoc>,
+    source: Source,
+    options: CompileOptions,
+) -> Result<(), String> {
+    let (html, _) = lock(&state).compile(&source, &options)?;
+    *print.0.lock().unwrap_or_else(|p| p.into_inner()) = html;
+
+    let title = source
+        .path()
+        .and_then(Path::file_stem)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Document".into());
+
+    // A window left open from the last time shows the old document: reload it.
+    if let Some(window) = app.get_webview_window(PRINT_LABEL) {
+        window
+            .eval("location.reload()")
+            .map_err(|e| e.to_string())?;
+        let _ = window.set_title(&format!("{title} — Mathia"));
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    // Windows serves custom schemes as `http://<scheme>.localhost`.
+    let url = if cfg!(windows) {
+        format!("http://{PREVIEW_SCHEME}.localhost{PRINT_PATH}")
+    } else {
+        format!("{PREVIEW_SCHEME}://localhost{PRINT_PATH}")
+    };
+    let url = url.parse().map_err(|e| format!("{e}"))?;
+    WebviewWindowBuilder::new(&app, PRINT_LABEL, WebviewUrl::External(url))
+        .title(format!("{title} — Mathia"))
+        .inner_size(900.0, 1100.0)
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                // Give KaTeX a moment to typeset before the dialog snapshots it.
+                let webview = webview.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    let target = webview.clone();
+                    let _ = webview.run_on_main_thread(move || {
+                        let _ = target.print();
+                    });
+                });
+            }
+        })
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// An opaque stamp that changes when the opened file changes on disk; the
@@ -346,9 +417,16 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Shared::default())
-        .register_uri_scheme_protocol(PREVIEW_SCHEME, |context, _request| {
-            let state = context.app_handle().state::<Shared>();
-            let html = lock(&state).preview().as_bytes().to_vec();
+        .manage(PrintDoc::default())
+        .register_uri_scheme_protocol(PREVIEW_SCHEME, |context, request| {
+            let app = context.app_handle();
+            let html = if request.uri().path() == PRINT_PATH {
+                let print = app.state::<PrintDoc>();
+                let html = print.0.lock().unwrap_or_else(|p| p.into_inner());
+                html.as_bytes().to_vec()
+            } else {
+                lock(&app.state::<Shared>()).preview().as_bytes().to_vec()
+            };
             tauri::http::Response::builder()
                 .header("Content-Type", "text/html; charset=utf-8")
                 .header("Cache-Control", "no-store")
@@ -394,6 +472,7 @@ fn main() {
             analyze,
             compile,
             export,
+            export_pdf,
             get_config,
             set_config,
             reset_config,

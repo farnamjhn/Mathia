@@ -454,8 +454,21 @@
     });
   }
 
+  /* Print button. In a host frame (the desktop app) the sandboxed frame may not
+     open a print dialog itself, so it asks the host to; elsewhere it prints. */
+  function setupPrint() {
+    var button = document.getElementById("mx-print");
+    if (!button) return;
+    button.hidden = false;
+    button.addEventListener("click", function () {
+      if (window.parent !== window) window.parent.postMessage({ mathia: "print" }, "*");
+      else window.print();
+    });
+  }
+
   function start() {
     setupTheme();
+    setupPrint();
     setupHostLink();
     renderMath();
     setupCopy();

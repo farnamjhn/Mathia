@@ -10,6 +10,7 @@
     "allow-analyze",
     "allow-compile",
     "allow-export",
+    "allow-export-pdf",
     "allow-get-config",
     "allow-set-config",
     "allow-reset-config",
