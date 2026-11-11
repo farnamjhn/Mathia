@@ -1,6 +1,6 @@
 # Phase 2 — interactive runtime: implementation spec
 
-This spec is the contract for PLAN.md Phase 2. Work is cut into slices (S1–S5); each
+This spec is the contract for PLAN.md (Phase 2). Work is cut into slices (S1–S5); each
 slice must leave `cargo test` green and must not touch files outside its list unless it
 says so.
 

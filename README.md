@@ -16,21 +16,31 @@ probably computer science fits this suite the best in fileds other than math but
 | Path | Purpose |
 |---|---|
 | `crates/math-core` | Parser, feature extraction, block classifier and HTML renderer |
+| `crates/math-judge` | Decision models around the classifier: JSON contract, external-process judge, verdict cache, replay logs |
 | `crates/mathia-cli` | Command-line front end (`mathia`) |
 | `src-tauri`, `ui` | Desktop app (Tauri v2, `mathia-app`) and its frontend |
-| `PLAN.md` | Design decisions and roadmap |
+| `docs/archive/PLAN.md` | Design decisions and roadmap |
 
 ## Usage
 
 ```bash
+./scripts/vendor-katex.sh    # once: pinned, checksummed KaTeX
+./scripts/vendor-fonts.sh    # once: pinned, checksummed Vazirmatn subset
 cargo run -p mathia -- input.md -o output.html
+cargo run -p mathia -- chapters/ -o site/ --watch
 ```
+
+A folder input compiles every Markdown file in it (not recursive) into the output folder;
+`--watch` recompiles whenever an input changes.
 
 Options:
 
-- `--config scoring.toml` — scoring configuration (TOML or JSON); `--dump-config` prints the defaults.
+- `--config scoring.toml` — scoring configuration (TOML or JSON); `--dump-config` prints the
+  defaults. `[scorer] model = "tree"` switches from the weighted sum to a static decision tree
+  over the same features.
 - `--explain` — print every node's scores and why each block ended where it did.
-- `--font Vazirmatn.woff2` — embed a WOFF2 text font in the output.
+- `--font F.woff2` — embed this WOFF2 text font instead of the bundled Vazirmatn; `--no-font`
+  embeds none.
 - `--katex-dir DIR` — inline a local KaTeX distribution; `--no-math` leaves LaTeX unrendered.
 - `--ai` — embed the interactive AI runtime (all providers: Anthropic, OpenAI, Gemini, and
   `openai-compatible`).
@@ -38,6 +48,15 @@ Options:
   `gemini`, `openai-compatible`).
 - `--ai-custom [NAME=]URL` — pin a custom OpenAI-compatible provider to one endpoint
   (repeatable: e.g. `https://api.deepseek.com/v1`, `ollama=http://localhost:11434/v1`).
+
+**Decision models.** `--judge CMD` lets an external model review every block: `CMD` reads one
+JSON request per line on stdin (block text with LaTeX, neighbours, proposed type and scope) and
+answers one verdict per line (`accept`, `incomplete`, `overreach`, `reject`,
+`{"retype": "lemma"}`, `{"end_at": 7}`, `{"start_at": 3}`, optionally with a `confidence`).
+`--judge-cache FILE` keeps verdicts keyed by block text, type and `--judge-model`, so an
+unchanged document is not sent again; `--judge-log FILE` records the resulting corrections,
+and `--overrides FILE` replays them later without the model. The contract is documented in
+`crates/math-judge`.
 
 **Any OpenAI-compatible API.** The `openai-compatible` provider (included in `--ai`) lets the
 reader type any base URL (`https://openrouter.ai/api/v1`, `https://api.groq.com/openai/v1`,
@@ -60,19 +79,30 @@ cargo run -p mathia-app
 ```
 
 Open a Markdown file (or drop one on the window, or pass it as an argument) to see the
-compiled document next to a block inspector, and export the HTML. The **OCR prompt** button
-(also shown on the empty start screen) holds a ready-made prompt to paste into your OCR /
+compiled document next to a block inspector, and export the HTML (or a whole folder). The
+preview follows edits made in another editor. Click a block in the preview or the list to
+inspect it, then correct it by hand — change its type, make it shorter or longer, or
+mark it as not a block; corrections can be saved as JSON for `mathia --overrides`. The list
+flags the blocks detected with low confidence as *unsure*, so they can be checked first.
+**Options → Detection settings…** edits the thresholds, weights, keywords and scorer, and
+loads or saves configuration files. The **Transcription prompt** button
+(also shown on the start screen) holds a ready-made prompt to paste into your OCR /
 vision LLM, so the Markdown it transcribes uses the conventions Mathia detects. It needs the vendored
-KaTeX (`scripts/vendor-katex.sh`) and, on Linux, Tauri's
+KaTeX and Vazirmatn (`scripts/vendor-katex.sh`, `scripts/vendor-fonts.sh`) and, on Linux, Tauri's
 [system dependencies](https://tauri.app/start/prerequisites/). The app is early; see
-[PLAN.md](PLAN.md), Phase 3.
+[PLAN.md](docs/archive/PLAN.md), Phase 3.
 
 ## Development
 
 ```bash
-cargo test                 # math-core and the CLI
+cargo test                 # math-core, math-judge and the CLI
 cargo test -p mathia-app   # the desktop app (builds Tauri)
 ```
+
+CI (`.github/workflows/ci.yml`) runs rustfmt, clippy with warnings denied, all Rust tests and
+the headless-Chrome tests. Pushing a `v*` tag runs `release.yml`, which builds the desktop
+bundles for macOS, Windows and Linux into a draft release (signed only when signing secrets
+are configured).
 
 The JavaScript inside compiled documents is tested in headless Chrome (see
 [tests/js/README.md](tests/js/README.md)):
@@ -81,7 +111,7 @@ The JavaScript inside compiled documents is tested in headless Chrome (see
 cd tests/js && npm install && npm test
 ```
 
-See [PLAN.md](PLAN.md) for the current state and next steps.
+See [PLAN.md](docs/archive/PLAN.md) for the current state and next steps.
 
 ## License
 

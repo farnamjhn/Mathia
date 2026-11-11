@@ -17,7 +17,8 @@ Done (Task 1 — the foundation, all in `crates/math-core`, `cargo test` green):
 | Features | `src/features.rs` | lead keyword + label, mentions, math density, logic symbols, QED ending, cues |
 | Classifier | `src/classifier.rs`, `src/crossref.rs` | scoring → openers → scoping → proof links → reference links; `ScopeOverrides`, `BlockJudge`, `classify_with_judge` |
 | HTML | `src/html.rs`, `templates/document.html`, `assets/` | `askama` template, callouts, sidebar TOC, `data-block-id` hooks, micro-runtime |
-| CLI | `crates/mathia-cli/src/main.rs` | `mathia in.md [-o out.html] [--config F] [--explain] [--font F] [--katex-dir DIR] [--ai] [--ai-provider P] [--ai-custom [NAME=]URL]`; no Tauri dependency |
+| Decision models | `crates/math-judge` | JSON judge contract, `CommandJudge`, `CachedJudge`, `Policy`, `Replay` (Phase 1b) |
+| CLI | `crates/mathia-cli/src/main.rs` | `mathia in.md\|folder/ [-o out] [--watch] [--config F] [--explain] [--font F\|--no-font] [--katex-dir DIR] [--ai…] [--judge CMD …\|--overrides F]`; no Tauri dependency |
 | Desktop app | `src-tauri`, `ui/` | Tauri v2 shell, package `mathia-app` (Phase 3) |
 
 Decisions taken (change here first if they are revisited):
@@ -80,8 +81,12 @@ line — a bare number is not ("Theorem 2 gives…" is prose).
    - [x] `SemanticBlock::proves`: by "Proof of Theorem 2" reference, else adjacency (plain
      text may sit in between); solutions link to their example/exercise. HTML: `data-proves`,
      a back-link in the block head, `Mathia.block(id).proves`.
-   - [ ] Optional static decision tree over the same `Features` as an alternative to the linear
-     scorer, selected in `ScoringConfig`.
+   - [x] Optional static decision tree over the same `Features` (`src/tree.rs`), selected with
+     `ScoringConfig::scorer` (`[scorer] model = "tree"`; without a `root` the built-in tree).
+     Tests are yes/no questions relative to the candidate type, leaves hold scores; validated
+     (scores and thresholds in [0, 1], depth ≤ 32). The default tree holds the same gold floor
+     (1.00 on the corpus, `decision_tree_precision_and_recall_per_type`). Keyword-less proofs
+     still use `weights.after_statement` with either scorer.
 5. [x] **Config I/O.** `ScoringConfig::{parse, serialize, load, save, validate}` for TOML and
    JSON, `schema_version` (currently 1; newer files are rejected), unknown fields rejected,
    partial files keep defaults. CLI: `--config FILE`, `--dump-config`.
@@ -105,30 +110,41 @@ line — a bare number is not ("Theorem 2 gives…" is prose).
    - [x] Print stylesheet, collapsible TOC sections, light/dark switch (remembered in
      `localStorage`). Not yet checked in a real browser — only syntax-checked.
    - [x] `HtmlOptions::fonts` / `mathia --font F.woff2` embed a WOFF2 text font.
-   - [ ] Vendor and subset Vazirmatn (`scripts/vendor-fonts.sh`, pinned + checksummed like
-     KaTeX) and make it the bundled default.
+   - [x] Vendor and subset Vazirmatn (`scripts/vendor-fonts.sh`: v33.003, SHA-256 checked,
+     variable font subset to Arabic script + Latin by a pinned fontTools in a throwaway venv,
+     84 KB WOFF2, reproducible). Cargo feature `bundled-fonts` / `EmbeddedFont::bundled()`;
+     default in the CLI (`--font` replaces it, `--no-font` drops it) and in the app.
 
 ## Phase 1b — decision models (jev, clef, laya, …)
 
-The seam exists: `BlockJudge::judge(&SemanticBlock, &[Node]) -> Verdict`, driven by
-`HeuristicClassifier::classify_with_judge`. A verdict of `Incomplete` / `Overreach` widens /
-narrows the block by one node and re-runs; `Reject` drops the opener. Implementations must
-live **outside** `math-core`.
+The seam: `BlockJudge::judge(&SemanticBlock, &[Node]) -> Verdict` (plus `judge_batch`), driven
+by `HeuristicClassifier::classify_with_judge[_detailed]`. Implementations live **outside**
+`math-core`, in `crates/math-judge`.
 
-1. New crate `crates/math-judge` (may depend on model runtimes; `math-core` must not).
-2. Decide the judge contract per model: input (block text with LaTeX restored, neighbours,
-   proposed type), output (`Verdict`, optionally a confidence and a suggested type).
-3. Extend `Verdict` with `Retype(BlockType)` and extend `ScopeOverrides` to match.
-4. Smarter rescoping than ±1 node: let the judge name a split point; allow widening through
-   a suppressed opener (today a hard boundary); move the start of a block, not only its end.
-5. Batch and cache verdicts keyed by a hash of (block text, type, model version) so
-   recompiling an unchanged document is free and reproducible.
-6. Policy for disagreement and for non-terminating judges (`max_rounds` exists; add logging
-   of every override applied so a compile can be replayed without the model).
+1. [x] New crate `crates/math-judge` (may depend on model runtimes; `math-core` must not).
+   Today it needs only `serde_json`.
+2. [x] Judge contract: one for every model. `JudgeRequest` (block text with LaTeX restored,
+   two nodes of context each side, proposed type, node range, `proves`, heuristic score) and
+   `JudgeResponse` (verdict, optional confidence), JSON. `CommandJudge` runs any program and
+   speaks JSON Lines over stdin/stdout, so a model plugs in as a wrapper script; a failing or
+   silent program means `Accept`. No adapter for jev, clef or laya is written yet.
+3. [x] `Verdict::Retype(BlockType)`; `ScopeOverrides::retype` (also forces an opener on a node
+   that would not open one). `ScopeOverrides` and `Verdict` are serde types.
+4. [x] Smarter rescoping: `Verdict::EndAt(node)` (a split point, or a wider scope) and
+   `Verdict::StartAt(node)`; `ScopeOverrides::end` may run through later openers (they are
+   absorbed; headings and environments still stop it). Environments keep their extent.
+5. [x] `CachedJudge`: verdicts keyed by a stable 128-bit FNV-1a hash of (model version, type,
+   scope + text), one batch per round for the misses only, saved as JSON. CLI:
+   `--judge CMD --judge-model ID --judge-cache FILE`.
+6. [x] Policy: a block is judged once per distinct (scope, type), so contradicting or blocked
+   verdicts cannot loop; `max_rounds` still caps it; `Policy::min_confidence` (default 0.5,
+   `--min-confidence`) turns unsure answers into `Accept`; unusable verdicts are logged with
+   `applied: false`. Every verdict is logged (`AppliedVerdict`), and the final overrides
+   replay the document without the model (`Replay`, `--judge-log` → `--overrides`).
 
 ## Phase 2 — interactive runtime (inside the compiled HTML)
 
-Done. Contract: `docs/phase2-spec.md`. Opt-in: nothing below is embedded unless the document
+Done. Contract: `docs/archive/phase2-spec.md`. Opt-in: nothing below is embedded unless the document
 is compiled with `--ai` / `--ai-provider` / `--ai-custom` (`HtmlOptions::ai`); without them
 the output is unchanged. Code: `assets/ai.js`, `assets/ai.css`; API: `window.Mathia.ai`.
 
@@ -153,7 +169,7 @@ the output is unchanged. Code: `assets/ai.js`, `assets/ai.css`; API: `window.Mat
    action; an open panel says it is offline and disables input. Cached figures stay visible.
 6. [x] **Tests.** `tests/js` (`npm test`): `playwright-core` driving the system Chrome
    against documents compiled by the real CLI, all provider traffic mocked, every test
-   asserting no CSP violations and no un-mocked requests. Not yet run in CI (Phase 3.5).
+   asserting no CSP violations and no un-mocked requests. Run in CI.
 
 Not done / known limits:
 
@@ -184,20 +200,44 @@ Started. Run with `cargo run -p mathia-app [-- notes.md]`; tests `cargo test -p 
      export.
    - [x] Block inspector, read-only: type, score, node range, end reason, `proves`, opener
      scores per type, features. Selecting a block scrolls the preview to it.
-   - [ ] Manual retype / rescope writing `ScopeOverrides` (needs `ScopeOverrides` to be
-     serialisable and passed through `analyze` / `compile`; retype needs Phase 1b.3).
-   - [ ] Scoring-config editor (the commands exist; no UI yet).
-   - [ ] Selecting a block in the preview selects it in the inspector (needs a message from
-     the frame; today the link is one-way).
-4. [ ] KaTeX is compiled in (`bundled-katex`), not a Tauri resource; fonts, batch
-   compilation of a folder and file watching are not started.
-5. [ ] Packaging, signing and auto-update for macOS/Windows/Linux; CI running
-   `cargo test -p math-core` and `cargo clippy --workspace`. `bundle.active` is on but no
-   bundle has been built; the identifier `dev.mathia.desktop` and the icon are placeholders.
+   - [x] Manual retype / rescope writing `ScopeOverrides`: type select, "− node" / "+ node"
+     (explicit `end`), "Not a block", "Undo"; "Reset all", and Save… / Load… as JSON (a
+     `--judge-log` file loads too). Commands `set_overrides`, `save_overrides`,
+     `load_overrides`; `analyze` / `compile` apply them and report overrides that no longer
+     fit the file. Keyed by node index, so they belong to one revision of one file; opening
+     another file clears them.
+   - [x] Scoring-config editor (**Scoring…**): scorer, threshold, weights, scope limits,
+     keywords, cue lists; Apply, Defaults, Load…, Save…. A custom tree loaded from a file is
+     kept but cannot be edited in the form.
+   - [x] Selecting a block in the preview selects it in the inspector: `runtime.js` posts
+     `{mathia: "select", id}` to its parent when the page is framed (links, buttons,
+     formulas and selections excluded); the app accepts it only from its preview frame.
+4. [x] Assets, batch, watching.
+   - KaTeX stays compiled in (`bundled-katex`) rather than a Tauri resource: the HTML must
+     be self-contained anyway, and the CLI shares the code path. Vazirmatn likewise
+     (`bundled-fonts`).
+   - [x] Batch compilation of a folder: **Export folder…** (`export_folder`, two folder
+     dialogs, corrections not applied) and `mathia folder/ -o out/`.
+   - [x] File watching: the app polls `source_stamp` (mtime + size) every second while
+     visible and recompiles on change; `mathia --watch` polls its inputs.
+5. Packaging and CI.
+   - [x] CI (`.github/workflows/ci.yml`): vendor scripts, `cargo fmt --check`,
+     `clippy --workspace --all-targets -D warnings`, `cargo test` for `math-core` alone and
+     for the workspace, and the headless-Chrome tests.
+   - [x] Release workflow (`release.yml`, on `v*` tags): `cargo tauri build` on macOS (arm64,
+     x86_64), Windows and Linux, bundles attached to a draft release. Signing / notarisation
+     happen only if the Apple secrets are set. Neither workflow has run yet.
+   - [ ] Code-signing certificates (Apple Developer ID, Windows) and their secrets.
+   - [ ] Auto-update: needs `tauri-plugin-updater`, an update key pair (the private key is a
+     secret), and a place to host `latest.json`.
+   - [ ] Real identifier and icon (`dev.mathia.desktop` and the icon are placeholders).
 
 Checked so far: unit tests, `clippy --workspace`, and the debug build on macOS opening a
-file given as an argument (preview and inspector render). Not exercised: the dialogs, drag
-and drop, export, selecting a block, Windows and Linux.
+file given as an argument (preview and inspector render). The new frontend parts (inspector
+corrections, scoring dialog, preview → inspector selection) were driven in headless Chrome
+against a stubbed Tauri API, and the frame message by a runtime test; they have not been
+clicked through in the real app. Not exercised: the dialogs, drag and drop, export, folder
+export, Windows and Linux.
 
 Known limit: Tauri treats a registered URI scheme as a local origin, so the ACL does not by
 itself separate the preview frame from the main window. What protects the commands is that
