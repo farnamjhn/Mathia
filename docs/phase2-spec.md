@@ -28,7 +28,7 @@ says so.
 ## S1 — Rust: opt-in AI embedding and CSP
 
 Files: `crates/math-core/src/html.rs`, `crates/math-core/src/lib.rs`,
-`crates/math-core/templates/document.html`, `src-tauri/src/main.rs`, new
+`crates/math-core/templates/document.html`, `crates/mathia-cli/src/main.rs`, new
 `crates/math-core/assets/ai.js` (stub for now: an IIFE that does nothing),
 new `crates/math-core/assets/ai.css` (empty for now), `README.md` (usage line).
 

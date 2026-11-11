@@ -9,7 +9,7 @@ Done (Task 1 — the foundation, all in `crates/math-core`, `cargo test` green):
 
 | Piece | File | Notes |
 |---|---|---|
-| Workspace | `Cargo.toml` | members `crates/math-core`, `src-tauri`; shared dependency versions |
+| Workspace | `Cargo.toml` | members `crates/math-core`, `crates/mathia-cli`, `src-tauri`; the app is not a default member, so plain `cargo build` / `cargo test` do not need Tauri |
 | Domain model | `src/model.rs` | `Document`, `SemanticBlock`, `BlockType`, `TocEntry`, `Node`, `Direction` |
 | Config | `src/config.rs` | `ScoringConfig`: threshold, weights, keyword tables, cue lists, scope limits — all data, serde-ready |
 | Normaliser | `src/normalize.rs` | OCR artefacts → clean Markdown, before parsing |
@@ -17,7 +17,8 @@ Done (Task 1 — the foundation, all in `crates/math-core`, `cargo test` green):
 | Features | `src/features.rs` | lead keyword + label, mentions, math density, logic symbols, QED ending, cues |
 | Classifier | `src/classifier.rs`, `src/crossref.rs` | scoring → openers → scoping → proof links → reference links; `ScopeOverrides`, `BlockJudge`, `classify_with_judge` |
 | HTML | `src/html.rs`, `templates/document.html`, `assets/` | `askama` template, callouts, sidebar TOC, `data-block-id` hooks, micro-runtime |
-| CLI stand-in | `src-tauri/src/main.rs` | `mathia in.md [-o out.html] [--config F] [--explain] [--font F] [--katex-dir DIR] [--ai] [--ai-provider P] [--ai-custom [NAME=]URL]`; no Tauri dependency yet |
+| CLI | `crates/mathia-cli/src/main.rs` | `mathia in.md [-o out.html] [--config F] [--explain] [--font F] [--katex-dir DIR] [--ai] [--ai-provider P] [--ai-custom [NAME=]URL]`; no Tauri dependency |
+| Desktop app | `src-tauri`, `ui/` | Tauri v2 shell, package `mathia-app` (Phase 3) |
 
 Decisions taken (change here first if they are revisited):
 
@@ -29,7 +30,16 @@ Decisions taken (change here first if they are revisited):
   Exercise, Solution, Claim, Notation (+ structural Heading, Text).
 - **Raw HTML** in the source is always escaped, never passed through.
 - **Persian digits** are kept as written in the output; they are folded only for matching.
-- **`src-tauri`:** placeholder binary until Phase 3.
+- **`src-tauri`:** the Tauri app (`mathia-app`). The CLI moved to `crates/mathia-cli` and
+  keeps the package and binary name `mathia`, so `cargo run -p mathia` is unchanged.
+- **Desktop frontend:** plain HTML/CSS/JS in `ui/`, no framework, no bundler, no npm
+  (`withGlobalTauri`). Revisit if the inspector/config editor outgrow it.
+- **Desktop file access:** the frontend has no fs/dialog/shell permission. Dialogs are opened
+  by Rust commands; a path is read only after the user picked or dropped it
+  (`Session::grant`). App commands are under the ACL (`AppManifest` in `build.rs`).
+- **Preview:** the compiled HTML is served to an `<iframe>` by the `mathia-preview` URI
+  scheme, so it keeps its own origin and its own CSP (a `srcdoc`/`blob:` frame would inherit
+  the app's CSP and lose the hashed inline scripts).
 - **Libraries:** `pulldown-cmark` (byte offsets and native `$`/`$$` events) and `askama`
   (templates checked at compile time, no runtime template loading).
 - **`math-core` rules:** no Tauri, no network, no LLM, no randomness. Same input and config
@@ -155,16 +165,44 @@ Not done / known limits:
 
 ## Phase 3 — Tauri v2 desktop app (`src-tauri`)
 
-1. Replace the placeholder with a real Tauri v2 crate: `tauri`, `tauri-build`, `build.rs`,
-   `tauri.conf.json`, capabilities limited to file dialogs and scoped fs access.
-2. Commands (thin wrappers over `math-core`): `analyze(path|text) -> Document`,
-   `compile(path, options) -> html`, `export(path, dest)`, `load/save_config`.
-3. Frontend (choose a framework at that point): open/drag-drop Markdown, live preview of the
-   compiled HTML, block inspector (type, score, features, scope), manual retype/rescope that
-   writes `ScopeOverrides`, scoring-config editor, export.
-4. Bundle KaTeX and fonts as Tauri resources; batch compilation of a folder; file watching.
-5. Packaging, signing and auto-update for macOS/Windows/Linux; CI running
-   `cargo test -p math-core` and `cargo clippy --workspace`.
+Started. Run with `cargo run -p mathia-app [-- notes.md]`; tests `cargo test -p mathia-app`.
+
+1. [x] **Real Tauri v2 crate.** `tauri` 2.12, `tauri-build`, `tauri-plugin-dialog`,
+   `build.rs`, `tauri.conf.json` (app CSP: `default-src 'self'`, frames only from
+   `mathia-preview`), `capabilities/default.json` (events + Mathia's own commands, nothing
+   else), placeholder icons in `icons/`.
+2. [x] **Commands** (`src/main.rs`; the logic is in `src/session.rs` without Tauri types
+   and unit-tested): `pick_markdown`, `startup_file`, `analyze(source)`,
+   `compile(source, options)`, `export(source, options)`, `get/set/reset_config`,
+   `load/save_config`. `source` is `{path}` or `{text}`. Differences from the first sketch:
+   `compile` stores the HTML for the preview protocol and returns
+   `{revision, changed, semantic_blocks, bytes}` instead of sending megabytes over IPC;
+   `export` and the config commands open their own dialogs instead of taking a destination.
+3. **Frontend** (`ui/`).
+   - [x] Open (dialog, drag and drop, command-line argument), preview of the compiled HTML,
+     recompile on Reload and when the window regains focus, AI-runtime / no-math switches,
+     export.
+   - [x] Block inspector, read-only: type, score, node range, end reason, `proves`, opener
+     scores per type, features. Selecting a block scrolls the preview to it.
+   - [ ] Manual retype / rescope writing `ScopeOverrides` (needs `ScopeOverrides` to be
+     serialisable and passed through `analyze` / `compile`; retype needs Phase 1b.3).
+   - [ ] Scoring-config editor (the commands exist; no UI yet).
+   - [ ] Selecting a block in the preview selects it in the inspector (needs a message from
+     the frame; today the link is one-way).
+4. [ ] KaTeX is compiled in (`bundled-katex`), not a Tauri resource; fonts, batch
+   compilation of a folder and file watching are not started.
+5. [ ] Packaging, signing and auto-update for macOS/Windows/Linux; CI running
+   `cargo test -p math-core` and `cargo clippy --workspace`. `bundle.active` is on but no
+   bundle has been built; the identifier `dev.mathia.desktop` and the icon are placeholders.
+
+Checked so far: unit tests, `clippy --workspace`, and the debug build on macOS opening a
+file given as an argument (preview and inspector render). Not exercised: the dialogs, drag
+and drop, export, selecting a block, Windows and Linux.
+
+Known limit: Tauri treats a registered URI scheme as a local origin, so the ACL does not by
+itself separate the preview frame from the main window. What protects the commands is that
+the compiled document can only run its own hashed scripts (its CSP), and that no command
+reads a path the user did not choose or writes without a save dialog.
 
 ## Open questions
 
