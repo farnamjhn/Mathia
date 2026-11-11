@@ -5,19 +5,46 @@
 
 :root {
   color-scheme: light dark;
+  --color-scheme: light;
 
-  --background-100: #ffffff;
-  --background-200: #fafafa;
-  --gray-100: #f2f2f2;
-  --gray-200: #ebebeb;
-  --gray-alpha-400: rgba(0, 0, 0, 0.08);
-  --gray-alpha-500: rgba(0, 0, 0, 0.21);
-  --gray-700: #8f8f8f;
-  --gray-900: #666666;
-  --gray-1000: #171717;
-  --primary-hover: #383838;
-  --blue-700: #0070f3;
-  --red-900: #cb2a2f;
+  --background-100-light: #ffffff;
+  --background-200-light: #fafafa;
+  --gray-100-light: #f2f2f2;
+  --gray-200-light: #ebebeb;
+  --gray-alpha-400-light: rgba(0, 0, 0, 0.08);
+  --gray-alpha-500-light: rgba(0, 0, 0, 0.21);
+  --gray-700-light: #8f8f8f;
+  --gray-900-light: #666666;
+  --gray-1000-light: #171717;
+  --primary-hover-light: #383838;
+  --blue-700-light: #0070f3;
+  --red-900-light: #cb2a2f;
+
+  --background-100-dark: #0a0a0a;
+  --background-200-dark: #000000;
+  --gray-100-dark: #1a1a1a;
+  --gray-200-dark: #1f1f1f;
+  --gray-alpha-400-dark: rgba(255, 255, 255, 0.14);
+  --gray-alpha-500-dark: rgba(255, 255, 255, 0.24);
+  --gray-700-dark: #8f8f8f;
+  --gray-900-dark: #a1a1a1;
+  --gray-1000-dark: #ededed;
+  --primary-hover-dark: #cccccc;
+  --blue-700-dark: #3291ff;
+  --red-900-dark: #ff6166;
+
+  --background-100: light-dark(var(--background-100-light), var(--background-100-dark));
+  --background-200: light-dark(var(--background-200-light), var(--background-200-dark));
+  --gray-100: light-dark(var(--gray-100-light), var(--gray-100-dark));
+  --gray-200: light-dark(var(--gray-200-light), var(--gray-200-dark));
+  --gray-alpha-400: light-dark(var(--gray-alpha-400-light), var(--gray-alpha-400-dark));
+  --gray-alpha-500: light-dark(var(--gray-alpha-500-light), var(--gray-alpha-500-dark));
+  --gray-700: light-dark(var(--gray-700-light), var(--gray-700-dark));
+  --gray-900: light-dark(var(--gray-900-light), var(--gray-900-dark));
+  --gray-1000: light-dark(var(--gray-1000-light), var(--gray-1000-dark));
+  --primary-hover: light-dark(var(--primary-hover-light), var(--primary-hover-dark));
+  --blue-700: light-dark(var(--blue-700-light), var(--blue-700-dark));
+  --red-900: light-dark(var(--red-900-light), var(--red-900-dark));
 
   --font-sans: "Geist", "Geist Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", system-ui, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -31,20 +58,36 @@
   text-rendering: optimizeLegibility;
 }
 
-@media (prefers-color-scheme: dark) {
+:root {
+  @media (prefers-color-scheme: dark) {
+    --color-scheme: dark;
+  }
+
+  &:has(> head > meta[name="color-scheme"][content="dark"]) {
+    color-scheme: dark;
+    --color-scheme: dark;
+  }
+
+  &:has(> head > meta[name="color-scheme"][content="light"]) {
+    color-scheme: light;
+    --color-scheme: light;
+  }
+}
+
+@media (forced-colors: active) {
   :root {
-    --background-100: #0a0a0a;
-    --background-200: #000000;
-    --gray-100: #1a1a1a;
-    --gray-200: #1f1f1f;
-    --gray-alpha-400: rgba(255, 255, 255, 0.14);
-    --gray-alpha-500: rgba(255, 255, 255, 0.24);
-    --gray-700: #8f8f8f;
-    --gray-900: #a1a1a1;
-    --gray-1000: #ededed;
-    --primary-hover: #cccccc;
-    --blue-700: #3291ff;
-    --red-900: #ff6166;
+    --background-100: Canvas;
+    --background-200: Canvas;
+    --gray-100: ButtonFace;
+    --gray-200: ButtonFace;
+    --gray-alpha-400: CanvasText;
+    --gray-alpha-500: ButtonBorder;
+    --gray-700: GrayText;
+    --gray-900: GrayText;
+    --gray-1000: CanvasText;
+    --primary-hover: Highlight;
+    --blue-700: Highlight;
+    --red-900: Highlight;
   }
 }
 
@@ -84,7 +127,7 @@ body {
 }
 
 /* App icon. The PNGs carry Apple's transparent icon margin, so they sit
-   slightly inset; <picture> swaps light/dark with the system appearance. */
+   slightly inset; .if-light/.if-dark swap light and dark logos. */
 .brand { flex: none; display: flex; margin-right: 4px; }
 .brand img, .empty-logo img { display: block; pointer-events: none; -webkit-user-drag: none; }
 .empty-logo { display: flex; justify-content: center; margin-bottom: 8px; }
@@ -185,6 +228,40 @@ button {
   font-size: 13px;
   color: var(--gray-900);
   font-variant-numeric: tabular-nums;
+}
+
+.theme-toggle {
+  flex: none;
+}
+
+.theme-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@container not style(--color-scheme: dark) {
+  .if-dark {
+    display: none !important;
+  }
+}
+
+@container not style(--color-scheme: light) {
+  .if-light {
+    display: none !important;
+  }
 }
 .status.error { color: var(--red-900); }
 
@@ -356,7 +433,7 @@ pre {
 /* ── Preview ─────────────────────────────────────────────────────────── */
 
 .preview { flex: 1; min-width: 0; position: relative; }
-.preview iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+.preview iframe { width: 100%; height: 100%; border: 0; display: block; background: var(--background-100); color-scheme: light dark; }
 
 .empty {
   position: absolute;

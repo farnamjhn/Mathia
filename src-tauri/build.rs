@@ -12,6 +12,7 @@ const COMMANDS: &[&str] = &[
     "reset_config",
     "load_config",
     "save_config",
+    "set_window_theme",
 ];
 
 fn main() {

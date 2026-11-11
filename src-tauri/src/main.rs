@@ -11,6 +11,7 @@
 
 mod dock;
 mod session;
+mod theme;
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -149,6 +150,13 @@ async fn load_config(
 
 /// Saves the current scoring configuration (TOML or JSON, by extension).
 #[tauri::command]
+fn set_window_theme(window: tauri::WebviewWindow, theme: Option<String>) -> Result<String, String> {
+    let choice = theme::ThemeChoice::parse(theme.as_deref())?;
+    let os_theme = theme::apply(&window, choice)?;
+    Ok(os_theme.to_string())
+}
+
+#[tauri::command]
 async fn save_config(app: AppHandle, state: State<'_, Shared>) -> Result<Option<String>, String> {
     let config = lock(&state).config().clone();
     let Some(dest) = app
@@ -185,6 +193,7 @@ fn main() {
             match event {
                 WindowEvent::ThemeChanged(theme) => {
                     dock::sync(Some(*theme));
+                    theme::sync_os_content_appearance(window, *theme);
                 }
                 WindowEvent::Focused(true) => {
                     dock::sync(None);
@@ -213,6 +222,7 @@ fn main() {
             reset_config,
             load_config,
             save_config,
+            set_window_theme,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Mathia")

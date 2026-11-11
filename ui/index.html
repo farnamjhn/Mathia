@@ -4,16 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mathia</title>
+<meta name="color-scheme" content="light dark">
+<script src="theme.js"></script>
 <link rel="icon" type="image/png" href="assets/mathia-light.png" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" href="assets/mathia-dark.png" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="toolbar">
-  <picture class="brand">
-    <source srcset="assets/mathia-dark.png" media="(prefers-color-scheme: dark)">
-    <img src="assets/mathia-light.png" width="28" height="28" alt="">
-  </picture>
+  <span class="brand" aria-hidden="true">
+    <img class="if-light" src="assets/mathia-light.png" width="28" height="28" alt="">
+    <img class="if-dark" src="assets/mathia-dark.png" width="28" height="28" alt="">
+  </span>
   <button id="open" type="button" title="Open a Markdown file (⌘O / Ctrl+O)">Open…</button>
   <button id="reload" type="button" title="Compile again (⌘R / Ctrl+R)" disabled>Reload</button>
   <button id="export" type="button" title="Save the compiled HTML (⌘E / Ctrl+E)" disabled>Export…</button>
@@ -25,6 +27,23 @@
     <input id="no-math" type="checkbox"> No math
   </label>
   <span id="status" class="status" role="status" aria-live="polite"></span>
+  <button id="theme-toggle" class="theme-toggle" type="button" title="Toggle color theme">
+    <span class="if-dark theme-option">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+      </svg>
+      <span aria-hidden="true">Light</span>
+      <span class="sr-only">Switch to light theme</span>
+    </span>
+    <span class="if-light theme-option">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+      </svg>
+      <span aria-hidden="true">Dark</span>
+      <span class="sr-only">Switch to dark theme</span>
+    </span>
+  </button>
 </header>
 
 <main class="panes">
@@ -48,10 +67,10 @@
 
   <section class="preview">
     <div id="empty" class="empty">
-      <picture class="empty-logo">
-        <source srcset="assets/mathia-dark.png" media="(prefers-color-scheme: dark)">
-        <img src="assets/mathia-light.png" width="96" height="96" alt="">
-      </picture>
+      <div class="empty-logo" aria-hidden="true">
+        <img class="if-light" src="assets/mathia-light.png" width="96" height="96" alt="">
+        <img class="if-dark" src="assets/mathia-dark.png" width="96" height="96" alt="">
+      </div>
       <p class="empty-title">Open a Markdown file</p>
       <p>Use <strong>Open…</strong> or drop a <code>.md</code> file on this window.</p>
       <div class="empty-guide">

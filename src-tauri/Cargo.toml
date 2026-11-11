@@ -20,5 +20,5 @@ tauri-plugin-dialog = "2"
 # Dock icon that follows the system appearance (src/dock.rs).
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSAppearance", "NSApplication", "NSImage", "NSResponder"] }
+objc2-app-kit = { version = "0.3", features = ["NSAppearance", "NSApplication", "NSImage", "NSResponder", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSString", "NSUserDefaults"] }
