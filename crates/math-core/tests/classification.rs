@@ -15,6 +15,22 @@ fn semantic(md: &str) -> Vec<(String, BlockType, usize)> {
         .collect()
 }
 
+/// The HTML of all plain-text blocks, with cross-reference links unwrapped.
+fn plain_text(doc: &math_core::Document) -> String {
+    let html: String = doc
+        .blocks_of(BlockType::Text)
+        .map(|b| b.html.as_str())
+        .collect();
+    let mut out = String::new();
+    let mut rest = html.as_str();
+    while let Some(open) = rest.find("<a class=\"mx-ref\"") {
+        out.push_str(&rest[..open]);
+        rest = &rest[open + rest[open..].find('>').unwrap() + 1..];
+    }
+    out.push_str(rest);
+    out.replace("</a>", "")
+}
+
 fn expect(rows: &[(&str, BlockType, usize)]) -> Vec<(String, BlockType, usize)> {
     rows.iter()
         .map(|(id, kind, len)| (id.to_string(), *kind, *len))
@@ -60,10 +76,7 @@ fn persian_labels_and_direction() {
 #[test]
 fn persian_prose_using_keywords_is_not_a_block() {
     let doc = analyze(ANALYSIS_FA, &ScoringConfig::default());
-    let text: String = doc
-        .blocks_of(BlockType::Text)
-        .map(|b| b.html.as_str())
-        .collect();
+    let text = plain_text(&doc);
     for prose in [
         "قضیهٔ هاینه–کانتور را ثابت می‌کنیم",
         "نتیجه می‌گیریم",
@@ -102,10 +115,7 @@ fn english_algebra_notes() {
 
     let doc = analyze(ALGEBRA_EN, &ScoringConfig::default());
     assert_eq!(doc.direction, Direction::Ltr);
-    let text: String = doc
-        .blocks_of(BlockType::Text)
-        .map(|b| b.html.as_str())
-        .collect();
+    let text = plain_text(&doc);
     for prose in [
         "Definitions vary",
         "Note that the operation",
@@ -152,7 +162,7 @@ fn classification_is_deterministic() {
     assert_eq!(analyze(ANALYSIS_FA, &config), analyze(ANALYSIS_FA, &config));
     let options = HtmlOptions {
         math: MathAssets::None,
-        title: None,
+        ..Default::default()
     };
     assert_eq!(
         compile(ALGEBRA_EN, &config, &options).unwrap(),
@@ -173,4 +183,54 @@ fn compiled_html_has_a_hook_for_every_block() {
         );
     }
     assert_eq!(html.matches("data-block-actions=").count(), 8);
+}
+
+#[test]
+fn references_link_to_the_blocks_they_name() {
+    let doc = analyze(ANALYSIS_FA, &ScoringConfig::default());
+    let text: String = doc
+        .blocks_of(BlockType::Text)
+        .map(|b| b.html.as_str())
+        .collect();
+    assert!(
+        text.contains(r##"طبق <a class="mx-ref" href="#block-theorem-1">قضیه ۳.۳</a> می‌توان"##)
+    );
+
+    let doc = analyze(ALGEBRA_EN, &ScoringConfig::default());
+    let all: String = doc.blocks.iter().map(|b| b.html.as_str()).collect();
+    assert!(
+        all.contains(r##"By <a class="mx-ref" href="#block-theorem-1">Theorem 1.3</a> the order"##)
+    );
+    // Inside the proof of Proposition 1.5, both the proposition and the corollary.
+    let proof = doc.blocks_of(BlockType::Proof).nth(1).unwrap();
+    assert!(
+        proof
+            .html
+            .contains(r##"<a class="mx-ref" href="#block-corollary-1">Corollary 1.4</a>"##)
+    );
+    assert!(proof.html.contains(
+        r##"Proof of <a class="mx-ref" href="#block-proposition-1">Proposition 1.5</a>"##
+    ));
+    // A block's own label is never a link.
+    let theorem = doc.blocks_of(BlockType::Theorem).next().unwrap();
+    assert!(!theorem.html.contains("mx-ref"));
+}
+
+#[test]
+fn proofs_are_linked_to_statements() {
+    let doc = analyze(ALGEBRA_EN, &ScoringConfig::default());
+    let proves: Vec<_> = doc
+        .blocks_of(BlockType::Proof)
+        .map(|b| b.proves.as_deref())
+        .collect();
+    assert_eq!(
+        proves,
+        [Some("block-theorem-1"), Some("block-proposition-1")]
+    );
+    assert!(
+        doc.blocks
+            .iter()
+            .filter(|b| b.kind != BlockType::Proof)
+            .all(|b| b.proves.is_none())
+    );
 }

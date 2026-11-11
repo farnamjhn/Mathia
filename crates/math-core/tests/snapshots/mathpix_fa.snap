@@ -1,0 +1,13 @@
+sec-1                  nodes  0..1  score 0.00 end=structural      proves=-                  جبر خطی — جلسهٔ پنجم
+sec-2                  nodes  1..2  score 0.00 end=structural      proves=-                  فضاهای برداری
+block-definition-1     nodes  2..3  score 1.00 end=next_opener     proves=-                  تعریف ۵.۱
+block-example-1        nodes  3..4  score 0.80 end=no_continuation proves=-                  مثال ۵.۲
+block-text-1           nodes  4..5  score 0.00 end=structural      proves=-                  متن
+sec-3                  nodes  5..6  score 0.00 end=structural      proves=-                  زیرفضاها و پایه
+block-theorem-1        nodes  6..7  score 0.96 end=no_continuation proves=-                  قضیه ۵.۳
+block-proof-1          nodes  7..9  score 0.65 end=qed             proves=block-theorem-1    برهان
+block-lemma-1          nodes  9..10 score 1.00 end=next_opener     proves=-                  لم ۵.۴ (جایگزینی)
+block-proof-2          nodes 10..13 score 0.90 end=qed             proves=block-lemma-1      برهان
+block-exercise-1       nodes 13..14 score 0.80 end=next_opener     proves=-                  تمرین ۵.۵
+block-solution-1       nodes 14..15 score 0.80 end=no_continuation proves=block-exercise-1   حل
+block-text-2           nodes 15..16 score 0.00 end=structural      proves=-                  متن

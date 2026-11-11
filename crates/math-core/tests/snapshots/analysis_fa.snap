@@ -1,0 +1,14 @@
+sec-1                  nodes  0..1  score 0.00 end=structural      proves=-                  آنالیز ریاضی — جلسهٔ سوم
+block-text-1           nodes  1..2  score 0.00 end=structural      proves=-                  متن
+sec-2                  nodes  2..3  score 0.00 end=structural      proves=-                  پیوستگی یکنواخت
+block-definition-1     nodes  3..4  score 1.00 end=next_opener     proves=-                  تعریف ۳.۱
+block-example-1        nodes  4..5  score 0.80 end=no_continuation proves=-                  مثال ۳.۲
+block-text-2           nodes  5..6  score 0.00 end=structural      proves=-                  متن
+sec-3                  nodes  6..7  score 0.00 end=structural      proves=-                  قضیهٔ اصلی
+block-theorem-1        nodes  7..8  score 0.95 end=next_opener     proves=-                  قضیه ۳.۳ (هاینه–کانتور)
+block-proof-1          nodes  8..12 score 0.90 end=qed             proves=block-theorem-1    برهان
+block-text-3           nodes 12..13 score 0.00 end=structural      proves=-                  متن
+block-lemma-1          nodes 13..14 score 0.86 end=next_opener     proves=-                  لم ۳.۴
+block-proof-2          nodes 14..15 score 0.95 end=qed             proves=block-lemma-1      برهان
+block-corollary-1      nodes 15..16 score 0.83 end=next_opener     proves=-                  نتیجه ۳.۵
+block-remark-1         nodes 16..17 score 0.80 end=end_of_document proves=-                  تذکر
