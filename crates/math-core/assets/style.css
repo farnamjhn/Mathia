@@ -54,7 +54,7 @@ body { margin:0; background-color:var(--mx-bg); background-image:radial-gradient
 .mx-toc-toggle:focus-visible, .mx-theme-toggle:focus-visible, .mx-toc-fold:focus-visible, .mx-toc a:focus-visible, .mx-actions button:focus-visible { outline:2px solid var(--mx-text); outline-offset:2px; }
 
 /* Document shell */
-.mx-main { max-width:66.25rem; width:100%; margin-inline:auto; padding:36px 44px 72px; transition:margin .2s ease; }
+.mx-main { max-width:66.25rem; margin-inline:auto; padding:36px 44px 72px; transition:margin .2s ease; }
 @media (min-width:60rem) { .mx-main { margin-inline-start:max(var(--mx-toc-width), calc((100vw - 66.25rem + var(--mx-toc-width)) / 2)); margin-inline-end:auto; } .mx-toc-collapsed .mx-main { margin-inline:auto; } }
 .mx-toc-collapsed .mx-toc { transform:translateX(-100%); }
 .mx-toc-collapsed .mx-toc-toggle { inset-inline-start:18px; }
