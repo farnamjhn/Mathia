@@ -26,9 +26,9 @@ const USAGE: &str = "usage: mathia <input.md> [options]
       --title TEXT      document title (default: the first heading)
       --katex-dir DIR   use this KaTeX dist/ directory
       --no-math         leave LaTeX unrendered
-      --ai              enable AI runtime with all providers
+      --ai              enable AI runtime with all providers (incl. openai-compatible: any URL)
       --ai-provider NAME
-                        enable a specific AI provider (repeatable: anthropic, openai, gemini)
+                        enable a specific AI provider (repeatable: anthropic, openai, gemini, openai-compatible)
       --ai-custom [NAME=]URL
                         enable a custom OpenAI-compatible AI provider (repeatable; e.g.
                         --ai-custom https://api.deepseek.com/v1 or

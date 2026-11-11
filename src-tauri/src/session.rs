@@ -46,7 +46,7 @@ pub struct CompileOptions {
     pub title: Option<String>,
     /// Leave LaTeX unrendered.
     pub no_math: bool,
-    /// Built-in AI providers to enable, by slug (`anthropic`, `openai`, `gemini`).
+    /// Built-in AI providers to enable, by slug (`anthropic`, `openai`, `gemini`, `openai-compatible`).
     pub ai_providers: Vec<String>,
     /// Custom OpenAI-compatible providers as `[NAME=]URL`.
     pub ai_custom: Vec<String>,

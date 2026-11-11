@@ -168,26 +168,41 @@ impl Direction {
         }
     }
 
-    /// Majority vote between strong RTL letters and Latin letters.
-    /// Returns `None` when the text has neither (e.g. a pure-math node).
+    /// Any strong RTL letter makes the block RTL: Persian text routinely
+    /// embeds English terms (and LaTeX letters), which must not flip it.
+    /// Pure Latin text is LTR. Returns `None` when the text has neither
+    /// (e.g. a pure-math node).
     pub fn detect(text: &str) -> Option<Direction> {
-        let (mut rtl, mut ltr) = (0usize, 0usize);
+        let mut ltr = false;
         for c in text.chars() {
             match c {
                 '\u{0590}'..='\u{08FF}' | '\u{FB1D}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}'
                     if c.is_alphabetic() =>
                 {
-                    rtl += 1
+                    return Some(Direction::Rtl)
                 }
-                c if c.is_ascii_alphabetic() => ltr += 1,
+                c if c.is_ascii_alphabetic() => ltr = true,
                 _ => {}
             }
         }
-        match (rtl, ltr) {
-            (0, 0) => None,
-            _ if rtl >= ltr => Some(Direction::Rtl),
-            _ => Some(Direction::Ltr),
-        }
+        ltr.then_some(Direction::Ltr)
+    }
+}
+
+#[cfg(test)]
+mod direction_tests {
+    use super::Direction;
+
+    #[test]
+    fn mixed_persian_and_english_is_rtl() {
+        let heading = "بخش سوم: استقلال خطی و وابستگی خطی (Linear Independence and Dependence)";
+        assert_eq!(Direction::detect(heading), Some(Direction::Rtl));
+    }
+
+    #[test]
+    fn pure_english_is_ltr_and_math_only_is_none() {
+        assert_eq!(Direction::detect("Linear Independence"), Some(Direction::Ltr));
+        assert_eq!(Direction::detect("1 + 2 = 3"), None);
     }
 }
 

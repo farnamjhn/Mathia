@@ -11,7 +11,8 @@
   <button id="open" type="button" title="Open a Markdown file (⌘O / Ctrl+O)">Open…</button>
   <button id="reload" type="button" title="Compile again (⌘R / Ctrl+R)" disabled>Reload</button>
   <button id="export" type="button" title="Save the compiled HTML (⌘E / Ctrl+E)" disabled>Export…</button>
-  <label class="check" title="Embed the AI runtime (Ask / Illustrate) for Anthropic, OpenAI and Gemini">
+  <button id="guide" type="button" title="The prompt to give your OCR / vision LLM so its Markdown suits Mathia">OCR prompt</button>
+  <label class="check" title="Embed the AI runtime (Ask / Illustrate) for Anthropic, OpenAI, Gemini or any OpenAI-compatible endpoint">
     <input id="ai" type="checkbox"> AI runtime
   </label>
   <label class="check" title="Leave LaTeX unrendered">
@@ -43,10 +44,104 @@
     <div id="empty" class="empty">
       <p class="empty-title">Open a Markdown file</p>
       <p>Use <strong>Open…</strong> or drop a <code>.md</code> file on this window.</p>
+      <div class="empty-guide">
+        <p class="empty-guide-title">Transcribing pages with an LLM first?</p>
+        <p>Give your OCR / vision model this prompt before the page images, so the Markdown it
+          returns uses the conventions Mathia detects.</p>
+        <div class="actions">
+          <button id="copy-prompt-empty" class="btn primary" type="button">Copy OCR prompt</button>
+          <button id="view-prompt" class="btn" type="button">View prompt</button>
+        </div>
+      </div>
     </div>
     <iframe id="frame" title="Compiled document" sandbox="allow-scripts allow-same-origin" hidden></iframe>
   </section>
 </main>
+
+<dialog id="guide-dialog" class="guide" aria-labelledby="guide-title">
+  <header class="guide-head">
+    <h2 id="guide-title">OCR prompt</h2>
+    <p>Paste this into your OCR / vision LLM as the first message (or system prompt), then attach
+      the page images. Its Markdown output opens directly in Mathia.</p>
+  </header>
+  <textarea id="prompt-text" class="prompt" readonly spellcheck="false" aria-label="OCR prompt">You transcribe pages of mathematics lecture notes and textbooks, written in Persian, English or both, into Markdown. The Markdown is compiled by Mathia, a program that finds theorems, definitions, proofs and similar blocks purely from the Markdown, so the conventions below matter. Reply with the Markdown only: no greeting, no explanation, and no code fence around the answer.
+
+TRANSCRIBE FAITHFULLY
+- Copy what is printed. Do not solve, summarize, translate, correct or reorder anything.
+- If something is unreadable, write [illegible] there. Never guess a formula.
+- Drop running headers and footers, page numbers and scan artefacts.
+- Join text that continues across a page or column break, and rejoin words split by hyphenation.
+- One paragraph is one line of Markdown. Do not wrap lines. Separate paragraphs with exactly one blank line.
+- Never use HTML tags (no &lt;br&gt;, &lt;span&gt;, &lt;div&gt;, &lt;table&gt;). Never use \\ to break lines in prose.
+
+MATH
+- Inline math is $...$. Display math is $$ ... $$ with the $$ on their own lines. Never use \( \), \[ \] or a bare \begin{align}.
+- Use KaTeX-compatible LaTeX only (\frac, \sum, \int, \mathbb{R}, \operatorname{rank}, \lvert \rvert, ...). Words inside math go in \text{...}.
+- Even a single variable or symbol inside a sentence is math: write "let $V$ be", not "let V be".
+- Multi-line displays: $$ \begin{aligned} a &amp;= b \\ &amp;= c \end{aligned} $$
+- If an equation is numbered on the page, add \tag{n} with the printed number: $$ x^2 = 1 \tag{2.3} $$
+- Inside math always use Latin digits (0-9). In running Persian text keep the digits exactly as printed (۱۲۳ stays ۱۲۳).
+- Every $ must be closed. Write a literal dollar sign as \$.
+
+HEADINGS
+- Use #, ## or ### following the visual hierarchy of the page. Keep section numbers in the heading text. Do not also bold the heading.
+
+THEOREM-LIKE BLOCKS (the most important part)
+Start each one as a NEW paragraph, with a bold label at the very start of the line (no bullet or quote marker before it):
+
+**KEYWORD NUMBER (NAME).** The text of the statement...
+
+Examples:
+**قضیه ۵.۳ (لم زورن).** اگر ... آنگاه ...
+**Definition 2.1.** A set $V$ is called ...
+**مثال ۵.۲.** مجموعهٔ $\mathbb{R}^n$ ...
+**تمرین.** نشان دهید ...
+
+- Use the keyword exactly as printed. Recognized keywords: قضیه theorem | لم lemma | گزاره proposition | نتیجه corollary | تعریف definition | اثبات برهان proof | مثال example | تذکر نکته توجه remark | تمرین مسئله exercise | حل پاسخ solution | ادعا claim | نمادگذاری notation.
+- Copy the number exactly as printed (۵.۳ or 5.3). If the page gives none, leave it out: **قضیه.**
+- The bold markers hug the label: **قضیه ۵.۳.** and never ** قضیه ۵.۳ . **
+- Put the optional name in parentheses right after the number, then the period inside the bold.
+- Keep the whole statement in one paragraph when the page does. Display math that belongs to it stays directly after it, with no heading in between.
+- Proofs start with **اثبات.** or **Proof.** (or **اثبات قضیه ۵.۳.** / **Proof of Lemma 2.4.** when the page says what is proved). Put the end-of-proof mark where the page has it, at the end of the last line of the proof, as $\blacksquare$. If the page has no mark, do not invent one.
+- Solutions to exercises start with **حل.** or **Solution.**
+- If the source itself uses \begin{theorem} ... \end{theorem}, keep that, with \begin and \end each on their own line.
+- Ordinary text that merely mentions a theorem is not a block. Copy references exactly as written ("طبق قضیه ۵.۳", "by Lemma 2.4") and do not turn them into links.
+
+OTHER ELEMENTS
+- Lists: "- item" or "1. item", one item per line, math in $...$.
+- Tables: GitHub-style Markdown tables, math in $...$.
+- Figures and drawings: a single line *[Figure 5.2: short description of what is drawn]*. Do not try to draw them.
+- Footnotes: [^1] in the text and [^1]: the note, on its own line. Bibliography citations such as [1] stay as printed.
+- *italic* for terms being defined and for emphasis, **bold** only for the labels above and text that is bold on the page.
+
+PERSIAN TEXT
+- Write in logical reading order. Do not reverse anything and do not add direction marks.
+- Use Persian letters ی and ک (not the Arabic ي and ك) and the zero-width non-joiner in compounds such as می‌گوییم and ماتریس‌ها.
+- Leave English terms in English and put all math in $...$.
+
+EXAMPLE OF THE EXPECTED OUTPUT
+## ۵.۱ فضاهای برداری
+
+**تعریف ۵.۱.** فرض کنید $F$ یک میدان باشد. مجموعهٔ $V$ را یک *فضای برداری* روی $F$ گوییم هرگاه برای هر $u, v \in V$ و $a \in F$ داشته باشیم
+$$ u + v \in V, \quad a v \in V. \tag{5.1} $$
+
+**قضیه ۵.۳.** اگر $W \subseteq V$ ناتهی و نسبت به جمع و ضرب اسکالر بسته باشد، آنگاه $W$ یک زیرفضای $V$ است.
+
+**اثبات.** فرض کنید $w \in W$. چون $W$ نسبت به ضرب اسکالر بسته است، $0 = 0 \cdot w \in W$. $\blacksquare$
+
+**Lemma 5.4 (Replacement).** If $\{v_1, \dots, v_n\}$ spans $V$ and $\{u_1, \dots, u_m\}$ is linearly independent, then $m \leq n$.
+
+BEFORE YOU ANSWER, CHECK
+1. Every theorem, lemma, definition, proof, example, remark and exercise starts a new paragraph with its bold label at the very start.
+2. No \( \), \[ \], HTML tags, or stray spaces inside ** ** markers.
+3. Every $ is closed, and nothing but the transcription is in your reply.
+
+If I send more pages afterwards, continue the same document with the same conventions and numbering, without repeating earlier content.</textarea>
+  <footer class="guide-actions">
+    <button id="copy-prompt" class="btn primary" type="button">Copy prompt</button>
+    <button id="guide-close" class="btn" type="button">Close</button>
+  </footer>
+</dialog>
 
 <div id="drop" class="drop" hidden>Drop to open</div>
 <script src="main.js"></script>

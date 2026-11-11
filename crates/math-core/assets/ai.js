@@ -55,6 +55,19 @@
     gemini: "https://generativelanguage.googleapis.com"
   };
 
+  /* Anthropic, OpenAI and Gemini have fixed hosts; every other provider slug
+     (the "openai-compatible" any-URL one, or a pinned --ai-custom one) speaks the
+     OpenAI /chat/completions protocol against an endpoint the reader supplies. */
+  function isBuiltin(provider) {
+    return provider === "anthropic" || provider === "openai" || provider === "gemini";
+  }
+
+  /* Accepts a base URL ("https://host/v1"), with or without a trailing slash,
+     or a pasted full URL ("https://host/v1/chat/completions"). */
+  function normalizeEndpoint(ep) {
+    return String(ep || "").trim().replace(/\/+$/, "").replace(/\/chat\/completions$/i, "").replace(/\/+$/, "");
+  }
+
   // Storage
   var STORAGE_KEY = "mathia-ai";
   var memoryStorage = null;
@@ -110,22 +123,6 @@
       return "https://api.openai.com/v1";
     }
     return "";
-  }
-
-  function isLocalEndpoint(url) {
-    if (!url) return false;
-    try {
-      var base = window.location && window.location.href ? window.location.href : "http://localhost";
-      var u = new URL(url, base);
-      return (
-        u.hostname === "localhost" ||
-        u.hostname === "127.0.0.1" ||
-        u.hostname === "[::1]" ||
-        (u.hostname.length >= 6 && u.hostname.slice(-6) === ".local")
-      );
-    } catch (e) {
-      return false;
-    }
   }
 
   function getOrigin(provider, customEp) {
@@ -210,12 +207,10 @@
     if (typeof navigator !== "undefined" && navigator.onLine === false) return false;
     var p = currentProvider();
     if (!p) return false;
-    if (hasKeyFor(p)) return true;
-    if (p !== "anthropic" && p !== "openai" && p !== "gemini") {
-      var ep = getEndpoint(p);
-      if (isLocalEndpoint(ep)) return true;
-    }
-    return false;
+    if (isBuiltin(p)) return hasKeyFor(p);
+    /* Endpoint-based providers: the endpoint is what is required. The key is
+       optional, since local servers and many gateways take none. */
+    return /^https?:\/\//i.test(getEndpoint(p));
   }
 
   // SSE parser: accepts arbitrary chunk boundaries, returns list of complete data: payloads
@@ -332,7 +327,7 @@
     }
 
     // openai or custom openai-compatible
-    var ep = (options.endpoint || (provider === "openai" ? "https://api.openai.com/v1" : getEndpoint(provider))).replace(/\/+$/, "");
+    var ep = normalizeEndpoint(options.endpoint || (provider === "openai" ? "https://api.openai.com/v1" : getEndpoint(provider)));
     var reqMessages = [];
     if (system) {
       reqMessages.push({ role: "system", content: system });
@@ -978,7 +973,12 @@
       providerLabel: "Provider",
       modelLabel: "Model",
       endpointLabel: "API Endpoint URL",
+      endpointPlaceholder: "https://host/v1 (an OpenAI-compatible base URL)",
+      modelPlaceholder: "model name as the server lists it",
+      compatibleName: "OpenAI-compatible (any URL)",
       keyLabel: "API Key",
+      keyLabelOptional: "API Key (optional for local servers)",
+      missingEndpointNotice: "Set an API endpoint URL to ask questions.",
       noticePrefix: "Stored only in this browser; sent only to ",
       save: "Save",
       forgetKey: "Forget key",
@@ -1013,7 +1013,12 @@
       providerLabel: "ارائه‌دهنده",
       modelLabel: "مدل",
       endpointLabel: "نشانی وب‌سرویس",
+      endpointPlaceholder: "https://host/v1 (نشانی پایه سازگار با OpenAI)",
+      modelPlaceholder: "نام مدل، مطابق فهرست سرور",
+      compatibleName: "سازگار با OpenAI (هر نشانی)",
       keyLabel: "کلید دسترسی (API Key)",
+      keyLabelOptional: "کلید دسترسی (برای سرور محلی اختیاری)",
+      missingEndpointNotice: "برای پرسش، نشانی وب‌سرویس را وارد کنید.",
       noticePrefix: "تنها در این مرورگر ذخیره می‌شود؛ فقط به ",
       noticeSuffix: " ارسال می‌شود",
       save: "ذخیره",
@@ -1088,6 +1093,7 @@
     if (pSlug === "anthropic") opt.textContent = "Anthropic (Claude)";
     else if (pSlug === "openai") opt.textContent = "OpenAI";
     else if (pSlug === "gemini") opt.textContent = "Google Gemini";
+    else if (pSlug === "openai-compatible") opt.textContent = t.compatibleName;
     else opt.textContent = pSlug;
     providerSelect.appendChild(opt);
   }
@@ -1179,7 +1185,7 @@
 
   function updateDialogNotice() {
     var p = providerSelect.value;
-    var ep = (p !== "anthropic" && p !== "openai" && p !== "gemini") ? endpointInput.value.trim() : "";
+    var ep = !isBuiltin(p) ? endpointInput.value.trim() : "";
     var origin = getOrigin(p, ep);
     if (isRtl) {
       noticeEl.textContent = t.noticePrefix + origin + (t.noticeSuffix || "");
@@ -1192,10 +1198,16 @@
     var p = providerSelect.value;
     var s = readStorage();
     modelInput.value = (s.models && s.models[p]) || DEFAULT_MODELS[p] || "";
-    if (p !== "anthropic" && p !== "openai" && p !== "gemini") {
+    if (!isBuiltin(p)) {
       endpointField.style.display = "";
       endpointInput.value = (s.endpoints && s.endpoints[p]) || defaultEndpoints[p] || "";
+      endpointInput.placeholder = t.endpointPlaceholder;
+      modelInput.placeholder = t.modelPlaceholder;
+      keyLbl.textContent = t.keyLabelOptional;
     } else {
+      endpointInput.placeholder = "";
+      modelInput.placeholder = "";
+      keyLbl.textContent = t.keyLabel;
       endpointField.style.display = "none";
       endpointInput.value = "";
     }
@@ -1642,7 +1654,8 @@
       host.insertBefore(notice, before || host.firstChild);
     }
     var offline = isOffline();
-    notice.firstChild.textContent = (offline ? t.offlineNotice : t.missingKeyNotice) + " ";
+    var missing = isBuiltin(currentProvider()) ? t.missingKeyNotice : t.missingEndpointNotice;
+    notice.firstChild.textContent = (offline ? t.offlineNotice : missing) + " ";
     notice.lastChild.hidden = offline;
     return notice;
   }

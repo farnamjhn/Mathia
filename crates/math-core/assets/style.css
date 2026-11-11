@@ -59,6 +59,9 @@ body { margin:0; background-color:var(--mx-bg); background-image:radial-gradient
 .mx-toc-collapsed .mx-toc { transform:translateX(-100%); }
 .mx-toc-collapsed .mx-toc-toggle { inset-inline-start:18px; }
 [dir="rtl"].mx-toc-collapsed .mx-toc { transform:translateX(100%); }
+/* RTL: keep the menu button on the sidebar's outer (right) edge, clear of the LTR brand line. */
+[dir="rtl"] .mx-toc-toggle { inset-inline-start:18px; }
+[dir="rtl"] .mx-toc::before { padding-right:3rem; }
 .mx-heading { margin:2.2em 0 .6em; color:var(--mx-text); font-weight:700; line-height:1.45; letter-spacing:-.02em; }
 h1.mx-heading { margin-top:0; font-size:1.9rem; } h2.mx-heading { padding-bottom:.5em; border-bottom:1px solid var(--mx-border); font-size:1.45rem; } h3.mx-heading { font-size:1.2rem; }
 

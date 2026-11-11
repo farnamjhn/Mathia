@@ -10,7 +10,7 @@
 
   const PREVIEW_SCHEME = "mathia-preview";
   const MARKDOWN = /\.(md|markdown|mdown|txt)$/i;
-  const AI_PROVIDERS = ["anthropic", "openai", "gemini"];
+  const AI_PROVIDERS = ["anthropic", "openai", "gemini", "openai-compatible"];
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -20,6 +20,9 @@
     drop: $("drop"), detail: $("detail"), detailTitle: $("detail-title"),
     detailFacts: $("detail-facts"), detailScores: $("detail-scores"),
     detailFeatures: $("detail-features"),
+    guide: $("guide"), guideDialog: $("guide-dialog"), guideClose: $("guide-close"),
+    viewPrompt: $("view-prompt"), promptText: $("prompt-text"),
+    copyPrompt: $("copy-prompt"), copyPromptEmpty: $("copy-prompt-empty"),
   };
 
   /** @type {{path: string} | null} */
@@ -189,6 +192,55 @@
     el.frame.src = previewUrl(id);
   }
 
+  // The OCR prompt lives in a read-only <textarea> in index.html, so what the
+  // user sees is exactly what gets copied.
+  function copyViaSelection(text) {
+    const area = node("textarea", "offscreen");
+    area.value = text;
+    document.body.append(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    if (!ok) throw new Error("copy command was refused");
+  }
+
+  async function copyPrompt(button) {
+    const text = el.promptText.value;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(text);
+      else copyViaSelection(text);
+    } catch (_) {
+      try {
+        copyViaSelection(text);
+      } catch (error) {
+        setStatus("Could not copy the prompt: " + error.message, true);
+        return;
+      }
+    }
+    setStatus("OCR prompt copied — paste it into your OCR / vision model");
+    const label = button.dataset.label || button.textContent;
+    button.dataset.label = label;
+    button.textContent = "Copied";
+    clearTimeout(button.copyTimer);
+    button.copyTimer = setTimeout(() => { button.textContent = label; }, 1600);
+  }
+
+  function showGuide() {
+    if (!el.guideDialog.open) el.guideDialog.showModal();
+    el.promptText.scrollTop = 0;
+    el.copyPrompt.focus();
+  }
+
+  el.guide.addEventListener("click", showGuide);
+  el.viewPrompt.addEventListener("click", showGuide);
+  el.guideClose.addEventListener("click", () => el.guideDialog.close());
+  el.copyPrompt.addEventListener("click", () => copyPrompt(el.copyPrompt));
+  el.copyPromptEmpty.addEventListener("click", () => copyPrompt(el.copyPromptEmpty));
+  // A click on the backdrop (outside the dialog box) closes it.
+  el.guideDialog.addEventListener("click", (event) => {
+    if (event.target === el.guideDialog) el.guideDialog.close();
+  });
+
   el.open.addEventListener("click", open);
   el.reload.addEventListener("click", () => refresh());
   el.export.addEventListener("click", exportHtml);
@@ -201,6 +253,7 @@
   });
 
   window.addEventListener("keydown", (event) => {
+    if (el.guideDialog.open) return;
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
     const key = event.key.toLowerCase();
     if (key === "o") open();

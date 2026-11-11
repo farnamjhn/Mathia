@@ -232,7 +232,7 @@ describe("settings", () => {
   test("key round-trip through the dialog, and forgetting it", async () => {
     const s = await open(pages.en);
     const { page } = s;
-    assert.deepEqual(await page.evaluate(() => window.Mathia.ai.providers), ["anthropic", "openai", "gemini"]);
+    assert.deepEqual(await page.evaluate(() => window.Mathia.ai.providers), ["anthropic", "openai", "gemini", "openai-compatible"]);
     assert.deepEqual(await page.evaluate(() => window.Mathia.ai.settings()), {
       provider: "anthropic",
       model: "claude-sonnet-5-5",
@@ -347,6 +347,43 @@ describe("ask", () => {
 
     await again.locator("[data-mx-action=ask]").click();
     assert.ok(await again.locator(".mx-ai-panel").isHidden(), "the button toggles the panel");
+    await finish(s);
+  });
+
+  test("any OpenAI-compatible endpoint, typed into the dialog", async () => {
+    const s = await open(pages.en);
+    const { page, context } = s;
+    const llm = await mock(context, "https://llm.example.test/**", sse.openai(["From ", "a custom server."]));
+    const block = page.locator(firstBlock).nth(0);
+
+    await page.click("#mx-ai-toggle");
+    await page.selectOption("#mx-ai-provider-select", "openai-compatible");
+    assert.ok(await page.isVisible("#mx-ai-endpoint-field"), "endpoint is asked for");
+    assert.equal(await page.inputValue("#mx-ai-model-input"), "", "no model is guessed for an unknown server");
+    assert.equal(await page.evaluate(() => window.Mathia.ai.available()), false, "needs an endpoint");
+
+    // A pasted full URL is accepted and reduced to the base; no key is needed.
+    await page.fill("#mx-ai-endpoint-input", "https://llm.example.test/v1/chat/completions");
+    assert.match(await page.textContent("#mx-ai-notice"), /https:\/\/llm\.example\.test/);
+    await page.fill("#mx-ai-model-input", "my-model");
+    await page.click("#mx-ai-dialog .mx-ai-btn-primary");
+    assert.equal(await page.evaluate(() => window.Mathia.ai.available()), true);
+
+    await block.locator("[data-mx-action=ask]").click();
+    await block.locator(".mx-ai-input").fill("Q");
+    await block.locator(".mx-ai-btn-send").click();
+    await block.locator(".mx-ai-bubble-assistant >> text=From a custom server.").waitFor();
+    assert.equal(llm[0].url, "https://llm.example.test/v1/chat/completions");
+    assert.equal(llm[0].headers.authorization, undefined, "no key, no Authorization header");
+    assert.equal(llm[0].body.model, "my-model");
+    assert.equal(llm[0].body.stream, true);
+
+    // With a key, it is sent as a bearer token.
+    await page.evaluate(() => window.Mathia.ai.configure({ provider: "openai-compatible", key: "sk-any" }));
+    await block.locator(".mx-ai-input").fill("Q2");
+    await block.locator(".mx-ai-btn-send").click();
+    await block.locator(".mx-ai-bubble-assistant").nth(1).waitFor();
+    assert.equal(llm[1].headers.authorization, "Bearer sk-any");
     await finish(s);
   });
 

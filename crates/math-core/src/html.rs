@@ -70,13 +70,18 @@ pub enum AiProvider {
     Anthropic,
     OpenAi,
     Gemini,
+    /// Any OpenAI-compatible `/chat/completions` server (OpenRouter, Groq, Together,
+    /// DeepSeek, vLLM, LM Studio, Ollama, ...). The reader types the base URL into the
+    /// settings dialog, so the page must be allowed to connect to any http(s) host.
+    Compatible,
 }
 
 impl AiProvider {
-    pub const ALL: [AiProvider; 3] = [
+    pub const ALL: [AiProvider; 4] = [
         AiProvider::Anthropic,
         AiProvider::OpenAi,
         AiProvider::Gemini,
+        AiProvider::Compatible,
     ];
 
     pub fn slug(self) -> &'static str {
@@ -84,14 +89,18 @@ impl AiProvider {
             Self::Anthropic => "anthropic",
             Self::OpenAi => "openai",
             Self::Gemini => "gemini",
+            Self::Compatible => "openai-compatible",
         }
     }
 
+    /// The CSP `connect-src` source expression for this provider: one origin, or
+    /// scheme sources for [`AiProvider::Compatible`], whose host is chosen at runtime.
     pub fn origin(self) -> &'static str {
         match self {
             Self::Anthropic => "https://api.anthropic.com",
             Self::OpenAi => "https://api.openai.com",
             Self::Gemini => "https://generativelanguage.googleapis.com",
+            Self::Compatible => "https: http:",
         }
     }
 
@@ -100,6 +109,7 @@ impl AiProvider {
             "anthropic" => Some(Self::Anthropic),
             "openai" => Some(Self::OpenAi),
             "gemini" => Some(Self::Gemini),
+            "openai-compatible" => Some(Self::Compatible),
             _ => None,
         }
     }
@@ -619,6 +629,8 @@ mod tests {
         assert_eq!(AiProvider::Anthropic.slug(), "anthropic");
         assert_eq!(AiProvider::OpenAi.slug(), "openai");
         assert_eq!(AiProvider::Gemini.slug(), "gemini");
+        assert_eq!(AiProvider::Compatible.slug(), "openai-compatible");
+        assert_eq!(AiProvider::Compatible.origin(), "https: http:");
 
         assert_eq!(AiProvider::Anthropic.origin(), "https://api.anthropic.com");
         assert_eq!(AiProvider::OpenAi.origin(), "https://api.openai.com");
@@ -633,13 +645,18 @@ mod tests {
         );
         assert_eq!(AiProvider::from_slug("openai"), Some(AiProvider::OpenAi));
         assert_eq!(AiProvider::from_slug("gemini"), Some(AiProvider::Gemini));
+        assert_eq!(
+            AiProvider::from_slug("openai-compatible"),
+            Some(AiProvider::Compatible)
+        );
         assert_eq!(AiProvider::from_slug("invalid"), None);
         assert_eq!(
             AiProvider::ALL,
             [
                 AiProvider::Anthropic,
                 AiProvider::OpenAi,
-                AiProvider::Gemini
+                AiProvider::Gemini,
+                AiProvider::Compatible
             ]
         );
     }
@@ -690,6 +707,35 @@ mod tests {
             csp_content.contains(&expected_hash),
             "CSP missing ai.js hash: {expected_hash}"
         );
+    }
+
+    #[test]
+    fn openai_compatible_provider_allows_any_http_host() {
+        let doc = analyze(SAMPLE, &ScoringConfig::default());
+        let options = HtmlOptions {
+            ai: AiOptions {
+                providers: vec![AiProvider::Compatible],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let html = render(&doc, &options).unwrap();
+        assert!(html.contains("connect-src https: http:;"));
+        assert!(html.contains(r#"data-mx-ai="openai-compatible""#));
+        assert!(!html.contains(r#"data-mx-ai-endpoints=""#));
+        assert!(!html.contains("api.anthropic.com"));
+
+        // Without it, connections stay pinned to the chosen origins.
+        let pinned = HtmlOptions {
+            ai: AiOptions {
+                providers: vec![AiProvider::OpenAi],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let html = render(&doc, &pinned).unwrap();
+        assert!(html.contains("connect-src https://api.openai.com;"));
+        assert!(!html.contains("connect-src https: http:"));
     }
 
     #[test]

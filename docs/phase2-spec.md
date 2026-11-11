@@ -77,6 +77,16 @@ new `crates/math-core/assets/ai.css` (empty for now), `README.md` (usage line).
    present after `mx-runtime`, and its SHA-256 hash in the CSP (compute it the same way
    `content_security_policy` does).
 
+## Addendum — any OpenAI-compatible API
+
+`AiProvider::Compatible` (slug `openai-compatible`, last in `ALL`) is the generic provider: no
+fixed host, the reader enters the base URL in the settings dialog. Its CSP source is
+`https: http:` (so `connect-src` is open to any http(s) host only when it is enabled). In
+`ai.js` every slug that is not `anthropic`/`openai`/`gemini` is endpoint-based: it needs an
+endpoint (http/https), the key is optional (sent as `Authorization: Bearer` when set), and the
+endpoint may be a base URL or a pasted `…/chat/completions` URL (normalised to the base).
+`--ai-custom [NAME=]URL` keeps the tighter behaviour: CSP pinned to that URL's origin.
+
 ## S2 — ai.js core: settings, providers, streaming, safe rendering
 
 File: `crates/math-core/assets/ai.js`, `crates/math-core/assets/ai.css`.
