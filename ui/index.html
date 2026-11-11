@@ -4,10 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mathia</title>
+<link rel="icon" type="image/png" href="assets/mathia-light.png" media="(prefers-color-scheme: light)">
+<link rel="icon" type="image/png" href="assets/mathia-dark.png" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="toolbar">
+  <picture class="brand">
+    <source srcset="assets/mathia-dark.png" media="(prefers-color-scheme: dark)">
+    <img src="assets/mathia-light.png" width="28" height="28" alt="">
+  </picture>
   <button id="open" type="button" title="Open a Markdown file (⌘O / Ctrl+O)">Open…</button>
   <button id="reload" type="button" title="Compile again (⌘R / Ctrl+R)" disabled>Reload</button>
   <button id="export" type="button" title="Save the compiled HTML (⌘E / Ctrl+E)" disabled>Export…</button>
@@ -42,6 +48,10 @@
 
   <section class="preview">
     <div id="empty" class="empty">
+      <picture class="empty-logo">
+        <source srcset="assets/mathia-dark.png" media="(prefers-color-scheme: dark)">
+        <img src="assets/mathia-light.png" width="96" height="96" alt="">
+      </picture>
       <p class="empty-title">Open a Markdown file</p>
       <p>Use <strong>Open…</strong> or drop a <code>.md</code> file on this window.</p>
       <div class="empty-guide">

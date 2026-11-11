@@ -83,6 +83,12 @@ body {
   border-bottom: 1px solid var(--gray-alpha-400);
 }
 
+/* App icon. The PNGs carry Apple's transparent icon margin, so they sit
+   slightly inset; <picture> swaps light/dark with the system appearance. */
+.brand { flex: none; display: flex; margin-right: 4px; }
+.brand img, .empty-logo img { display: block; pointer-events: none; -webkit-user-drag: none; }
+.empty-logo { display: flex; justify-content: center; margin-bottom: 8px; }
+
 button {
   font: inherit;
   color: inherit;

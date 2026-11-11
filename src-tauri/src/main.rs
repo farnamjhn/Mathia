@@ -9,13 +9,14 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod dock;
 mod session;
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use math_core::{ConfigFormat, ScoringConfig};
-use tauri::{AppHandle, DragDropEvent, Manager, State, WindowEvent};
+use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 
 use session::{AnalysisView, CompileOptions, Compiled, MARKDOWN_EXTENSIONS, Session, Source};
@@ -181,15 +182,24 @@ fn main() {
                 .expect("static response headers are valid")
         })
         .on_window_event(|window, event| {
-            // A dropped Markdown file is as much the user's choice as one
-            // picked in the dialog. The frontend gets the same paths through
-            // the `tauri://drag-drop` event and asks for them afterwards.
-            if let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
-                let state = window.state::<Shared>();
-                let mut session = lock(&state);
-                for path in paths.iter().filter(|p| session::is_markdown(p)) {
-                    let _ = session.grant(path);
+            match event {
+                WindowEvent::ThemeChanged(theme) => {
+                    dock::sync(Some(*theme));
                 }
+                WindowEvent::Focused(true) => {
+                    dock::sync(None);
+                }
+                // A dropped Markdown file is as much the user's choice as one
+                // picked in the dialog. The frontend gets the same paths through
+                // the `tauri://drag-drop` event and asks for them afterwards.
+                WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+                    let state = window.state::<Shared>();
+                    let mut session = lock(&state);
+                    for path in paths.iter().filter(|p| session::is_markdown(p)) {
+                        let _ = session.grant(path);
+                    }
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -204,6 +214,14 @@ fn main() {
             load_config,
             save_config,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to start Mathia");
+        .build(tauri::generate_context!())
+        .expect("failed to build Mathia")
+        .run(|_app_handle, event| {
+            if let RunEvent::Ready = event {
+                // In dev builds on macOS, Tauri sets the light bundle icon
+                // right after `setup` returns (inside `RuntimeRunEvent::Ready`)
+                // before emitting `RunEvent::Ready`, so apply ours here.
+                dock::refresh(None);
+            }
+        });
 }
