@@ -11,6 +11,7 @@ use tauri::Theme;
 
 /// Resolves which Dock icon variant to show given the system Light/Dark
 /// appearance and macOS 26+'s optional `AppleIconAppearanceTheme` setting.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn resolve_theme(system_theme: Theme, icon_appearance: Option<&str>) -> Theme {
     match icon_appearance {
         Some(value) if value.ends_with("Dark") => Theme::Dark,
