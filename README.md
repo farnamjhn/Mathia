@@ -22,7 +22,6 @@
   <p align="center">
     Compile OCR-transcribed Markdown into a single, interactive HTML study guide.
     <br />
-    <a href="docs/archive/PLAN.md"><strong>Explore the docs »</strong></a>
     <br />
     <br />
     <a href="#usage">View Usage</a>
