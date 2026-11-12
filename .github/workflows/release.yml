@@ -26,7 +26,7 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -61,7 +61,13 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         working-directory: src-tauri
-        run: cargo tauri build --target ${{ matrix.target }}
+        run: |
+          # Tauri tries to sign whenever these are set, even when empty, so
+          # drop the ones whose secrets do not exist.
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!v}" ] || unset "$v"
+          done
+          cargo tauri build --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: mathia-${{ matrix.target }}

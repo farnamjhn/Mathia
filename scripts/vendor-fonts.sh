@@ -39,6 +39,11 @@ compute_sha256() {
 }
 
 TMP_DIR="$(mktemp -d)"
+# Git Bash on Windows: native Python cannot resolve MSYS paths like /tmp/...
+if command -v cygpath >/dev/null 2>&1; then
+    TMP_DIR="$(cygpath -m "$TMP_DIR")"
+    DEST_DIR="$(cygpath -m "$DEST_DIR")"
+fi
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 ARCHIVE="$TMP_DIR/vazirmatn.zip"

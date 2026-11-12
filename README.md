@@ -281,15 +281,15 @@ Mathia is free software, distributed under the
 
 
 <!-- MARKDOWN LINKS & IMAGES -->
-[contributors-shield]: https://img.shields.io/github/contributors/farnamjhn/Mathia.svg?style=for-the-badge
+[contributors-shield]: https://img.shields.io/github/contributors/farnamjhn/Mathia?style=for-the-badge
 [contributors-url]: https://github.com/farnamjhn/Mathia/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/farnamjhn/Mathia.svg?style=for-the-badge
+[forks-shield]: https://img.shields.io/github/forks/farnamjhn/Mathia?style=for-the-badge
 [forks-url]: https://github.com/farnamjhn/Mathia/network/members
-[stars-shield]: https://img.shields.io/github/stars/farnamjhn/Mathia.svg?style=for-the-badge
+[stars-shield]: https://img.shields.io/github/stars/farnamjhn/Mathia?style=for-the-badge
 [stars-url]: https://github.com/farnamjhn/Mathia/stargazers
-[issues-shield]: https://img.shields.io/github/issues/farnamjhn/Mathia.svg?style=for-the-badge
+[issues-shield]: https://img.shields.io/github/issues/farnamjhn/Mathia?style=for-the-badge
 [issues-url]: https://github.com/farnamjhn/Mathia/issues
-[license-shield]: https://img.shields.io/github/license/farnamjhn/Mathia.svg?style=for-the-badge
+[license-shield]: https://img.shields.io/github/license/farnamjhn/Mathia?style=for-the-badge
 [license-url]: https://github.com/farnamjhn/Mathia/blob/main/LICENSE
 [Rust-badge]: https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white
 [Rust-url]: https://www.rust-lang.org/
