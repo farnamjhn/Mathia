@@ -702,6 +702,7 @@
   // ── Decision model ───────────────────────────────────────────────────────────
 
   const DM_PLACEHOLDERS = {
+    "typesafe": { model: "e.g. jev-latest", url: "https://api.typesafe.ai" },
     "anthropic": { model: "e.g. claude-haiku-5-5", url: "https://api.anthropic.com" },
     "open-ai-compatible": { model: "e.g. gpt-4o-mini or llama3", url: "https://api.openai.com/v1" },
   };
@@ -749,8 +750,8 @@
     el.dmKey.value = "";
     dmClearKey = false;
     el.dmKey.placeholder = d.hasKey ? "Saved (" + d.keyHint + ") — type to replace" : "Paste your API key";
-    el.dmKeyHint.textContent = d.provider === "open-ai-compatible"
-      ? "A local server may not need one." : "";
+    el.dmKeyHint.textContent = d.provider === "anthropic"
+      ? "" : "A server at your own address may not need one.";
     el.dmRemoveKey.hidden = !d.hasKey;
     dmPlaceholders();
     dmMessage("");

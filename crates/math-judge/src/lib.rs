@@ -8,8 +8,10 @@
 //! * [`CommandJudge`], which runs any external program (a local model such as
 //!   jev, clef or laya behind a small wrapper script, or a remote call) and
 //!   talks to it over stdin/stdout, one JSON object per line;
-//! * [`ApiJudge`], which asks a hosted model (Anthropic or any OpenAI-compatible
-//!   endpoint) with an API key;
+//! * [`ApiJudge`], which asks a hosted decision model with an API key:
+//!   TypeSafe's Jev (or any server with the same API), Anthropic, or any
+//!   OpenAI-compatible endpoint. All of them answer the same typed questions
+//!   from [`jev`], and code there turns the answers into a verdict;
 //! * [`CachedJudge`], which keys verdicts by a hash of (block text, proposed
 //!   type, model version) so recompiling an unchanged document costs nothing
 //!   and gives the same result;
@@ -32,6 +34,8 @@ use math_core::{
     AppliedVerdict, BlockJudge, BlockType, Node, ScopeOverrides, SemanticBlock, Verdict,
 };
 use serde::{Deserialize, Serialize};
+
+pub mod jev;
 
 /// Version of the request/response format.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -281,21 +285,37 @@ impl BlockJudge for CommandJudge {
     }
 }
 
-/// Which wire format an [`ApiJudge`] speaks.
+/// Which wire format an [`ApiJudge`] speaks. Every provider is asked the same
+/// typed questions ([`jev`]); TypeSafe answers them natively, chat models
+/// imitate its answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
 pub enum ApiProvider {
+    /// TypeSafe's Jev API (`POST /v1/systemone`), or any decision model that
+    /// serves the same API at another address.
+    #[serde(rename = "typesafe")]
+    TypeSafe,
     /// Anthropic Messages API.
+    #[serde(rename = "anthropic")]
     Anthropic,
     /// OpenAI Chat Completions, as served by OpenAI, Ollama, vLLM, LM Studio…
+    #[serde(rename = "open-ai-compatible")]
     OpenAiCompatible,
 }
 
 impl ApiProvider {
     pub fn default_base_url(self) -> &'static str {
         match self {
+            ApiProvider::TypeSafe => "https://api.typesafe.ai",
             ApiProvider::Anthropic => "https://api.anthropic.com",
             ApiProvider::OpenAiCompatible => "https://api.openai.com/v1",
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            ApiProvider::TypeSafe => "typesafe",
+            ApiProvider::Anthropic => "anthropic",
+            ApiProvider::OpenAiCompatible => "openai-compatible",
         }
     }
 }
@@ -326,21 +346,11 @@ impl std::fmt::Debug for ApiConfig {
     }
 }
 
-const SYSTEM_PROMPT: &str = "You review how a program split a mathematics document into blocks \
-(theorem, lemma, proposition, corollary, definition, proof, example, remark, exercise, solution, \
-claim, notation). You are given one proposed block: its type, its text (LaTeX inside $…$), the \
-nodes (paragraphs) before and after it, and node indices. Decide whether the proposal is right. \
-Answer with one JSON object and nothing else: {\"verdict\": V, \"confidence\": C}, C between 0 \
-and 1. V is one of: \"accept\" (correct as is), \"incomplete\" (it stops too early; extend it by \
-one node), \"overreach\" (it runs into unrelated content; shorten it by one node), \"reject\" \
-(not a block at all), {\"retype\": \"lemma\"} (a block, but of another type; use the lowercase \
-type name), {\"end_at\": N} (it should end right before node N, an absolute index) or \
-{\"start_at\": N} (it really starts at node N). Prefer \"accept\" when unsure.";
-
 /// Asks a hosted model about each block. Needs a network; every failure
 /// leaves the heuristic result alone (`Accept`) and is kept in
-/// [`ApiJudge::errors`]. After the first failed call the remaining blocks are
-/// not sent, so a wrong key costs one request, not hundreds.
+/// [`ApiJudge::errors`], so callers can report it instead of treating it as
+/// an answer. After the first failed call the remaining blocks are not sent,
+/// so a wrong key costs one request, not hundreds.
 #[derive(Debug)]
 pub struct ApiJudge {
     config: ApiConfig,
@@ -353,6 +363,8 @@ pub struct ApiJudge {
 impl ApiJudge {
     /// Requests running at once.
     const PARALLEL: usize = 4;
+    /// Attempts per request when the server is rate limiting or overloaded.
+    const ATTEMPTS: u32 = 4;
 
     pub fn new(config: ApiConfig) -> Self {
         let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -374,13 +386,15 @@ impl ApiJudge {
         self
     }
 
-    /// `"provider/model"`: part of every cache key.
+    /// `"provider/model/questions"`: part of every cache key, so changing
+    /// the model or the questions asks again.
     pub fn model_version(&self) -> String {
-        let provider = match self.config.provider {
-            ApiProvider::Anthropic => "anthropic",
-            ApiProvider::OpenAiCompatible => "openai-compatible",
-        };
-        format!("{provider}/{}", self.config.model)
+        format!(
+            "{}/{}/{}",
+            self.config.provider.name(),
+            self.config.model,
+            jev::QUESTIONS_VERSION
+        )
     }
 
     pub fn errors(&self) -> Vec<String> {
@@ -407,119 +421,174 @@ impl ApiJudge {
         }
     }
 
-    /// One round trip: the model's reply text for `user`.
-    pub fn complete(&self, system: &str, user: &str, max_tokens: u32) -> Result<String, String> {
-        let (url, body) = match self.config.provider {
-            ApiProvider::Anthropic => (
-                format!("{}/v1/messages", self.base()),
-                serde_json::json!({
-                    "model": self.config.model,
-                    "max_tokens": max_tokens,
-                    "temperature": 0,
-                    "system": system,
-                    "messages": [{"role": "user", "content": user}],
-                }),
-            ),
-            ApiProvider::OpenAiCompatible => (
-                format!("{}/chat/completions", self.base()),
-                serde_json::json!({
-                    "model": self.config.model,
-                    "max_tokens": max_tokens,
-                    "temperature": 0,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                }),
-            ),
-        };
-        let mut request = self
-            .agent
-            .post(&url)
-            .header("content-type", "application/json");
+    /// POSTs `body` as JSON with the provider's headers, retrying with
+    /// exponential backoff (or the server's `retry-after`) on 429, 529 and
+    /// 502–504. Returns the parsed JSON of a successful reply.
+    fn post(&self, url: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let body = body.to_string();
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut request = self
+                .agent
+                .post(url)
+                .header("content-type", "application/json")
+                .header("accept", "application/json");
+            let key = self.config.api_key.as_str();
+            match self.config.provider {
+                ApiProvider::Anthropic => {
+                    request = request
+                        .header("x-api-key", key)
+                        .header("anthropic-version", "2023-06-01");
+                }
+                ApiProvider::TypeSafe | ApiProvider::OpenAiCompatible if !key.is_empty() => {
+                    request = request.header("authorization", &format!("Bearer {key}"));
+                }
+                ApiProvider::TypeSafe | ApiProvider::OpenAiCompatible => {}
+            }
+            let mut response = request
+                .send(body.as_str())
+                .map_err(|e| format!("{url}: {e}"))?;
+            let status = response.status().as_u16();
+            let retry_after = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok());
+            let text = response
+                .body_mut()
+                .read_to_string()
+                .map_err(|e| format!("{url}: {e}"))?;
+            let json: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+            if (200..300).contains(&status) {
+                return Ok(json);
+            }
+            if matches!(status, 429 | 529 | 502..=504) && attempt < Self::ATTEMPTS {
+                let wait = retry_after.unwrap_or(1 << (attempt - 1)).min(30);
+                std::thread::sleep(Duration::from_secs(wait));
+                continue;
+            }
+            return Err(format!(
+                "{url}: HTTP {status}: {}",
+                error_detail(&json, &text)
+            ));
+        }
+    }
+
+    /// Asks the questions of one Jev request and returns its `answers`
+    /// object. TypeSafe (or a compatible server) gets the request as is;
+    /// chat models get it as a message and are asked to answer in the same
+    /// shape.
+    pub fn ask_questions(
+        &self,
+        state: &serde_json::Value,
+        questions: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let base = self.base();
+        let model = &self.config.model;
         match self.config.provider {
+            ApiProvider::TypeSafe => {
+                let url = format!("{base}/v1/systemone");
+                let reply = self.post(
+                    &url,
+                    &serde_json::json!({"model": model, "state": state, "questions": questions}),
+                )?;
+                match reply.get("answers") {
+                    Some(answers) if answers.is_object() => Ok(answers.clone()),
+                    _ => Err(format!("{url}: the reply has no `answers`")),
+                }
+            }
             ApiProvider::Anthropic => {
-                request = request
-                    .header("x-api-key", &self.config.api_key)
-                    .header("anthropic-version", "2023-06-01");
+                let url = format!("{base}/v1/messages");
+                let reply = self.post(
+                    &url,
+                    &serde_json::json!({
+                        "model": model,
+                        "max_tokens": 600,
+                        "temperature": 0,
+                        "system": jev::CHAT_INSTRUCTIONS,
+                        "messages": [{"role": "user", "content": jev::chat_message(state, questions)}],
+                    }),
+                )?;
+                let text: String = reply["content"]
+                    .as_array()
+                    .map(|parts| parts.iter().filter_map(|p| p["text"].as_str()).collect())
+                    .unwrap_or_default();
+                jev::chat_answers(&text).map_err(|e| format!("{url}: {e}"))
             }
-            ApiProvider::OpenAiCompatible if !self.config.api_key.is_empty() => {
-                request =
-                    request.header("authorization", &format!("Bearer {}", self.config.api_key));
+            ApiProvider::OpenAiCompatible => {
+                let url = format!("{base}/chat/completions");
+                let reply = self.post(
+                    &url,
+                    &serde_json::json!({
+                        "model": model,
+                        "max_tokens": 600,
+                        "temperature": 0,
+                        "messages": [
+                            {"role": "system", "content": jev::CHAT_INSTRUCTIONS},
+                            {"role": "user", "content": jev::chat_message(state, questions)},
+                        ],
+                    }),
+                )?;
+                let text = reply["choices"][0]["message"]["content"]
+                    .as_str()
+                    .unwrap_or_default();
+                jev::chat_answers(text).map_err(|e| format!("{url}: {e}"))
             }
-            ApiProvider::OpenAiCompatible => {}
         }
-        let mut response = request
-            .send(body.to_string())
-            .map_err(|e| format!("{url}: {e}"))?;
-        let status = response.status();
-        let text = response
-            .body_mut()
-            .read_to_string()
-            .map_err(|e| format!("{url}: {e}"))?;
-        let json: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-        if !status.is_success() {
-            let detail = json["error"]["message"]
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| text.chars().take(200).collect());
-            return Err(format!("{url}: HTTP {}: {detail}", status.as_u16()));
-        }
-        let reply = match self.config.provider {
-            ApiProvider::Anthropic => json["content"]
-                .as_array()
-                .map(|parts| {
-                    parts
-                        .iter()
-                        .filter_map(|p| p["text"].as_str())
-                        .collect::<String>()
-                })
-                .unwrap_or_default(),
-            ApiProvider::OpenAiCompatible => json["choices"][0]["message"]["content"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-        };
-        if reply.is_empty() {
-            return Err(format!("{url}: the reply had no text"));
-        }
-        Ok(reply)
     }
 
-    /// Checks the key, URL and model with a one-word question.
+    /// Checks the key, address and model with one tiny question.
     pub fn test(&self) -> Result<(), String> {
-        self.complete("Reply with the single word: ok", "ping", 16)
+        let questions = serde_json::json!({
+            "greeting": {"type": "noul", "instructions": "Is `message` a greeting?"},
+        });
+        let answers =
+            self.ask_questions(&serde_json::json!({"message": "Hello there!"}), &questions)?;
+        answers["greeting"]["noul"]
+            .as_f64()
             .map(|_| ())
+            .ok_or_else(|| "the reply did not answer the test question".into())
     }
 
-    fn ask(&self, request: &JudgeRequest) -> Result<Verdict, String> {
-        let user = serde_json::to_string(request).map_err(|e| e.to_string())?;
-        let reply = self.complete(SYSTEM_PROMPT, &user, 120)?;
-        let response = parse_reply(&reply, &request.id)?;
-        Ok(self.policy.apply(&response))
+    fn ask(&self, block: &SemanticBlock, nodes: &[Node]) -> Result<Verdict, String> {
+        let (state, questions) = jev::request(block, nodes);
+        let answers = self.ask_questions(&state, &questions)?;
+        let answers = jev::Answers::read(&answers, &questions)?;
+        Ok(self
+            .policy
+            .apply(&jev::decide(&block.id, block.kind, &answers)))
     }
 }
 
-/// The first JSON object in a model's reply (models like to wrap it in
-/// prose or a code fence), read as a [`JudgeResponse`] for `id`.
-fn parse_reply(reply: &str, id: &str) -> Result<JudgeResponse, String> {
-    #[derive(Deserialize)]
-    struct Answer {
-        verdict: Verdict,
-        #[serde(default)]
-        confidence: Option<f32>,
+/// A readable message out of an error reply: `error.message` (Anthropic,
+/// OpenAI), `detail` (TypeSafe; a string, or a list of validation errors),
+/// else the start of the body.
+fn error_detail(json: &serde_json::Value, text: &str) -> String {
+    if let Some(message) = json["error"]["message"].as_str() {
+        return message.to_string();
     }
-    let start = reply.find('{').ok_or("the reply holds no JSON")?;
-    let mut stream = serde_json::Deserializer::from_str(&reply[start..]).into_iter::<Answer>();
-    let answer = stream
-        .next()
-        .ok_or("the reply holds no JSON")?
-        .map_err(|e| format!("unreadable verdict: {e}"))?;
-    Ok(JudgeResponse {
-        id: id.to_string(),
-        verdict: answer.verdict,
-        confidence: answer.confidence,
-    })
+    match &json["detail"] {
+        serde_json::Value::String(detail) => detail.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(|item| {
+                let at = item["loc"]
+                    .as_array()
+                    .map(|loc| {
+                        loc.iter()
+                            .map(|p| p.as_str().map_or_else(|| p.to_string(), str::to_string))
+                            .collect::<Vec<_>>()
+                            .join(".")
+                    })
+                    .unwrap_or_default();
+                format!("{at}: {}", item["msg"].as_str().unwrap_or("invalid"))
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+        serde_json::Value::Null => text.chars().take(200).collect(),
+        other => other.to_string(),
+    }
 }
 
 impl BlockJudge for ApiJudge {
@@ -528,21 +597,19 @@ impl BlockJudge for ApiJudge {
     }
 
     fn judge_batch(&self, blocks: &[&SemanticBlock], nodes: &[Node]) -> Vec<Verdict> {
-        let requests: Vec<JudgeRequest> =
-            blocks.iter().map(|b| JudgeRequest::new(b, nodes)).collect();
-        let mut verdicts = vec![Verdict::Accept; requests.len()];
-        let per_thread = requests.len().div_ceil(Self::PARALLEL).max(1);
+        let mut verdicts = vec![Verdict::Accept; blocks.len()];
+        let per_thread = blocks.len().div_ceil(Self::PARALLEL).max(1);
         std::thread::scope(|scope| {
-            for (requests, verdicts) in requests
+            for (blocks, verdicts) in blocks
                 .chunks(per_thread)
                 .zip(verdicts.chunks_mut(per_thread))
             {
                 scope.spawn(move || {
-                    for (request, slot) in requests.iter().zip(verdicts) {
+                    for (block, slot) in blocks.iter().zip(verdicts) {
                         if self.failed.load(Ordering::Relaxed) {
                             return;
                         }
-                        match self.ask(request) {
+                        match self.ask(block, nodes) {
                             Ok(verdict) => *slot = verdict,
                             Err(message) => self.error(message),
                         }
@@ -823,22 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn replies_are_parsed_out_of_prose_and_fences() {
-        let r = parse_reply(
-            "Sure:\n```json\n{\"verdict\": {\"retype\": \"lemma\"}, \"confidence\": 0.8}\n```",
-            "b",
-        )
-        .unwrap();
-        assert_eq!(r.verdict, Verdict::Retype(BlockType::Lemma));
-        assert_eq!(r.confidence, Some(0.8));
-        assert_eq!(
-            parse_reply("{\"verdict\":\"accept\"}", "b")
-                .unwrap()
-                .verdict,
-            Verdict::Accept
-        );
-        assert!(parse_reply("no idea", "b").is_err());
-        assert!(parse_reply("{\"verdict\":\"maybe\"}", "b").is_err());
+    fn api_config_hides_the_key() {
         let config = ApiConfig {
             provider: ApiProvider::Anthropic,
             base_url: String::new(),

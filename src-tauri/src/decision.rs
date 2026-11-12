@@ -28,9 +28,9 @@ pub struct DecisionSettings {
 impl Default for DecisionSettings {
     fn default() -> Self {
         DecisionSettings {
-            provider: ApiProvider::Anthropic,
+            provider: ApiProvider::TypeSafe,
             base_url: String::new(),
-            model: String::new(),
+            model: "jev-latest".into(),
         }
     }
 }
@@ -154,8 +154,10 @@ impl Decision {
     pub fn view(&self) -> DecisionView {
         let chars: Vec<char> = self.key.chars().collect();
         let has_key = !chars.is_empty();
-        let local = self.settings.provider == ApiProvider::OpenAiCompatible
-            && !self.settings.base_url.is_empty();
+        // A self-hosted server at a custom address (Ollama, LM Studio, a local
+        // Jev-compatible model) may need no key.
+        let local =
+            self.settings.provider != ApiProvider::Anthropic && !self.settings.base_url.is_empty();
         DecisionView {
             settings: self.settings.clone(),
             has_key,
@@ -167,7 +169,6 @@ impl Decision {
                         .collect::<String>()
                 )
             }),
-            // A custom OpenAI-compatible address (Ollama, LM Studio) may need no key.
             ready: self.settings.validate().is_ok() && (has_key || local),
         }
     }
@@ -207,21 +208,22 @@ mod tests {
         assert!(!decision.view().ready);
         assert!(decision.api_config().is_err());
         let settings = DecisionSettings {
-            model: " claude-haiku-5-5 ".into(),
+            model: " jev-1.14.0 ".into(),
             ..Default::default()
         };
         decision
-            .update(settings.clone(), KeyChange::Set("sk-ant-abcd1234".into()))
+            .update(settings.clone(), KeyChange::Set("ts-abcd1234".into()))
             .unwrap();
         let view = decision.view();
         assert!(view.ready);
         assert_eq!(view.key_hint.as_deref(), Some("…1234"));
-        assert!(!serde_json::to_string(&view).unwrap().contains("sk-ant"));
+        assert!(!serde_json::to_string(&view).unwrap().contains("ts-abcd"));
         decision.save(&dir).unwrap();
 
         let loaded = Decision::load(&dir);
-        assert_eq!(loaded.settings.model, "claude-haiku-5-5");
-        assert_eq!(loaded.api_config().unwrap().api_key, "sk-ant-abcd1234");
+        assert_eq!(loaded.settings.model, "jev-1.14.0");
+        assert_eq!(loaded.settings.provider, ApiProvider::TypeSafe);
+        assert_eq!(loaded.api_config().unwrap().api_key, "ts-abcd1234");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -244,11 +246,11 @@ mod tests {
     #[test]
     fn bad_input_is_refused() {
         let mut decision = Decision::default();
-        assert!(
-            decision
-                .update(DecisionSettings::default(), KeyChange::Keep)
-                .is_err()
-        );
+        let no_model = DecisionSettings {
+            model: " ".into(),
+            ..Default::default()
+        };
+        assert!(decision.update(no_model, KeyChange::Keep).is_err());
         let bad_url = DecisionSettings {
             model: "m".into(),
             base_url: "ftp://x".into(),
