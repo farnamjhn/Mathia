@@ -7,6 +7,7 @@
 //! models plug in from outside through [`classifier::BlockJudge`].
 
 pub mod classifier;
+pub mod clean_html;
 pub mod config;
 mod crossref;
 pub mod error;
@@ -23,6 +24,9 @@ pub mod tree;
 pub use classifier::{
     AppliedVerdict, BlockJudge, Classification, HeuristicClassifier, JudgedClassification,
     NodeScore, ScopeOverrides, Verdict,
+};
+pub use clean_html::{
+    analyze_html, analyze_html_detailed, clean_html, is_html, is_html_file,
 };
 pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, Scorer, ScoringConfig};
 pub use error::{Error, Result};
@@ -121,6 +125,9 @@ pub fn analyze_with_overrides(
     config: &ScoringConfig,
     overrides: &ScopeOverrides,
 ) -> Analysis {
+    if is_html(markdown) {
+        return clean_html::analyze_html_detailed(markdown);
+    }
     let nodes = parser::parse_markdown(&normalize_markdown(markdown));
     let Classification {
         blocks,
@@ -172,7 +179,11 @@ pub fn analyze_with_judge_detailed(
     (Document::new(nodes, blocks), overrides, log)
 }
 
-/// Markdown in, standalone HTML out.
-pub fn compile(markdown: &str, config: &ScoringConfig, options: &HtmlOptions) -> Result<String> {
-    html::render(&analyze(markdown, config), options)
+/// Markdown or HTML in, standalone Mathia HTML out.
+pub fn compile(input: &str, config: &ScoringConfig, options: &HtmlOptions) -> Result<String> {
+    if is_html(input) {
+        clean_html(input, options)
+    } else {
+        html::render(&analyze(input, config), options)
+    }
 }

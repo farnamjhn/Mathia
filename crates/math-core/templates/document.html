@@ -26,6 +26,9 @@
 </ol>
 </nav>
 <main id="mx-main" class="mx-main">
+{%- if !raw_content.is_empty() %}
+{{ raw_content|safe }}
+{%- else %}
 {%- for block in blocks %}
 {%- if block.heading_level > 0 %}
 <h{{ block.heading_level }} id="{{ block.id }}" class="mx-heading" data-block-id="{{ block.id }}" data-block-type="{{ block.kind }}" dir="{{ block.dir }}">{{ block.html|safe }}</h{{ block.heading_level }}>
@@ -39,6 +42,7 @@
 </section>
 {%- endif %}
 {%- endfor %}
+{%- endif %}
 </main>
 <script id="mx-runtime">{{ runtime_js|safe }}</script>
 {%- if let Some(ai) = ai_js %}

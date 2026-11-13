@@ -9,7 +9,8 @@
   const { listen } = window.__TAURI__.event;
 
   const PREVIEW_SCHEME = "mathia-preview";
-  const MARKDOWN = /\.(md|markdown|mdown|txt)$/i;
+  const SUPPORTED_INPUT = /\.(md|markdown|mdown|txt|html|htm)$/i;
+  const HTML_EXT = /\.(html|htm)$/i;
   const AI_PROVIDERS = ["anthropic", "openai", "gemini", "openai-compatible"];
 
   const $ = (id) => document.getElementById(id);
@@ -130,7 +131,9 @@
     el.previewToggle.disabled = !has;
     updateDecisionRun();
     el.reload.disabled = el.export.disabled = el.exportPdf.disabled = !has;
-    el.fixMarkdown.disabled = !has;
+    const isHtml = Boolean(source && source.path && HTML_EXT.test(source.path));
+    el.fixMarkdown.disabled = !has || isHtml;
+    el.fixMarkdown.title = isHtml ? "Fix Markdown is for Markdown files." : "";
   }
 
   function node(tag, className, text) {
@@ -1053,8 +1056,8 @@
   listen("tauri://drag-leave", () => { el.drop.hidden = true; });
   listen("tauri://drag-drop", (event) => {
     el.drop.hidden = true;
-    const path = (event.payload.paths || []).find((p) => MARKDOWN.test(p));
+    const path = (event.payload.paths || []).find((p) => SUPPORTED_INPUT.test(p));
     if (path) openPath(path).then(loadRecent);
-    else setStatus("Drop a Markdown file (.md, .markdown, .txt)", true);
+    else setStatus("Drop a Markdown or HTML file (.md, .html, .txt)", true);
   });
 })();

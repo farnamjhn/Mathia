@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 /// File extensions accepted from a drag and drop (the open dialog filters on
 /// the same list).
 pub const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "txt"];
+pub const HTML_EXTENSIONS: &[&str] = &["html", "htm"];
+pub const SUPPORTED_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "txt", "html", "htm"];
 
 /// How many recent files are kept.
 const RECENT_MAX: usize = 8;
@@ -23,6 +25,18 @@ pub fn is_markdown(path: &Path) -> bool {
             .iter()
             .any(|m| e.eq_ignore_ascii_case(m))
     })
+}
+
+pub fn is_html(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        HTML_EXTENSIONS
+            .iter()
+            .any(|m| e.eq_ignore_ascii_case(m))
+    })
+}
+
+pub fn is_supported(path: &Path) -> bool {
+    is_markdown(path) || is_html(path)
 }
 
 /// What to compile: a file the user opened, or text held by the frontend.
@@ -204,15 +218,33 @@ impl Session {
         }
     }
 
+    pub fn is_html_source(&self, source: &Source) -> bool {
+        match source {
+            Source::Path(path) => is_html(path),
+            Source::Text(text) => math_core::is_html(text),
+        }
+    }
+
     /// The source with its Markdown and LaTeX repaired, for saving.
     pub fn repair(&self, source: &Source) -> Result<math_core::Repair, String> {
-        Ok(math_core::repair_markdown(&self.read(source)?))
+        let content = self.read(source)?;
+        if self.is_html_source(source) || math_core::is_html(&content) {
+            return Ok(math_core::Repair {
+                text: content,
+                changed: false,
+                formulas: 0,
+            });
+        }
+        Ok(math_core::repair_markdown(&content))
     }
 
     /// Classifies with the session's configuration and corrections.
     fn classify(&self, source: &Source) -> Result<math_core::Analysis, String> {
-        let markdown = self.read(source)?;
-        let analysis = math_core::analyze_with_overrides(&markdown, &self.config, &self.overrides);
+        let content = self.read(source)?;
+        if self.is_html_source(source) || math_core::is_html(&content) {
+            return Ok(math_core::clean_html::analyze_html_detailed(&content));
+        }
+        let analysis = math_core::analyze_with_overrides(&content, &self.config, &self.overrides);
         self.overrides
             .validate(analysis.document.nodes.len())
             .map_err(|e| format!("the corrections no longer fit this file ({e}); reset them"))?;
@@ -298,20 +330,33 @@ impl Session {
         })
     }
 
-    /// Markdown to standalone HTML with the session's scoring configuration.
+    /// Markdown or HTML to standalone HTML with the session's scoring configuration.
     /// Returns the HTML and the number of semantic blocks.
     pub fn compile(
         &self,
         source: &Source,
         options: &CompileOptions,
     ) -> Result<(String, usize), String> {
+        let content = self.read(source)?;
+        let html_options = options.html_options()?;
+        if self.is_html_source(source) || math_core::is_html(&content) {
+            let analysis = math_core::clean_html::analyze_html_detailed(&content);
+            let semantic = analysis
+                .document
+                .blocks
+                .iter()
+                .filter(|b| b.kind.is_semantic())
+                .count();
+            let html = math_core::clean_html(&content, &html_options).map_err(|e| e.to_string())?;
+            return Ok((html, semantic));
+        }
         let document = self.classify(source)?.document;
         let semantic = document
             .blocks
             .iter()
             .filter(|b| b.kind.is_semantic())
             .count();
-        let html = math_core::html::render(&document, &options.html_options()?)
+        let html = math_core::html::render(&document, &html_options)
             .map_err(|e| e.to_string())?;
         Ok((html, semantic))
     }
@@ -559,5 +604,46 @@ mod tests {
                 .unwrap()
                 .contains("block-theorem-1")
         );
+    }
+
+    #[test]
+    fn html_input_is_cleaned_and_compiled() {
+        let dirty_html = r#"<!DOCTYPE html>
+<html>
+<head>
+  <title>Physics Guide</title>
+  <link rel="stylesheet" href="bad.css">
+  <style>body { font-size: 50px; }</style>
+  <script src="bad.js"></script>
+</head>
+<body onload="alert(1)">
+  <h1>Classical Mechanics</h1>
+  <p>Newton's second law: $F = ma$.</p>
+  <script>console.log("bad");</script>
+</body>
+</html>"#;
+
+        let source = Source::Text(dirty_html.to_string());
+        let session = Session::default();
+        let (compiled, semantic) = session.compile(&source, &CompileOptions::default()).unwrap();
+
+        // Bloat removed
+        assert!(!compiled.contains("bad.css"));
+        assert!(!compiled.contains("font-size: 50px"));
+        assert!(!compiled.contains("bad.js"));
+        assert!(!compiled.contains("onload="));
+        assert!(!compiled.contains("console.log(\"bad\")"));
+
+        // New Mathia scripts and styles present
+        assert!(compiled.contains("<style id=\"mx-style\">"));
+        assert!(compiled.contains("<script id=\"mx-runtime\">"));
+        assert!(compiled.contains("Classical Mechanics"));
+        assert!(compiled.contains("Newton's second law"));
+        assert_eq!(semantic, 0); // Headings are not counted as semantic theorems
+
+        let analysis = session.analyze(&source).unwrap();
+        assert_eq!(analysis.document.title.as_deref(), Some("Physics Guide"));
+        assert_eq!(analysis.document.blocks.len(), 1);
+        assert_eq!(analysis.document.blocks[0].kind, BlockType::Heading);
     }
 }

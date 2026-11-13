@@ -273,9 +273,18 @@ struct DocumentTemplate<'a> {
     math_head: String,
     toc: Vec<TocView<'a>>,
     blocks: Vec<BlockView<'a>>,
+    raw_content: &'a str,
 }
 
 pub fn render(doc: &Document, options: &HtmlOptions) -> Result<String> {
+    render_with_raw_content(doc, options, "")
+}
+
+pub fn render_with_raw_content(
+    doc: &Document,
+    options: &HtmlOptions,
+    raw_content: &str,
+) -> Result<String> {
     let rtl = doc.direction == crate::model::Direction::Rtl;
     let title = options
         .title
@@ -419,6 +428,7 @@ pub fn render(doc: &Document, options: &HtmlOptions) -> Result<String> {
                 html: &b.html,
             })
             .collect(),
+        raw_content,
     };
     Ok(template.render()?)
 }

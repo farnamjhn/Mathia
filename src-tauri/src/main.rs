@@ -24,7 +24,7 @@ use tauri::{
 };
 use tauri_plugin_dialog::DialogExt;
 
-use session::{AnalysisView, CompileOptions, Compiled, MARKDOWN_EXTENSIONS, Session, Source};
+use session::{AnalysisView, CompileOptions, Compiled, Session, Source};
 
 /// Scheme of the preview frame; the frontend builds the URL with
 /// `convertFileSrc(revision, "mathia-preview")`.
@@ -95,7 +95,9 @@ async fn pick_markdown(app: AppHandle, state: State<'_, Shared>) -> Result<Optio
     let Some(picked) = app
         .dialog()
         .file()
-        .add_filter("Markdown", MARKDOWN_EXTENSIONS)
+        .add_filter("Markdown and HTML", session::SUPPORTED_EXTENSIONS)
+        .add_filter("Markdown", session::MARKDOWN_EXTENSIONS)
+        .add_filter("HTML", session::HTML_EXTENSIONS)
         .blocking_pick_file()
     else {
         return Ok(None);
@@ -134,13 +136,13 @@ async fn clear_recent(app: AppHandle, state: State<'_, Shared>) -> Result<(), St
     Ok(())
 }
 
-/// The Markdown file given on the command line (`mathia-app notes.md`), if any.
+/// The Markdown or HTML file given on the command line (`mathia-app notes.md`), if any.
 #[tauri::command]
 async fn startup_file(app: AppHandle, state: State<'_, Shared>) -> Result<Option<String>, String> {
     let Some(path) = std::env::args_os().nth(1).map(std::path::PathBuf::from) else {
         return Ok(None);
     };
-    if !session::is_markdown(&path) {
+    if !session::is_supported(&path) {
         return Ok(None);
     }
     let mut session = lock(&state);
@@ -642,13 +644,13 @@ fn main() {
                 WindowEvent::Focused(true) => {
                     dock::sync(None);
                 }
-                // A dropped Markdown file is as much the user's choice as one
+                // A dropped Markdown or HTML file is as much the user's choice as one
                 // picked in the dialog. The frontend gets the same paths through
                 // the `tauri://drag-drop` event and asks for them afterwards.
                 WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
                     let state = window.state::<Shared>();
                     let mut session = lock(&state);
-                    for path in paths.iter().filter(|p| session::is_markdown(p)) {
+                    for path in paths.iter().filter(|p| session::is_supported(p)) {
                         let _ = session.grant(path);
                     }
                     save_recent(window.app_handle(), &session);

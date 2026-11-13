@@ -20,9 +20,9 @@ use math_judge::{CachedJudge, CommandJudge, Policy, Replay};
 #[cfg(not(feature = "bundled-katex"))]
 const KATEX_CDN_VERSION: &str = "0.16.22";
 
-const USAGE: &str = "usage: mathia <input.md | folder> [options]
+const USAGE: &str = "usage: mathia <input.md | input.html | folder> [options]
 
-  -o, --output FILE     where to write the HTML (default: input with .html);
+  -o, --output FILE     where to write the HTML (default: input with .html, or .clean.html for HTML);
                         for a folder input, the output folder (default: the input folder)
       --watch           recompile whenever an input file changes (Ctrl+C stops)
       --fix             write repaired Markdown instead of HTML: inline formulas that
@@ -322,11 +322,29 @@ fn is_markdown(path: &Path) -> bool {
     })
 }
 
-/// `(input, output)` pairs: one for a file, one per Markdown file (sorted,
+fn is_html(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        ["html", "htm"]
+            .iter()
+            .any(|m| e.eq_ignore_ascii_case(m))
+    })
+}
+
+fn is_supported(path: &Path) -> bool {
+    is_markdown(path) || is_html(path)
+}
+
+/// `(input, output)` pairs: one for a file, one per Markdown or HTML file (sorted,
 /// not recursive) for a folder.
 fn jobs(input: &Path, output: Option<PathBuf>) -> Result<Vec<(PathBuf, PathBuf)>, String> {
     if !input.is_dir() {
-        let output = output.unwrap_or_else(|| input.with_extension("html"));
+        let output = output.unwrap_or_else(|| {
+            if is_html(input) {
+                input.with_extension("clean.html")
+            } else {
+                input.with_extension("html")
+            }
+        });
         return Ok(vec![(input.to_path_buf(), output)]);
     }
     let out_dir = output.unwrap_or_else(|| input.to_path_buf());
@@ -334,16 +352,21 @@ fn jobs(input: &Path, output: Option<PathBuf>) -> Result<Vec<(PathBuf, PathBuf)>
     let mut files: Vec<PathBuf> = std::fs::read_dir(input)
         .map_err(|e| format!("{}: {e}", input.display()))?
         .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|path| path.is_file() && is_markdown(path))
+        .filter(|path| path.is_file() && is_supported(path))
         .collect();
     files.sort();
     if files.is_empty() {
-        return Err(format!("{}: no Markdown files", input.display()));
+        return Err(format!("{}: no Markdown or HTML files", input.display()));
     }
+    let same_dir = out_dir == input;
     Ok(files
         .into_iter()
         .map(|file| {
-            let name = file.with_extension("html");
+            let name = if is_html(&file) && same_dir {
+                file.with_extension("clean.html")
+            } else {
+                file.with_extension("html")
+            };
             let name = name.file_name().expect("a file has a name");
             let out = out_dir.join(name);
             (file, out)
@@ -428,9 +451,32 @@ fn load_overrides(path: &Path) -> Result<ScopeOverrides, String> {
 }
 
 fn compile_file(input: &Path, output: &Path, settings: &Settings) -> Result<(), String> {
-    let config = &settings.config;
-    let markdown =
+    let content =
         std::fs::read_to_string(input).map_err(|e| format!("{}: {e}", input.display()))?;
+
+    if is_html(input) || math_core::is_html(&content) {
+        let analysis = math_core::clean_html::analyze_html_detailed(&content);
+        if settings.explain {
+            print!("{}", analysis.explain(settings.config.threshold));
+        }
+        let html = math_core::clean_html(&content, &settings.html).map_err(|e| e.to_string())?;
+        std::fs::write(output, html).map_err(|e| format!("{}: {e}", output.display()))?;
+        let semantic = analysis
+            .document
+            .blocks
+            .iter()
+            .filter(|b| b.kind.is_semantic())
+            .count();
+        println!(
+            "{} -> {} (cleaned bloat; {semantic} semantic blocks)",
+            input.display(),
+            output.display()
+        );
+        return Ok(());
+    }
+
+    let config = &settings.config;
+    let markdown = content;
     let analysis = match (&settings.judge, &settings.overrides) {
         (Some(judge), _) => {
             let overrides = run_judge(&markdown, config, judge)?;

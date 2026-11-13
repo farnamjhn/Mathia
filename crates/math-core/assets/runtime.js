@@ -3,15 +3,176 @@
 (function () {
   "use strict";
 
+  function cleanTex(raw) {
+    if (!raw) return "";
+    var tex = raw.trim();
+    if (tex.startsWith("\\[") && tex.endsWith("\\]")) {
+      tex = tex.slice(2, -2).trim();
+    } else if (tex.startsWith("\\(") && tex.endsWith("\\)")) {
+      tex = tex.slice(2, -2).trim();
+    } else if (tex.startsWith("$$") && tex.endsWith("$$") && tex.length >= 4) {
+      tex = tex.slice(2, -2).trim();
+    } else if (tex.startsWith("$") && tex.endsWith("$") && tex.length >= 2) {
+      tex = tex.slice(1, -1).trim();
+    }
+    return tex;
+  }
+
+  function autoRenderDelimiters(root) {
+    if (!root) return;
+    var SKIP_TAGS = { SCRIPT: 1, STYLE: 1, PRE: 1, CODE: 1, TEXTAREA: 1, KBD: 1, SAMP: 1, SVG: 1 };
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+    var textNodes = [];
+    var node;
+    while ((node = walker.nextNode())) {
+      var parent = node.parentElement;
+      if (!parent) continue;
+      if (SKIP_TAGS[parent.tagName.toUpperCase()]) continue;
+      if (parent.closest(".math, .katex, [data-mx-tex]")) continue;
+      var val = node.nodeValue;
+      if (val && (val.indexOf("$") !== -1 || val.indexOf("\\[") !== -1 || val.indexOf("\\(") !== -1 || val.indexOf("\\begin{") !== -1)) {
+        textNodes.push(node);
+      }
+    }
+
+    textNodes.forEach(function (tNode) {
+      var text = tNode.nodeValue;
+      if (!text) return;
+      var parent = tNode.parentNode;
+      if (!parent) return;
+
+      var frag = document.createDocumentFragment();
+      var len = text.length;
+      var i = 0;
+      var plainStart = 0;
+
+      function flushPlain(end) {
+        if (end > plainStart) {
+          frag.appendChild(document.createTextNode(text.slice(plainStart, end)));
+        }
+      }
+
+      while (i < len) {
+        if (text.charAt(i) === "\\") {
+          var next = text.charAt(i + 1);
+          if (next === "[") {
+            var closeB = text.indexOf("\\]", i + 2);
+            if (closeB !== -1) {
+              flushPlain(i);
+              var div = document.createElement("div");
+              div.className = "math math-display";
+              div.textContent = text.slice(i + 2, closeB);
+              frag.appendChild(div);
+              i = closeB + 2;
+              plainStart = i;
+              continue;
+            }
+          } else if (next === "(") {
+            var closeP = text.indexOf("\\)", i + 2);
+            if (closeP !== -1) {
+              flushPlain(i);
+              var span = document.createElement("span");
+              span.className = "math math-inline";
+              span.textContent = text.slice(i + 2, closeP);
+              frag.appendChild(span);
+              i = closeP + 2;
+              plainStart = i;
+              continue;
+            }
+          } else if (text.slice(i, i + 7) === "\\begin{") {
+            var endBrace = text.indexOf("}", i + 7);
+            if (endBrace !== -1) {
+              var envName = text.slice(i + 7, endBrace);
+              var endTag = "\\end{" + envName + "}";
+              var closeEnv = text.indexOf(endTag, endBrace + 1);
+              if (closeEnv !== -1) {
+                flushPlain(i);
+                var divEnv = document.createElement("div");
+                divEnv.className = "math math-display";
+                divEnv.textContent = text.slice(i, closeEnv + endTag.length);
+                frag.appendChild(divEnv);
+                i = closeEnv + endTag.length;
+                plainStart = i;
+                continue;
+              }
+            }
+          }
+          i += 2;
+          continue;
+        }
+
+        if (text.charAt(i) === "$" && text.charAt(i + 1) === "$") {
+          var closeDd = text.indexOf("$$", i + 2);
+          if (closeDd !== -1) {
+            flushPlain(i);
+            var mDiv = document.createElement("div");
+            mDiv.className = "math math-display";
+            mDiv.textContent = text.slice(i + 2, closeDd);
+            frag.appendChild(mDiv);
+            i = closeDd + 2;
+            plainStart = i;
+            continue;
+          }
+        }
+
+        if (text.charAt(i) === "$") {
+          var nextChar = text.charAt(i + 1);
+          if (nextChar && nextChar !== " " && nextChar !== "\t" && nextChar !== "\n" && nextChar !== "\r" && nextChar !== "$") {
+            var closeD = -1;
+            for (var k = i + 1; k < len; k++) {
+              var ch = text.charAt(k);
+              if (ch === "\n") break;
+              if (ch === "$" && text.charAt(k - 1) !== "\\") {
+                if (text.charAt(k - 1) !== " " && text.charAt(k - 1) !== "\t") {
+                  closeD = k;
+                }
+                break;
+              }
+            }
+            if (closeD !== -1 && closeD > i + 1) {
+              flushPlain(i);
+              var mSpan = document.createElement("span");
+              mSpan.className = "math math-inline";
+              mSpan.textContent = text.slice(i + 1, closeD);
+              frag.appendChild(mSpan);
+              i = closeD + 1;
+              plainStart = i;
+              continue;
+            }
+          }
+        }
+
+        i++;
+      }
+
+      if (plainStart === 0 && frag.childNodes.length === 0) {
+        return;
+      }
+      flushPlain(len);
+      parent.replaceChild(frag, tNode);
+    });
+  }
+
   function renderMath() {
     if (!window.katex) return;
-    document.querySelectorAll(".math").forEach(function (el) {
+    autoRenderDelimiters(document.getElementById("mx-main") || document.body);
+    document.querySelectorAll(".math, .arithmatex, .latex, .tex").forEach(function (el) {
       if (el.dataset.mxTex !== undefined) return;
-      var tex = el.textContent;
+      var raw = el.textContent;
+      var tex = cleanTex(raw);
       el.dataset.mxTex = tex;
+      var isDisplay = el.classList.contains("math-display") ||
+                      el.classList.contains("display") ||
+                      el.tagName === "DIV";
+      if (isDisplay) {
+        el.classList.add("math-display");
+      } else {
+        el.classList.add("math-inline");
+      }
+      el.classList.add("math");
       try {
         window.katex.render(tex, el, {
-          displayMode: el.classList.contains("math-display"),
+          displayMode: isDisplay,
           throwOnError: false,
         });
       } catch (err) {
