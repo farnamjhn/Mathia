@@ -204,6 +204,11 @@ impl Session {
         }
     }
 
+    /// The source with its Markdown and LaTeX repaired, for saving.
+    pub fn repair(&self, source: &Source) -> Result<math_core::Repair, String> {
+        Ok(math_core::repair_markdown(&self.read(source)?))
+    }
+
     /// Classifies with the session's configuration and corrections.
     fn classify(&self, source: &Source) -> Result<math_core::Analysis, String> {
         let markdown = self.read(source)?;
@@ -504,6 +509,19 @@ mod tests {
         let parsed: ScopeOverrides =
             serde_json::from_str(r#"{"retype": {"1": "lemma"}, "end": {"1": 3}}"#).unwrap();
         assert_eq!(parsed.end.get(&1), Some(&3));
+    }
+
+    #[test]
+    fn repair_wraps_bare_formulas_of_an_opened_file() {
+        let path = temp_file("bare.md", "اگر P(B) \\neq 0 آن‌گاه $x$ است.\n");
+        let mut session = Session::default();
+        let source = Source::Path(path.clone());
+        assert!(session.repair(&source).is_err());
+        session.grant(&path).unwrap();
+        let repair = session.repair(&source).unwrap();
+        assert_eq!(repair.formulas, 1);
+        assert_eq!(repair.text, "اگر $P(B) \\neq 0$ آن‌گاه $x$ است.\n");
+        assert!(!session.repair(&Source::Text(repair.text)).unwrap().changed);
     }
 
     #[test]

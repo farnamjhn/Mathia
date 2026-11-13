@@ -4,6 +4,7 @@
 //! ```text
 //! mathia notes.md [-o notes.html] [--config scoring.toml] [--explain] [--font F.woff2] [--ai] [--ai-custom URL]
 //! mathia chapters/ [-o site/] [--watch]
+//! mathia notes.md --fix [-o notes.fixed.md]
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -24,6 +25,9 @@ const USAGE: &str = "usage: mathia <input.md | folder> [options]
   -o, --output FILE     where to write the HTML (default: input with .html);
                         for a folder input, the output folder (default: the input folder)
       --watch           recompile whenever an input file changes (Ctrl+C stops)
+      --fix             write repaired Markdown instead of HTML: inline formulas that
+                        lost their $ $, \\( \\) delimiters, bare environments, unbalanced $
+                        (default output: input with .fixed.md; -o may name the input itself)
       --config FILE     scoring configuration (.toml or .json)
       --dump-config     print the default scoring configuration as TOML and exit
       --explain         print every node's scores and why each block ended
@@ -95,6 +99,7 @@ fn run() -> Result<(), String> {
     let mut no_font = false;
     let mut explain = false;
     let mut watch = false;
+    let mut fix = false;
     let mut ai_providers: Vec<AiProvider> = Vec::new();
     let mut custom_providers: Vec<CustomProvider> = Vec::new();
     let mut judge_command: Option<String> = None;
@@ -120,6 +125,7 @@ fn run() -> Result<(), String> {
             "--no-font" => no_font = true,
             "--explain" => explain = true,
             "--watch" => watch = true,
+            "--fix" => fix = true,
             "--judge" => judge_command = Some(value(&mut args, &arg)?),
             "--judge-model" => judge_model = Some(value(&mut args, &arg)?),
             "--judge-cache" => judge_cache = Some(value(&mut args, &arg)?.into()),
@@ -203,6 +209,15 @@ fn run() -> Result<(), String> {
         && (judge_cache.is_some() || judge_log.is_some() || judge_model.is_some())
     {
         return Err("--judge-model, --judge-cache and --judge-log need --judge".into());
+    }
+
+    if fix {
+        if watch || judge_command.is_some() || overrides_path.is_some() {
+            return Err(
+                "--fix writes Markdown; it does not go with --watch, --judge or --overrides".into(),
+            );
+        }
+        return fix_files(&input, output);
     }
 
     let config = match config_path {
@@ -334,6 +349,68 @@ fn jobs(input: &Path, output: Option<PathBuf>) -> Result<Vec<(PathBuf, PathBuf)>
             (file, out)
         })
         .collect())
+}
+
+/// `notes.md` → `notes.fixed.md`
+fn fixed_name(input: &Path) -> PathBuf {
+    let extension = input.extension().and_then(|e| e.to_str()).unwrap_or("md");
+    input.with_extension(format!("fixed.{extension}"))
+}
+
+fn is_fixed_copy(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.ends_with(".fixed"))
+}
+
+/// `--fix`: repairs one file, or every Markdown file of a folder.
+fn fix_files(input: &Path, output: Option<PathBuf>) -> Result<(), String> {
+    let jobs: Vec<(PathBuf, PathBuf)> = if input.is_dir() {
+        let out_dir = output.unwrap_or_else(|| input.to_path_buf());
+        std::fs::create_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+        let same_folder = out_dir == input;
+        let mut files: Vec<PathBuf> = std::fs::read_dir(input)
+            .map_err(|e| format!("{}: {e}", input.display()))?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.is_file() && is_markdown(path) && !is_fixed_copy(path))
+            .collect();
+        files.sort();
+        if files.is_empty() {
+            return Err(format!("{}: no Markdown files", input.display()));
+        }
+        files
+            .into_iter()
+            .map(|file| {
+                let named = if same_folder {
+                    fixed_name(&file)
+                } else {
+                    file.clone()
+                };
+                let out = out_dir.join(named.file_name().expect("a file has a name"));
+                (file, out)
+            })
+            .collect()
+    } else {
+        let out = output.unwrap_or_else(|| fixed_name(input));
+        vec![(input.to_path_buf(), out)]
+    };
+    for (file, out) in jobs {
+        let markdown =
+            std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let repair = math_core::repair_markdown(&markdown);
+        if !repair.changed {
+            println!("{}: nothing to fix", file.display());
+            continue;
+        }
+        std::fs::write(&out, &repair.text).map_err(|e| format!("{}: {e}", out.display()))?;
+        println!(
+            "{} -> {} ({} inline formulas wrapped)",
+            file.display(),
+            out.display(),
+            repair.formulas
+        );
+    }
+    Ok(())
 }
 
 fn file_stamp(path: &Path) -> Option<(SystemTime, u64)> {

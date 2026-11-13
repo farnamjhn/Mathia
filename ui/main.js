@@ -32,6 +32,7 @@
     viewPrompt: $("view-prompt"), promptText: $("prompt-text"),
     copyPrompt: $("copy-prompt"), copyPromptEmpty: $("copy-prompt-empty"),
     exportFolder: $("export-folder"),
+    fixMarkdown: $("fix-markdown"),
     exportPdf: $("export-pdf"),
     recent: $("recent"), recentList: $("recent-list"), recentClear: $("recent-clear"),
     recentWrap: $("recent-wrap"), recentButton: $("recent-button"), recentMenu: $("recent-menu"),
@@ -129,6 +130,7 @@
     el.previewToggle.disabled = !has;
     updateDecisionRun();
     el.reload.disabled = el.export.disabled = el.exportPdf.disabled = !has;
+    el.fixMarkdown.disabled = !has;
   }
 
   function node(tag, className, text) {
@@ -264,6 +266,33 @@
     try {
       const dest = await invoke("export", { source, options: options() });
       if (dest) setStatus("Exported to " + dest);
+    } catch (error) {
+      setStatus(String(error), true);
+    }
+  }
+
+  // The preview is always compiled from the repaired text; this writes that
+  // repair back to a Markdown file and switches to it.
+  async function fixMarkdown() {
+    if (!source) return;
+    try {
+      const fixed = await invoke("fix_markdown", { source });
+      if (!fixed.changed) {
+        setStatus("Nothing to fix: the Markdown is already well formed.");
+        return;
+      }
+      if (!fixed.path) return;
+      const wrapped = fixed.formulas === 1 ? "1 formula" : fixed.formulas + " formulas";
+      const saved = "Saved the repaired Markdown to " + fixed.path +
+        (fixed.formulas ? " (" + wrapped + " given their $ $)" : "");
+      // Same blocks in the same order, so the corrections stay valid.
+      if (fixed.path !== source.path) {
+        source = { path: fixed.path };
+        stamp = null;
+        loadRecent();
+      }
+      await refresh(true);
+      setStatus(saved);
     } catch (error) {
       setStatus(String(error), true);
     }
@@ -974,6 +1003,7 @@
   el.correctionsClear.addEventListener("click", clearCorrections);
   el.exportFolder.addEventListener("click", exportFolder);
   el.exportPdf.addEventListener("click", exportPdf);
+  el.fixMarkdown.addEventListener("click", fixMarkdown);
 
   window.addEventListener("keydown", (event) => {
     if (el.guideDialog.open || el.configDialog.open) return;

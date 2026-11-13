@@ -172,6 +172,23 @@ cargo run -p mathia -- chapters/ -o site/ --watch
 A folder input compiles every Markdown file in it (not recursive) into the output folder;
 `--watch` recompiles whenever an input changes.
 
+**Fixing broken Markdown**
+
+Transcriptions often arrive with broken LaTeX: inline formulas with no `$ $` around them
+(`اگر P(B) \neq 0 آن‌گاه`), `\( \)` delimiters, bare `align` environments, unbalanced `$`,
+or the whole document inside a code fence. Mathia repairs these whenever it compiles, so the
+preview and the exported HTML are right either way. To repair the Markdown file itself:
+
+```sh
+# writes notes.fixed.md next to the input (or use -o; a folder works too)
+cargo run -p mathia -- notes.md --fix
+```
+
+In the desktop app the same thing is **Options → Fix Markdown…**. Formulas are recognized
+conservatively: a LaTeX command or a sub/superscript, a relation between operands (`x = 5`),
+a function value (`P(E)`), and, in Persian text, a Latin letter standing alone or a numeric
+interval. English words and parenthesised glosses are never touched.
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
@@ -235,7 +252,8 @@ flags the blocks detected with low confidence as *unsure*, so they can be checke
 **Options → Detection settings…** edits the thresholds, weights, keywords and scorer, and
 loads or saves configuration files. The **Transcription prompt** button (also shown on the
 start screen) holds a ready-made prompt to paste into your OCR / vision LLM, so the Markdown
-it transcribes uses the conventions Mathia detects.
+it transcribes uses the conventions Mathia detects. **Options → Fix Markdown…** saves a
+repaired copy of the open file (see [Running Mathia](#running-mathia)) and switches to it.
 
 The app needs the vendored KaTeX and Vazirmatn (see [Build from Source](#build-from-source)). It is
 early; see [PLAN.md](docs/archive/PLAN.md), Phase 3.

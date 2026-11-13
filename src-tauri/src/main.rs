@@ -193,6 +193,69 @@ async fn export(
     Ok(Some(display(&dest)))
 }
 
+/// What `fix_markdown` reports.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Fixed {
+    /// False when the source needed no repair; nothing is written then.
+    changed: bool,
+    /// Inline formulas that got their `$ … $` back.
+    formulas: usize,
+    /// Where the repaired Markdown was written; `None` if the dialog was
+    /// cancelled (or nothing changed).
+    path: Option<String>,
+}
+
+/// Repairs the Markdown and LaTeX of `source` and writes the result where the
+/// user says: a copy by default, or over the original if they pick it. The
+/// destination becomes a file the session may open.
+#[tauri::command]
+async fn fix_markdown(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    source: Source,
+) -> Result<Fixed, String> {
+    let repair = lock(&state).repair(&source)?;
+    if !repair.changed {
+        return Ok(Fixed {
+            changed: false,
+            formulas: 0,
+            path: None,
+        });
+    }
+    let stem = source.path().and_then(Path::file_stem);
+    let mut dialog = app
+        .dialog()
+        .file()
+        .add_filter("Markdown", &["md"])
+        .set_file_name(format!(
+            "{}.fixed.md",
+            stem.map(|s| s.to_string_lossy())
+                .as_deref()
+                .unwrap_or("document")
+        ));
+    if let Some(dir) = source.path().and_then(Path::parent) {
+        dialog = dialog.set_directory(dir);
+    }
+    let Some(dest) = dialog.blocking_save_file() else {
+        return Ok(Fixed {
+            changed: true,
+            formulas: repair.formulas,
+            path: None,
+        });
+    };
+    let dest = dest.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(&dest, &repair.text).map_err(|e| format!("{}: {e}", dest.display()))?;
+    let mut session = lock(&state);
+    let granted = session.grant(&dest)?;
+    save_recent(&app, &session);
+    Ok(Fixed {
+        changed: true,
+        formulas: repair.formulas,
+        path: Some(display(&granted)),
+    })
+}
+
 /// Compiles `source` and opens it in a window of its own, with the system print
 /// dialog on top: choose "Save as PDF" there. A window without any permission
 /// (no capability names it) shows the document, so it cannot reach the app's
@@ -600,6 +663,7 @@ fn main() {
             compile,
             export,
             export_pdf,
+            fix_markdown,
             get_config,
             set_config,
             reset_config,

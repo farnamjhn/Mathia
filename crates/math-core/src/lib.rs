@@ -15,6 +15,7 @@ pub mod html;
 pub mod model;
 pub mod normalize;
 pub mod parser;
+pub mod repair;
 mod sha256;
 pub mod text;
 pub mod tree;
@@ -32,6 +33,7 @@ pub use model::{
     BlockType, Direction, Document, EndReason, EnvSpan, Node, NodeKind, SemanticBlock, TocEntry,
 };
 pub use normalize::normalize_markdown;
+pub use repair::{Repair, repair_markdown, wrap_bare_math};
 pub use tree::DecisionTree;
 
 /// A [`Document`] together with the evidence behind every decision: all type

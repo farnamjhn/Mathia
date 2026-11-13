@@ -4,7 +4,9 @@
 //! not understand: `\( … \)` delimiters, bare `\begin{align}` environments,
 //! `\\` line breaks in prose, spaced-out bold markers and unbalanced `$`.
 //! Every pass here is a pure text rewrite; code spans and fenced code are
-//! never touched, and existing `$ … $` math is left as written.
+//! never touched, and existing `$ … $` math is left as written. The last pass
+//! ([`crate::repair::wrap_bare_math`]) gives inline formulas that lost their
+//! delimiters a `$ … $` of their own.
 //!
 //! Byte offsets in [`crate::model::Node::source`] refer to the *normalised*
 //! text when a document goes through [`crate::analyze`].
@@ -18,12 +20,53 @@ const MATH_ENVS: [&str; 4] = ["equation", "align", "alignat", "gather"];
 
 /// Runs every pass, in order.
 pub fn normalize_markdown(src: &str) -> String {
-    let s = convert_delimiters(src);
+    let s = convert_delimiters(unwrap_outer_fence(src));
     let s = wrap_environments(&s);
     let s = number_equations(&s);
     let s = fix_line_breaks(&s);
     let s = fix_bold_markers(&s);
-    balance_dollars(&s)
+    let s = balance_dollars(&s);
+    crate::repair::wrap_bare_math(&s)
+}
+
+/// A model's reply saved whole: the transcription prompt asks for the document
+/// inside one ```` ```markdown ```` fence, which would otherwise make all of it
+/// a code block. Returns the inside of such a fence, and `src` itself when the
+/// document is not one single Markdown fence.
+pub fn unwrap_outer_fence(src: &str) -> &str {
+    let fence = |line: &str| -> Option<(u8, usize, String)> {
+        let t = line.trim();
+        let c = *t.as_bytes().first()?;
+        let len = t.bytes().take_while(|x| *x == c).count();
+        ((c == b'`' || c == b'~') && len >= 3).then(|| (c, len, t[len..].trim().to_lowercase()))
+    };
+    let mut lines: Vec<(usize, &str)> = Vec::new();
+    let mut at = 0;
+    for line in src.split_inclusive('\n') {
+        lines.push((at, line));
+        at += line.len();
+    }
+    let Some(first) = lines.iter().position(|(_, l)| !l.trim().is_empty()) else {
+        return src;
+    };
+    let last = lines
+        .iter()
+        .rposition(|(_, l)| !l.trim().is_empty())
+        .unwrap_or(first);
+    let Some((c, len, info)) = fence(lines[first].1) else {
+        return src;
+    };
+    if last <= first || !matches!(info.as_str(), "" | "markdown" | "md") {
+        return src;
+    }
+    let closes = |line: &str| {
+        fence(line).is_some_and(|(c2, len2, rest)| c2 == c && len2 >= len && rest.is_empty())
+    };
+    // The fence must close on the last line and nowhere before it.
+    if !closes(lines[last].1) || lines[first + 1..last].iter().any(|(_, l)| closes(l)) {
+        return src;
+    }
+    &src[lines[first + 1].0..lines[last].0]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -584,6 +627,25 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_in_one_markdown_fence_is_unwrapped() {
+        let inner = "# عنوان\n\n```python\nprint(1)\n```\n\nمتن $x$\n";
+        assert_eq!(
+            unwrap_outer_fence(&format!("````markdown\n{inner}````\n")),
+            inner
+        );
+        assert_eq!(unwrap_outer_fence("\n```md\nمتن\n```"), "متن\n");
+        for src in [
+            "```\ncode\n```\n\ntext\n\n```\nmore\n```\n",
+            "```python\nprint(1)\n```\n",
+            "text\n\n```\ncode\n```\n",
+            "```markdown\nnever closed\n",
+            "",
+        ] {
+            assert_eq!(unwrap_outer_fence(src), src);
+        }
+    }
+
+    #[test]
     fn escapes_that_are_not_math_are_kept() {
         for src in [
             r"see \[1\] and \[Ser77\]",
@@ -673,7 +735,7 @@ mod tests {
         assert_eq!(
             once,
             "**قضیه ۲.** اگر $f$ پیوسته باشد آنگاه\\\n$$\\int_a^b f = 0$$\n\n\
-             $$\\begin{equation*} a = b \\tag{1}\\end{equation*}$$\n\nطبق (1) و \\$x"
+             $$\\begin{equation*} a = b \\tag{1}\\end{equation*}$$\n\nطبق (1) و \\$$x$"
         );
         assert_eq!(normalize_markdown(&once), once);
     }

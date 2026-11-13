@@ -57,6 +57,9 @@
         </span>
       </label>
       <hr>
+      <button id="fix-markdown" class="menu-item" type="button" disabled>Fix Markdown…
+        <span class="option-hint">Saves a repaired copy: formulas that lost their $ $, \( \) delimiters, unbalanced $ and spaced-out bold markers.</span>
+      </button>
       <button id="scoring" class="menu-item" type="button">Detection settings…</button>
       <button id="decision" class="menu-item" type="button">Decision model…
         <span class="option-hint">The API key and address of a model that double-checks the blocks.</span>
@@ -178,7 +181,7 @@
       <ol class="steps">
         <li>
           <h2>Transcribe your pages</h2>
-          <p>Give a vision model Mathia's prompt, then photos of the pages. The Markdown it returns is laid out the way Mathia reads it.</p>
+          <p>Give a vision model Mathia's prompt, then photos of the pages. The Markdown it returns is laid out the way Mathia reads it, and Mathia repairs formulas that arrive without their $ signs.</p>
           <div class="actions">
             <button id="copy-prompt-empty" class="btn" type="button">Copy prompt</button>
             <button id="view-prompt" class="btn" type="button">Read the prompt</button>
@@ -214,67 +217,77 @@
   <header class="dialog-head">
     <h2 id="guide-title">Transcription prompt</h2>
     <p>Paste this into a vision model as the first message or system prompt, then attach photos
-      of the pages. The Markdown it returns opens directly in Mathia.</p>
+      of the pages. Copy its answer with the code block's own copy button, so no <code>$</code>
+      is lost, and save it as a <code>.md</code> file. If formulas still arrive without their
+      <code>$</code>, Options → Fix Markdown repairs the file.</p>
   </header>
-  <textarea id="prompt-text" class="prompt" readonly spellcheck="false" aria-label="Transcription prompt">You transcribe pages of mathematics lecture notes and textbooks, written in Persian, English or both, into Markdown. The Markdown is compiled by Mathia, a program that finds theorems, definitions, proofs and similar blocks purely from the Markdown, so the conventions below matter. Reply with the Markdown only: no greeting, no explanation, and no code fence around the answer.
+  <textarea id="prompt-text" class="prompt" readonly spellcheck="false" aria-label="Transcription prompt">You are transcribing photographed or scanned pages of mathematics (lecture notes, handouts, textbooks; Persian, English or both) into Markdown. A program called Mathia compiles your Markdown into a study guide. It has no access to the pages: it finds theorems, definitions and proofs, and typesets formulas, only from what you write. A formula without its $ delimiters is shown as raw LaTeX, and a theorem without its bold label is shown as ordinary text, so the conventions below decide whether the result is usable.
 
-TRANSCRIBE FAITHFULLY
-- Copy what is printed. Do not solve, summarize, translate, correct or reorder anything.
-- If something is unreadable, write [illegible] there. Never guess a formula.
-- Drop running headers and footers, page numbers and scan artefacts.
+HOW TO ANSWER
+- Put the whole transcription inside ONE fenced code block that opens with ````markdown and closes with ```` (four backticks). The reader copies it with the code block's copy button; outside a code block the chat window renders the formulas and the copy loses every $.
+- Write nothing before or after that block: no greeting, summary or notes.
+- If more pages follow in later messages, continue the same document with the same conventions and numbering, in a new block, without repeating what you already wrote.
+
+TRANSCRIBE, DO NOT EDIT
+- Copy what is on the page. Do not solve, summarize, translate, explain, correct or reorder anything, and do not add glosses or headings the page does not have.
+- If something cannot be read, write [illegible] in its place. Never guess a formula or a number.
+- Leave out running headers and footers, page numbers, watermarks and scan artefacts. Leave out text that is crossed out.
 - Join text that continues across a page or column break, and rejoin words split by hyphenation.
-- One paragraph is one line of Markdown. Do not wrap lines. Separate paragraphs with exactly one blank line.
-- Never use HTML tags (no &lt;br&gt;, &lt;span&gt;, &lt;div&gt;, &lt;table&gt;). Never use \\ to break lines in prose.
+- One paragraph is one line of Markdown: do not wrap lines. Separate paragraphs with exactly one blank line.
+- Never use HTML tags (no &lt;br&gt;, &lt;span&gt;, &lt;div&gt;, &lt;table&gt;) and never use \\ to break a line of prose.
 
-MATH
-- Inline math is $...$. Display math is $$ ... $$ with the $$ on their own lines. Never use \( \), \[ \] or a bare \begin{align}.
-- Use KaTeX-compatible LaTeX only (\frac, \sum, \int, \mathbb{R}, \operatorname{rank}, \lvert \rvert, ...). Words inside math go in \text{...}.
-- Even a single variable or symbol inside a sentence is math: write "let $V$ be", not "let V be".
-- Multi-line displays: $$ \begin{aligned} a &amp;= b \\ &amp;= c \end{aligned} $$
-- If an equation is numbered on the page, add \tag{n} with the printed number: $$ x^2 = 1 \tag{2.3} $$
-- Inside math always use Latin digits (0-9). In running Persian text keep the digits exactly as printed (۱۲۳ stays ۱۲۳).
-- Every $ must be closed. Write a literal dollar sign as \$.
+MATH (the rule that breaks most often)
+- Every piece of mathematics is delimited, however small. Inline math is $...$ with no space just inside the dollars. Display math is $$ ... $$ on a line of its own.
+- A single variable or symbol inside a sentence is math too: write "let $V$ be a space over $F$" and "مجموعهٔ $S$ را", never "let V be" or "مجموعهٔ S را". The same holds for sets, intervals and function values: $\{a, b\}$, $[0, 1)$, $P(E)$, $A^c$, $x_1$.
+- No LaTeX command, no ^ and no subscript _ may ever appear outside $...$ or $$...$$. If you are about to type a backslash in a sentence, open a $ first.
+- Keep a whole formula in one pair of dollars: $P(A \mid B) = 0.8$, not $P$($A \mid B$) $= 0.8$. Punctuation that belongs to the sentence stays outside: "... $x > 0$، آن‌گاه".
+- Use only LaTeX that KaTeX renders: \frac, \sum, \int, \lim, \mathbb{R}, \mathcal{F}, \operatorname{rank}, \lvert x \rvert, \mid, \implies and the like. Words inside math go in \text{...}. Do not use \( \), \[ \], \label, \ref, \eqref, \newcommand, or the environments equation, align, gather and eqnarray.
+- Several lines in one display: $$ \begin{aligned} a &amp;= b \\ &amp;= c \end{aligned} $$. Piecewise definitions use \begin{cases} ... \end{cases}, matrices \begin{pmatrix} ... \end{pmatrix}, always inside $$ ... $$.
+- If the page numbers an equation, keep the printed number with \tag: $$ x^2 = 1 \tag{2.3} $$
+- Inside math always use Latin digits (0-9). In running Persian text keep the digits as printed (۱۲۳ stays ۱۲۳).
+- Arrows and symbols drawn between phrases are math as well: $\Rightarrow$, $\leftarrow$, $\therefore$.
+- Every $ you open is closed in the same paragraph. A literal dollar sign is written \$.
 
 HEADINGS
-- Use #, ## or ### following the visual hierarchy of the page. Keep section numbers in the heading text. Do not also bold the heading.
+- Use #, ## or ### following the visual hierarchy of the page. Keep section numbers in the heading text. Do not also make the heading bold.
 
-THEOREM-LIKE BLOCKS (the most important part)
-Start each one as a NEW paragraph, with a bold label at the very start of the line (no bullet or quote marker before it):
+THEOREM-LIKE BLOCKS (how Mathia finds the structure)
+Start each one as a NEW paragraph, with a bold label at the very start of the line (no bullet, number or quote marker before it):
 
 **KEYWORD NUMBER (NAME).** The text of the statement...
 
-Examples:
 **قضیه ۵.۳ (لم زورن).** اگر ... آنگاه ...
 **Definition 2.1.** A set $V$ is called ...
 **مثال ۵.۲.** مجموعهٔ $\mathbb{R}^n$ ...
 **تمرین.** نشان دهید ...
 
-- Use the keyword exactly as printed. Recognized keywords: قضیه theorem | لم lemma | گزاره proposition | نتیجه corollary | تعریف definition | اثبات برهان proof | مثال example | تذکر نکته توجه remark | تمرین مسئله exercise | حل پاسخ solution | ادعا claim | نمادگذاری notation.
+- Use the keyword that is printed. Recognized keywords: قضیه theorem | لم lemma | گزاره proposition | نتیجه corollary | تعریف definition | اثبات برهان proof | مثال example | تذکر نکته توجه remark | تمرین مسئله exercise | حل پاسخ solution | ادعا claim | نمادگذاری notation.
 - Copy the number exactly as printed (۵.۳ or 5.3). If the page gives none, leave it out: **قضیه.**
-- The bold markers hug the label: **قضیه ۵.۳.** and never ** قضیه ۵.۳ . **
-- Put the optional name in parentheses right after the number, then the period inside the bold.
-- Keep the whole statement in one paragraph when the page does. Display math that belongs to it stays directly after it, with no heading in between.
+- The optional name goes in parentheses after the number, and the closing period stays inside the bold. The bold markers touch the label: **قضیه ۵.۳.** and never ** قضیه ۵.۳ . **
+- Keep the whole statement in one paragraph when the page does. Display math that belongs to it follows directly, with no heading in between.
 - Proofs start with **اثبات.** or **Proof.** (or **اثبات قضیه ۵.۳.** / **Proof of Lemma 2.4.** when the page says what is proved). Put the end-of-proof mark where the page has it, at the end of the last line of the proof, as $\blacksquare$. If the page has no mark, do not invent one.
-- Solutions to exercises start with **حل.** or **Solution.**
-- If the source itself uses \begin{theorem} ... \end{theorem}, keep that, with \begin and \end each on their own line.
-- Ordinary text that merely mentions a theorem is not a block. Copy references exactly as written ("طبق قضیه ۵.۳", "by Lemma 2.4") and do not turn them into links.
+- Solutions start with **حل.**, **پاسخ.** or **Solution.**
+- If the source itself uses \begin{theorem} ... \end{theorem}, keep that, with \begin and \end each on a line of their own.
+- A sentence that merely mentions a theorem is not a block. Copy references as written ("طبق قضیه ۵.۳", "by Lemma 2.4") and do not turn them into links.
 
 OTHER ELEMENTS
-- Lists: "- item" or "1. item", one item per line, math in $...$.
-- Tables: GitHub-style Markdown tables, math in $...$.
-- Figures and drawings: a single line *[Figure 5.2: short description of what is drawn]*. Do not try to draw them.
-- Footnotes: [^1] in the text and [^1]: the note, on its own line. Bibliography citations such as [1] stay as printed.
-- *italic* for terms being defined and for emphasis, **bold** only for the labels above and text that is bold on the page.
+- Lists: "- item" or "1. item", one item per line. Parts labelled (الف), (ب) or (a), (b) inside a paragraph stay in that paragraph as printed.
+- Tables: GitHub-style Markdown tables. Every formula in a cell is in $...$, and a vertical bar inside a formula is written \mid or \lvert \rvert, never |.
+- Figures, graphs and drawings: one line of their own, *[Figure 5.2: short description of what is drawn]*, with any math in the description in $...$. Do not try to draw them.
+- Footnotes: [^1] in the text and [^1]: the note, on a line of its own. Bibliography citations such as [1] stay as printed.
+- *italic* for a term being defined and for emphasis; **bold** only for the labels above and for text that is bold on the page.
 
 PERSIAN TEXT
 - Write in logical reading order. Do not reverse anything and do not add direction marks.
-- Use Persian letters ی and ک (not the Arabic ي and ك) and the zero-width non-joiner in compounds such as می‌گوییم and ماتریس‌ها.
-- Leave English terms in English and put all math in $...$.
+- Use the Persian letters ی and ک (not the Arabic ي and ك) and the zero-width non-joiner in compounds such as می‌گوییم and ماتریس‌ها.
+- Leave English terms in English, exactly where the page has them.
 
 EXAMPLE OF THE EXPECTED OUTPUT
+````markdown
 ## ۵.۱ فضاهای برداری
 
 **تعریف ۵.۱.** فرض کنید $F$ یک میدان باشد. مجموعهٔ $V$ را یک *فضای برداری* روی $F$ گوییم هرگاه برای هر $u, v \in V$ و $a \in F$ داشته باشیم
+
 $$ u + v \in V, \quad a v \in V. \tag{5.1} $$
 
 **قضیه ۵.۳.** اگر $W \subseteq V$ ناتهی و نسبت به جمع و ضرب اسکالر بسته باشد، آنگاه $W$ یک زیرفضای $V$ است.
@@ -283,12 +296,15 @@ $$ u + v \in V, \quad a v \in V. \tag{5.1} $$
 
 **Lemma 5.4 (Replacement).** If $\{v_1, \dots, v_n\}$ spans $V$ and $\{u_1, \dots, u_m\}$ is linearly independent, then $m \leq n$.
 
-BEFORE YOU ANSWER, CHECK
-1. Every theorem, lemma, definition, proof, example, remark and exercise starts a new paragraph with its bold label at the very start.
-2. No \( \), \[ \], HTML tags, or stray spaces inside ** ** markers.
-3. Every $ is closed, and nothing but the transcription is in your reply.
+**مثال ۵.۵.** اگر $S = \{1, 2, 3\}$ و $E = \{2\}$، آن‌گاه $P(E) = \frac{1}{3}$ و $P(E^c) = 1 - P(E) = \frac{2}{3}$.
+````
 
-If I send more pages afterwards, continue the same document with the same conventions and numbering, without repeating earlier content.</textarea>
+BEFORE YOU ANSWER, READ YOUR TRANSCRIPTION ONCE MORE AND CHECK
+1. Outside $...$ and $$...$$ there is no backslash command, no ^, no subscript, and no lone variable, set, interval or function value such as S, \{a\}, [0, 1] or P(E).
+2. Every $ is closed, and every display formula is in $$ ... $$ on a line of its own.
+3. Every theorem, lemma, definition, proof, example, remark, exercise and solution starts a new paragraph with its bold label at the very start.
+4. There are no \( \), \[ \], HTML tags, or spaces inside ** ** markers.
+5. The answer is exactly one ````markdown block and nothing else.</textarea>
   <footer class="dialog-actions">
     <button id="copy-prompt" class="btn primary" type="button">Copy prompt</button>
     <button id="guide-close" class="btn" type="button">Close</button>

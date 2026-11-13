@@ -11,6 +11,7 @@
     "allow-compile",
     "allow-export",
     "allow-export-pdf",
+    "allow-fix-markdown",
     "allow-get-config",
     "allow-set-config",
     "allow-reset-config",
