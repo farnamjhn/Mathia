@@ -20,7 +20,7 @@
   <h3 align="center">Mathia</h3>
 
   <p align="center">
-    Compile OCR-transcribed Markdown into a single, interactive HTML study guide.
+    Compile OCR transcribed Markdown into a single interactive HTML study guide.
     <br />
     <br />
     <br />
@@ -77,12 +77,12 @@ single, self-contained, interactive HTML study guide.
 
 It detects mathematical structure — theorems, lemmas, propositions, corollaries,
 definitions, proofs, examples and remarks — and renders them as styled callouts with a
-sidebar table of contents and KaTeX-rendered math. Output is deterministic: the same input
-and configuration always produce the same document.
+sidebar, table of contents and Katex rendered maths. Output is deterministic: the same input
+and configuration will always produce the same document.
 
 Although the application is labeled with math all over, you can use it for any other field of
 study. Computer science probably fits best outside of math, but physics, chemistry and
-similar fields should work well with this compiler too.
+Similar fields should be fine with this compiler as well.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -115,7 +115,7 @@ similar fields should work well with this compiler too.
 <!-- GETTING STARTED -->
 ## Getting Started
 
-You can either download a ready-made desktop app or build Mathia from source.
+You can either download the ready made desktop app or build Mathia from source.
 
 ### Download a Release
 
@@ -176,7 +176,7 @@ A folder input compiles every Markdown file in it (not recursive) into the outpu
 
 Transcriptions often arrive with broken LaTeX: inline formulas with no `$ $` around them
 (`اگر P(B) \neq 0 آن‌گاه`), `\( \)` delimiters, bare `align` environments, unbalanced `$`,
-or the whole document inside a code fence. Mathia repairs these whenever it compiles, so the
+or the entire document within a code fence. Mathia repairs these whenever it compiles, so the
 preview and the exported HTML are right either way. To repair the Markdown file itself:
 
 ```sh
@@ -184,7 +184,7 @@ preview and the exported HTML are right either way. To repair the Markdown file 
 cargo run -p mathia -- notes.md --fix
 ```
 
-In the desktop app the same thing is **Options → Fix Markdown…**. Formulas are recognized
+In the desktop app it's simply **Options → Fix Markdown...** Formulas are recognized
 conservatively: a LaTeX command or a sub/superscript, a relation between operands (`x = 5`),
 a function value (`P(E)`), and, in Persian text, a Latin letter standing alone or a numeric
 interval. English words and parenthesised glosses are never touched.
@@ -243,19 +243,19 @@ The server must send CORS headers that allow the page's origin (`file://` pages 
 ### Desktop App
 
 Open a Markdown file (or drop one on the window, or pass it as an argument) to see the
-compiled document next to a block inspector, and export the HTML (or a whole folder). The
-preview follows edits made in another editor. Click a block in the preview or the list to
+compiled document next to a block inspector and exported the HTML (or a whole folder). The
+Preview follows edits made in another editor. Click a block in the preview or the list to
 inspect it, then correct it by hand — change its type, make it shorter or longer, or
-mark it as not a block; corrections can be saved as JSON for `mathia --overrides`. The list
-flags the blocks detected with low confidence as *unsure*, so they can be checked first.
+Mark it as not a block; corrections can be saved as JSON for mathia --overrides The list
+flags the blocks that are detected with low confidence as 'unsure' so they can be checked first.
 
 **Options → Detection settings…** edits the thresholds, weights, keywords and scorer, and
 loads or saves configuration files. The **Transcription prompt** button (also shown on the
 start screen) holds a ready-made prompt to paste into your OCR / vision LLM, so the Markdown
-it transcribes uses the conventions Mathia detects. **Options → Fix Markdown…** saves a
+It transcribes using the conventions that Mathia detects. **Options → Fix Markdown…** saves a
 repaired copy of the open file (see [Running Mathia](#running-mathia)) and switches to it.
 
-The app needs the vendored KaTeX and Vazirmatn (see [Build from Source](#build-from-source)). It is
+The app requires the vendored KaTeX and Vazirmatn (see [Build from Source](#build-from-source)). It is
 early; see [PLAN.md](docs/archive/PLAN.md), Phase 3.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
