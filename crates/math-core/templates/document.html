@@ -33,9 +33,11 @@
 {%- if block.heading_level > 0 %}
 <h{{ block.heading_level }} id="{{ block.id }}" class="mx-heading" data-block-id="{{ block.id }}" data-block-type="{{ block.kind }}" dir="{{ block.dir }}">{{ block.html|safe }}</h{{ block.heading_level }}>
 {%- else %}
-<section id="{{ block.id }}" class="mx-block mx-{{ block.kind }}" data-block-id="{{ block.id }}" data-block-type="{{ block.kind }}" dir="{{ block.dir }}"{% if !block.proves.is_empty() %} data-proves="{{ block.proves }}"{% endif %}{% if block.semantic %} aria-label="{{ block.title }}"{% endif %}>
+<section id="{{ block.id }}" class="mx-block mx-{{ block.kind }}" data-block-id="{{ block.id }}" data-block-type="{{ block.kind }}" dir="{{ block.dir }}"{% if !block.proves.is_empty() %} data-proves="{{ block.proves }}"{% endif %}{% if block.semantic %} aria-label="{{ block.title }}"{% endif %}{% if block.has_figure %} data-mx-figure="true"{% endif %}>
 {%- if block.semantic %}
 <header class="mx-block-head"><span class="mx-badge">{{ block.label }}</span>{% if !block.proves.is_empty() %}<a class="mx-proves" href="#{{ block.proves }}">{{ block.proves_title }}</a>{% endif %}<span class="mx-actions" data-block-actions="{{ block.id }}"></span></header>
+{%- else if block.has_figure && !ai_attr.is_empty() %}
+<header class="mx-block-head"><span class="mx-actions" data-block-actions="{{ block.id }}"></span></header>
 {%- endif %}
 <div class="mx-block-body">
 {{ block.html|safe }}</div>

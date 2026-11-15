@@ -1874,6 +1874,7 @@ name = "math-core"
 version = "0.1.0"
 dependencies = [
  "askama",
+ "html5ever 0.39.0",
  "pulldown-cmark",
  "regex",
  "serde",

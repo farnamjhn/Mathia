@@ -1498,7 +1498,13 @@
 
   function isSemanticBlock(block) {
     if (!block || !block.type) return false;
-    return block.type !== "heading" && block.type !== "text";
+    if (block.type === "heading") return false;
+    if (block.type === "text") {
+      /* Imported HTML keeps its own SVG figures in text blocks. They are
+         worth asking about, and Illustrate should reuse the figure. */
+      return Boolean(block.element && block.element.hasAttribute("data-mx-figure"));
+    }
+    return true;
   }
 
   function getSemanticBlocks() {
@@ -2182,19 +2188,60 @@
     return getSvgStoragePrefix(block.id) + fnv1a(extractCleanBlockText(block));
   }
 
-  function loadFigure(block) {
+  /* An imported HTML page often already has the figure the student needs.
+     Use the first SVG in the block, with the visual's caption when there is
+     one, instead of asking the model to draw a duplicate. */
+  function findInlineFigure(block) {
+    var el = block && block.element;
+    if (!el) return null;
+    var body = el.querySelector(".mx-block-body") || el;
+    var svg = body.querySelector("svg");
+    if (!svg) return null;
+    var caption = "";
+    var figure = svg.closest("figure");
+    if (figure) {
+      var figcaption = figure.querySelector("figcaption");
+      if (figcaption) caption = figcaption.textContent.trim();
+    }
+    if (!caption) {
+      var card = svg.closest(".visual-card");
+      if (card) {
+        var title = card.querySelector(".visual-title");
+        if (title) caption = title.textContent.trim();
+      }
+    }
+    if (!caption) {
+      var labelled = svg.closest("[data-caption]");
+      if (labelled) caption = labelled.getAttribute("data-caption") || "";
+    }
+    var svgText;
     try {
-      var raw = window.localStorage.getItem(getSvgStorageKey(block));
-      if (!raw) return null;
-      var parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed.svg !== "string") return null;
-      /* Stored data is not trusted either: it goes through the sanitiser again. */
-      var svg = sanitizeSvg(parsed.svg);
-      if (!svg) return null;
-      return { svg: svg, caption: typeof parsed.caption === "string" ? parsed.caption : "" };
+      svgText = new XMLSerializer().serializeToString(svg);
     } catch (e) {
       return null;
     }
+    var clean = sanitizeSvg(svgText);
+    if (!clean) return null;
+    return { svg: clean, caption: caption, node: figure || svg };
+  }
+
+  function loadFigure(block) {
+    try {
+      var raw = window.localStorage.getItem(getSvgStorageKey(block));
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.svg === "string") {
+          /* Stored data is not trusted either: it goes through the sanitiser again. */
+          var svg = sanitizeSvg(parsed.svg);
+          if (svg) {
+            return { svg: svg, caption: typeof parsed.caption === "string" ? parsed.caption : "" };
+          }
+        }
+      }
+    } catch (e) {
+      /* fall through to the figure that came with the document */
+    }
+    return findInlineFigure(block);
   }
 
   function saveFigure(block, figure) {
@@ -2251,7 +2298,8 @@
     wrap.setAttribute("role", "region");
     wrap.setAttribute("aria-label", t.figureAria + ": " + (getBlockTitle(block) || block.id));
 
-    var state = { figure: loadFigure(block), controller: null };
+    var state = { figure: loadFigure(block), controller: null, inlineNode: null };
+    if (state.figure && state.figure.node) state.inlineNode = state.figure.node;
     wrap._state = state;
 
     var status = document.createElement("div");
@@ -2309,6 +2357,10 @@
       }
       box.hidden = !fig;
       caption.hidden = !(fig && fig.caption);
+      /* While the panel shows the imported figure, hide the copy in the
+         prose so the reader does not see it twice. Closing the panel brings
+         the original back. */
+      if (state.inlineNode) state.inlineNode.hidden = !wrap.hidden;
       regenBtn.textContent = fig ? t.regenerate : t.illustrateAction;
       regenBtn.hidden = busy || !avail;
       stopBtn.hidden = !busy;
@@ -2381,10 +2433,8 @@
       var willOpen = wrap.hidden;
       wrap.hidden = !willOpen;
       if (button) button.setAttribute("aria-expanded", String(willOpen));
-      if (willOpen) {
-        wrap._refresh();
-        if (!wrap._state.figure) wrap._generate();
-      }
+      wrap._refresh();
+      if (willOpen && !wrap._state.figure) wrap._generate();
       return;
     }
 

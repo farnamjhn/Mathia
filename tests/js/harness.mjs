@@ -35,6 +35,7 @@ export async function setup() {
   outDir = mkdtempSync(join(tmpdir(), "mathia-js-"));
   pages.en = compile("algebra_en.md", "en-ai.html", "--ai");
   pages.fa = compile("analysis_fa.md", "fa-ai.html", "--ai");
+  pages.figure = compile("svg_figure.html", "figure-ai.html", "--ai");
   pages.plain = compile("algebra_en.md", "en-plain.html");
   browser = await chromium.launch({ channel: "chrome" });
 }

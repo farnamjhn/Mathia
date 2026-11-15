@@ -553,6 +553,32 @@ describe("illustrate", () => {
     assert.ok(await block.locator(".mx-ai-btn-regenerate").isHidden(), "no key: no regenerate");
     await finish(s, { hostileSvg: true });
   });
+
+  test("reuses an SVG that came with the imported HTML", async () => {
+    const s = await open(pages.figure);
+    const { page, context } = s;
+    const requests = await mock(context, ANTHROPIC, sse.anthropic(["not used"]));
+    await saveKey(page, "anthropic", "sk-test");
+
+    const block = page.locator('section.mx-block[data-mx-figure="true"]').first();
+    const original = block.locator("figure").first();
+    assert.ok(await original.isVisible(), "the imported figure is part of the prose");
+
+    await block.locator("[data-mx-action=illustrate]").click();
+    const img = block.locator("img.mx-ai-figure");
+    await img.waitFor();
+    const src = await img.getAttribute("src");
+    assert.ok(src.startsWith("data:image/svg+xml;charset=utf-8,"));
+    const drawn = decodeURIComponent(src.slice(src.indexOf(",") + 1));
+    assert.ok(drawn.includes("<circle"));
+    assert.match(await img.getAttribute("alt"), /A vertex labelled G/);
+    assert.ok(await original.isHidden(), "the prose copy is hidden while the panel is open");
+    assert.equal(requests.length, 0, "an imported figure needs no model request");
+
+    await block.locator("[data-mx-action=illustrate]").click();
+    assert.ok(await original.isVisible(), "closing the panel brings the prose figure back");
+    await finish(s);
+  });
 });
 
 describe("degradation", () => {

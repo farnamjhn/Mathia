@@ -241,6 +241,9 @@ struct BlockView<'a> {
     /// Id and title of the block this one proves or answers; empty if none.
     proves: &'a str,
     proves_title: &'a str,
+    /// The block carries an SVG from the source; the AI figure panel can
+    /// reuse it instead of drawing a new one.
+    has_figure: bool,
     html: &'a str,
 }
 
@@ -425,6 +428,7 @@ pub fn render_with_raw_content(
                     .as_deref()
                     .and_then(|id| doc.blocks.iter().find(|t| t.id == id))
                     .map_or("", |t| t.title.as_str()),
+                has_figure: b.html.contains("<svg"),
                 html: &b.html,
             })
             .collect(),
