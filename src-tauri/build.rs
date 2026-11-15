@@ -3,6 +3,7 @@
 /// (`capabilities/default.json`) grants its `allow-…` permission.
 const COMMANDS: &[&str] = &[
     "pick_markdown",
+    "grant_paths",
     "startup_file",
     "analyze",
     "compile",

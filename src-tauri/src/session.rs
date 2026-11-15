@@ -39,12 +39,14 @@ pub fn is_supported(path: &Path) -> bool {
     is_markdown(path) || is_html(path)
 }
 
-/// What to compile: a file the user opened, or text held by the frontend.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// What to compile: a file the user opened, text held by the frontend,
+/// or multiple files compiled in a chosen order.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
     Path(PathBuf),
     Text(String),
+    MultiPath(Vec<PathBuf>),
 }
 
 impl Source {
@@ -52,6 +54,7 @@ impl Source {
         match self {
             Source::Path(path) => Some(path),
             Source::Text(_) => None,
+            Source::MultiPath(paths) => paths.first().map(|p| p.as_path()),
         }
     }
 }
@@ -215,6 +218,35 @@ impl Session {
                 }
                 std::fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", path.display()))
             }
+            Source::MultiPath(paths) => {
+                if paths.is_empty() {
+                    return Err("no files to read".to_string());
+                }
+                let mut combined = String::new();
+                for (i, path) in paths.iter().enumerate() {
+                    let canonical = path
+                        .canonicalize()
+                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                    if !self.granted.contains(&canonical) {
+                        return Err(format!(
+                            "{}: not opened in Mathia (use Open or drop the file on the window)",
+                            path.display()
+                        ));
+                    }
+                    let content = std::fs::read_to_string(&canonical)
+                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                    let content_trimmed = content.trim_end_matches(['\r', '\n']);
+                    if i > 0 {
+                        combined.push_str("\n\n");
+                    }
+                    let content_clean = content_trimmed.trim_start_matches(['\r', '\n']);
+                    combined.push_str(content_clean);
+                }
+                if !combined.is_empty() && !combined.ends_with('\n') {
+                    combined.push('\n');
+                }
+                Ok(combined)
+            }
         }
     }
 
@@ -222,6 +254,7 @@ impl Session {
         match source {
             Source::Path(path) => is_html(path),
             Source::Text(text) => math_core::is_html(text),
+            Source::MultiPath(paths) => paths.iter().any(|p| is_html(p)),
         }
     }
 
@@ -251,25 +284,48 @@ impl Session {
         Ok(analysis)
     }
 
-    /// Modification time and size of an opened file, as an opaque string
-    /// that changes when the file does; `None` for text sources.
+    /// Modification time and size of opened file(s), as an opaque string
+    /// that changes when any file does; `None` for text sources.
     pub fn stamp(&self, source: &Source) -> Result<Option<String>, String> {
-        let Source::Path(path) = source else {
-            return Ok(None);
-        };
-        let canonical = path
-            .canonicalize()
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        if !self.granted.contains(&canonical) {
-            return Err(format!("{}: not opened in Mathia", path.display()));
+        match source {
+            Source::Text(_) => Ok(None),
+            Source::Path(path) => {
+                let canonical = path
+                    .canonicalize()
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                if !self.granted.contains(&canonical) {
+                    return Err(format!("{}: not opened in Mathia", path.display()));
+                }
+                let meta =
+                    std::fs::metadata(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_nanos());
+                Ok(Some(format!("{modified}:{}", meta.len())))
+            }
+            Source::MultiPath(paths) => {
+                let mut stamps = Vec::with_capacity(paths.len());
+                for path in paths {
+                    let canonical = path
+                        .canonicalize()
+                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                    if !self.granted.contains(&canonical) {
+                        return Err(format!("{}: not opened in Mathia", path.display()));
+                    }
+                    let meta = std::fs::metadata(&canonical)
+                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                    let modified = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |d| d.as_nanos());
+                    stamps.push(format!("{modified}:{}", meta.len()));
+                }
+                Ok(Some(stamps.join(";")))
+            }
         }
-        let meta = std::fs::metadata(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
-        let modified = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_nanos());
-        Ok(Some(format!("{modified}:{}", meta.len())))
     }
 
     pub fn overrides(&self) -> &ScopeOverrides {
@@ -645,5 +701,89 @@ mod tests {
         assert_eq!(analysis.document.title.as_deref(), Some("Physics Guide"));
         assert_eq!(analysis.document.blocks.len(), 1);
         assert_eq!(analysis.document.blocks[0].kind, BlockType::Heading);
+    }
+
+    #[test]
+    fn multi_path_reads_in_chosen_order_and_compiles() {
+        let f1 = temp_file("ch1.md", "# Chapter 1\n\n**Theorem 1.** Statement one.\n");
+        let f2 = temp_file("ch2.md", "# Chapter 2\n\n**Definition 1.** Term two.\n");
+        let f3 = temp_file("ch3.md", "# Chapter 3\n\n**Proposition 1.** Prop three.\n");
+
+        let mut session = Session::default();
+        let f1 = session.grant(&f1).unwrap();
+        let f2 = session.grant(&f2).unwrap();
+        let f3 = session.grant(&f3).unwrap();
+
+        // Reading in order 1, 2, 3
+        let source_123 = Source::MultiPath(vec![f1.clone(), f2.clone(), f3.clone()]);
+        let text_123 = session.read(&source_123).unwrap();
+        assert_eq!(
+            text_123,
+            "# Chapter 1\n\n**Theorem 1.** Statement one.\n\n# Chapter 2\n\n**Definition 1.** Term two.\n\n# Chapter 3\n\n**Proposition 1.** Prop three.\n"
+        );
+
+        // Reading in custom reordered sequence 3, 1, 2
+        let source_312 = Source::MultiPath(vec![f3.clone(), f1.clone(), f2.clone()]);
+        let text_312 = session.read(&source_312).unwrap();
+        assert_eq!(
+            text_312,
+            "# Chapter 3\n\n**Proposition 1.** Prop three.\n\n# Chapter 1\n\n**Theorem 1.** Statement one.\n\n# Chapter 2\n\n**Definition 1.** Term two.\n"
+        );
+
+        // Analyze finds semantic blocks from all compiled files
+        let analysis = session.analyze(&source_123).unwrap();
+        let kinds: Vec<_> = analysis.document.blocks.iter().map(|b| b.kind).collect();
+        assert!(kinds.contains(&BlockType::Theorem));
+        assert!(kinds.contains(&BlockType::Definition));
+        assert!(kinds.contains(&BlockType::Proposition));
+
+        // Compile preview renders all chapters together
+        let compiled = session
+            .compile_preview(&source_123, &CompileOptions::default())
+            .unwrap();
+        assert!(compiled.semantic_blocks >= 3);
+        assert!(session.preview().contains("Chapter 1"));
+        assert!(session.preview().contains("Chapter 2"));
+        assert!(session.preview().contains("Chapter 3"));
+    }
+
+    #[test]
+    fn multi_path_requires_all_files_granted_and_tracks_stamps() {
+        let f1 = temp_file("part1.md", "# Part 1\n\nSome text.\n");
+        let f2 = temp_file("part2.md", "# Part 2\n\nOther text.\n");
+
+        let mut session = Session::default();
+        let source = Source::MultiPath(vec![f1.clone(), f2.clone()]);
+
+        // Neither granted -> error
+        assert!(session.read(&source).is_err());
+        assert!(session.stamp(&source).is_err());
+
+        // Only first granted -> error
+        session.grant(&f1).unwrap();
+        assert!(session.read(&source).is_err());
+
+        // Both granted -> succeeds
+        session.grant(&f2).unwrap();
+        assert!(session.read(&source).is_ok());
+
+        let stamp1 = session.stamp(&source).unwrap().unwrap();
+
+        // Modifying any one of the files changes the stamp
+        std::fs::write(&f2, "# Part 2\n\nUpdated text.\n").unwrap();
+        let stamp2 = session.stamp(&source).unwrap().unwrap();
+        assert_ne!(stamp1, stamp2);
+    }
+
+    #[test]
+    fn multi_path_json_serde() {
+        let json = r#"{"multi_path": ["/tmp/a.md", "/tmp/b.md"]}"#;
+        let source: Source = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            source,
+            Source::MultiPath(vec![PathBuf::from("/tmp/a.md"), PathBuf::from("/tmp/b.md")])
+        );
+        let serialized = serde_json::to_string(&source).unwrap();
+        assert!(serialized.contains(r#""multi_path":["#));
     }
 }

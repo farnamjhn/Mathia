@@ -27,6 +27,7 @@
   <span class="bar-space"></span>
 
   <button id="open" class="btn" type="button" title="Open a Markdown or HTML file (⌘O / Ctrl+O)">Open…</button>
+  <button id="open-multi" class="btn" type="button" title="Import multiple Markdown files and compile them together">Combine…</button>
   <div class="menu-wrap" id="recent-wrap" hidden>
     <button id="recent-button" class="btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="recent-menu">
       Recent
@@ -192,6 +193,7 @@
           <p>Choose the file, or drop it anywhere on this window.</p>
           <div class="actions">
             <button id="open-welcome" class="btn primary" type="button">Open a Markdown or HTML file…</button>
+            <button id="open-multi-welcome" class="btn" type="button">Combine multiple Markdown files…</button>
           </div>
         </li>
         <li>
@@ -391,6 +393,30 @@ BEFORE YOU ANSWER, READ YOUR TRANSCRIPTION ONCE MORE AND CHECK
     <span class="spacer"></span>
     <button id="dm-cancel" class="btn" type="button">Cancel</button>
     <button id="dm-save" class="btn primary" type="button">Save</button>
+  </footer>
+</dialog>
+
+<dialog id="order-dialog" class="dialog order-dialog" aria-labelledby="order-title">
+  <header class="dialog-head">
+    <h2 id="order-title">Combine Markdown files</h2>
+    <p>Choose the order of the files to compile into a single document. Drag or use the arrows to reorder.</p>
+  </header>
+  <div class="order-body">
+    <div class="order-toolbar">
+      <button id="order-add" class="btn small" type="button">+ Add files…</button>
+      <button id="order-clear" class="btn small" type="button">Clear</button>
+      <span class="order-count" id="order-count"></span>
+    </div>
+    <ol id="order-list" class="order-list" aria-label="Markdown files in compilation order"></ol>
+    <p id="order-empty" class="order-empty" hidden>No files selected. Click "+ Add files…" to choose Markdown files.</p>
+    <div class="order-options">
+      <label for="order-title-input">Document title <span class="hint">(optional)</span></label>
+      <input id="order-title-input" type="text" placeholder="e.g. Complete Lecture Notes" autocomplete="off" spellcheck="false">
+    </div>
+  </div>
+  <footer class="dialog-actions">
+    <button id="order-cancel" class="btn" type="button">Cancel</button>
+    <button id="order-compile" class="btn primary" type="button">Compile</button>
   </footer>
 </dialog>
 

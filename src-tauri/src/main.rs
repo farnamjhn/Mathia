@@ -88,25 +88,49 @@ fn display(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-/// Opens the file dialog. Returns the chosen path (canonical), or `None` if
-/// the dialog was cancelled.
+/// Opens the file dialog. Returns the chosen paths (canonical) in order,
+/// or an empty list if the dialog was cancelled.
 #[tauri::command]
-async fn pick_markdown(app: AppHandle, state: State<'_, Shared>) -> Result<Option<String>, String> {
+async fn pick_markdown(app: AppHandle, state: State<'_, Shared>) -> Result<Vec<String>, String> {
     let Some(picked) = app
         .dialog()
         .file()
         .add_filter("Markdown and HTML", session::SUPPORTED_EXTENSIONS)
         .add_filter("Markdown", session::MARKDOWN_EXTENSIONS)
         .add_filter("HTML", session::HTML_EXTENSIONS)
-        .blocking_pick_file()
+        .blocking_pick_files()
     else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
-    let path = picked.into_path().map_err(|e| e.to_string())?;
     let mut session = lock(&state);
-    let granted = session.grant(&path)?;
+    let mut granted = Vec::new();
+    for item in picked {
+        let path = item.into_path().map_err(|e| e.to_string())?;
+        let canon = session.grant(&path)?;
+        granted.push(display(&canon));
+    }
     save_recent(&app, &session);
-    Ok(Some(display(&granted)))
+    Ok(granted)
+}
+
+/// Explicitly grants a list of paths so the session can read them.
+#[tauri::command]
+async fn grant_paths(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let mut session = lock(&state);
+    let mut granted = Vec::new();
+    for p in paths {
+        let path = std::path::PathBuf::from(&p);
+        if session::is_supported(&path) {
+            let canon = session.grant(&path)?;
+            granted.push(display(&canon));
+        }
+    }
+    save_recent(&app, &session);
+    Ok(granted)
 }
 
 /// The files opened before that still exist, most recent first.
@@ -136,19 +160,23 @@ async fn clear_recent(app: AppHandle, state: State<'_, Shared>) -> Result<(), St
     Ok(())
 }
 
-/// The Markdown or HTML file given on the command line (`mathia-app notes.md`), if any.
+/// The Markdown or HTML files given on the command line (`mathia-app notes.md`), if any.
 #[tauri::command]
-async fn startup_file(app: AppHandle, state: State<'_, Shared>) -> Result<Option<String>, String> {
-    let Some(path) = std::env::args_os().nth(1).map(std::path::PathBuf::from) else {
-        return Ok(None);
-    };
-    if !session::is_supported(&path) {
-        return Ok(None);
+async fn startup_file(app: AppHandle, state: State<'_, Shared>) -> Result<Vec<String>, String> {
+    let args: Vec<std::path::PathBuf> = std::env::args_os().skip(1).map(std::path::PathBuf::from).collect();
+    let supported: Vec<_> = args.into_iter().filter(|p| session::is_supported(p)).collect();
+    if supported.is_empty() {
+        return Ok(Vec::new());
     }
     let mut session = lock(&state);
-    let granted = session.grant(&path)?;
+    let mut granted = Vec::new();
+    for path in supported {
+        if let Ok(canon) = session.grant(&path) {
+            granted.push(display(&canon));
+        }
+    }
     save_recent(&app, &session);
-    Ok(Some(display(&granted)))
+    Ok(granted)
 }
 
 #[tauri::command]
@@ -177,13 +205,28 @@ async fn export(
 ) -> Result<Option<String>, String> {
     let (html, _) = lock(&state).compile(&source, &options)?;
     let mut dialog = app.dialog().file().add_filter("HTML", &["html"]);
-    let stem = source.path().and_then(Path::file_stem);
-    dialog = dialog.set_file_name(format!(
-        "{}.html",
-        stem.map(|s| s.to_string_lossy())
-            .as_deref()
-            .unwrap_or("document")
-    ));
+    let default_name = if let Some(ref title) = options.title {
+        title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
+    } else {
+        match &source {
+            Source::Path(p) => p
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "document".into()),
+            Source::MultiPath(paths) => {
+                if paths.len() == 1 {
+                    paths[0]
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "document".into())
+                } else {
+                    "combined".into()
+                }
+            }
+            Source::Text(_) => "document".into(),
+        }
+    };
+    dialog = dialog.set_file_name(format!("{default_name}.html"));
     if let Some(dir) = source.path().and_then(Path::parent) {
         dialog = dialog.set_directory(dir);
     }
@@ -225,17 +268,19 @@ async fn fix_markdown(
             path: None,
         });
     }
-    let stem = source.path().and_then(Path::file_stem);
+    let stem = match &source {
+        Source::Path(p) => p
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "document".into()),
+        Source::MultiPath(_) => "combined".into(),
+        Source::Text(_) => "document".into(),
+    };
     let mut dialog = app
         .dialog()
         .file()
         .add_filter("Markdown", &["md"])
-        .set_file_name(format!(
-            "{}.fixed.md",
-            stem.map(|s| s.to_string_lossy())
-                .as_deref()
-                .unwrap_or("document")
-        ));
+        .set_file_name(format!("{stem}.fixed.md"));
     if let Some(dir) = source.path().and_then(Path::parent) {
         dialog = dialog.set_directory(dir);
     }
@@ -273,10 +318,21 @@ async fn export_pdf(
     let (html, _) = lock(&state).compile(&source, &options)?;
     *print.0.lock().unwrap_or_else(|p| p.into_inner()) = html;
 
-    let title = source
-        .path()
-        .and_then(Path::file_stem)
-        .map(|s| s.to_string_lossy().into_owned())
+    let title = options
+        .title
+        .as_deref()
+        .map(ToOwned::to_owned)
+        .or_else(|| match &source {
+            Source::Path(p) => p.file_stem().map(|s| s.to_string_lossy().into_owned()),
+            Source::MultiPath(paths) => {
+                if paths.len() == 1 {
+                    paths[0].file_stem().map(|s| s.to_string_lossy().into_owned())
+                } else {
+                    Some("Combined Document".into())
+                }
+            }
+            Source::Text(_) => None,
+        })
         .unwrap_or_else(|| "Document".into());
 
     // A window left open from the last time shows the old document: reload it.
@@ -339,17 +395,19 @@ async fn save_overrides(
     source: Source,
 ) -> Result<Option<String>, String> {
     let overrides = lock(&state).overrides().clone();
-    let stem = source.path().and_then(Path::file_stem);
+    let stem = match &source {
+        Source::Path(p) => p
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "document".into()),
+        Source::MultiPath(_) => "combined".into(),
+        Source::Text(_) => "document".into(),
+    };
     let mut dialog = app
         .dialog()
         .file()
         .add_filter("JSON", &["json"])
-        .set_file_name(format!(
-            "{}.overrides.json",
-            stem.map(|s| s.to_string_lossy())
-                .as_deref()
-                .unwrap_or("document")
-        ));
+        .set_file_name(format!("{stem}.overrides.json"));
     if let Some(dir) = source.path().and_then(Path::parent) {
         dialog = dialog.set_directory(dir);
     }
@@ -660,6 +718,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             pick_markdown,
+            grant_paths,
             startup_file,
             analyze,
             compile,

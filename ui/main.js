@@ -21,6 +21,12 @@
     preview: $("preview"), previewToggle: $("preview-toggle"),
     frame: $("frame"), empty: $("empty"), inspector: $("inspector"),
     docName: $("doc-name"), openWelcome: $("open-welcome"),
+    openMulti: $("open-multi"), openMultiWelcome: $("open-multi-welcome"),
+    orderDialog: $("order-dialog"), orderTitle: $("order-title"),
+    orderAdd: $("order-add"), orderClear: $("order-clear"),
+    orderCount: $("order-count"), orderList: $("order-list"),
+    orderEmpty: $("order-empty"), orderTitleInput: $("order-title-input"),
+    orderCancel: $("order-cancel"), orderCompile: $("order-compile"),
     filter: $("filter"), views: $("views"), blocksEmpty: $("blocks-empty"),
     countAll: $("count-all"), countUnsure: $("count-unsure"), countChanged: $("count-changed"),
     optionsButton: $("options-button"), optionsMenu: $("options-menu"),
@@ -73,8 +79,11 @@
   /** How often the open file is checked for changes made elsewhere (ms). */
   const WATCH_INTERVAL = 1000;
 
-  /** @type {{path: string} | null} */
+  /** @type {{path: string} | {multi_path: string[]} | null} */
   let source = null;
+  let customTitle = null;
+  let orderPaths = [];
+  let draggedIndex = null;
   let analysis = null;
   let revision = 0;
   let selected = null;
@@ -104,6 +113,7 @@
 
   function options() {
     return {
+      title: customTitle || undefined,
       noMath: !el.math.checked,
       aiProviders: el.ai.checked ? AI_PROVIDERS : [],
     };
@@ -131,7 +141,10 @@
     el.previewToggle.disabled = !has;
     updateDecisionRun();
     el.reload.disabled = el.export.disabled = el.exportPdf.disabled = !has;
-    const isHtml = Boolean(source && source.path && HTML_EXT.test(source.path));
+    const isHtml = Boolean(
+      (source && source.path && HTML_EXT.test(source.path)) ||
+      (source && source.multi_path && source.multi_path.some((p) => HTML_EXT.test(p)))
+    );
     el.fixMarkdown.disabled = !has || isHtml;
     el.fixMarkdown.title = isHtml ? "Fix Markdown is for Markdown files." : "";
   }
@@ -169,15 +182,27 @@
         el.frame.src = previewUrl(selected);
       }
       layout();
-      const name = fileName(source.path);
+      let name = "Mathia";
+      let tooltip = "";
+      if (source.multi_path) {
+        const count = source.multi_path.length;
+        name = customTitle || (count === 1 ? fileName(source.multi_path[0]) : count + " files combined");
+        tooltip = source.multi_path.map(fileName).join(", ");
+      } else if (source.path) {
+        name = customTitle || fileName(source.path);
+        tooltip = source.path;
+      }
       document.title = name + " — Mathia";
       el.docName.textContent = name;
-      el.docName.title = source.path;
+      el.docName.title = tooltip;
       const found = compiled.semantic_blocks;
-      setStatus(
-        (found === 1 ? "1 block found" : found + " blocks found") + ", " +
-          Math.round(compiled.bytes / 1024) + " kB of HTML"
-      );
+      const blocksText = found === 1 ? "1 block found" : found + " blocks found";
+      const sizeText = Math.round(compiled.bytes / 1024) + " kB of HTML";
+      if (source.multi_path && source.multi_path.length > 1) {
+        setStatus(blocksText + " across " + source.multi_path.length + " files, " + sizeText);
+      } else {
+        setStatus(blocksText + ", " + sizeText);
+      }
     } catch (error) {
       layout();
       setStatus(String(error), true);
@@ -192,6 +217,30 @@
 
   async function openPath(path) {
     source = { path };
+    customTitle = null;
+    selected = null;
+    selectedStart = null;
+    analysis = null;
+    stamp = null;
+    overrides = emptyOverrides();
+    view = "all";
+    el.filter.value = "";
+    try {
+      await invoke("set_overrides", { overrides });
+    } catch (error) {
+      setStatus(String(error), true);
+      return;
+    }
+    await refresh();
+  }
+
+  async function openMultiPath(paths, title) {
+    if (!paths || paths.length === 0) return;
+    try {
+      await invoke("grant_paths", { paths });
+    } catch (_) {}
+    source = paths.length === 1 && !title ? { path: paths[0] } : { multi_path: paths };
+    customTitle = title || null;
     selected = null;
     selectedStart = null;
     analysis = null;
@@ -256,12 +305,28 @@
 
   async function open() {
     try {
-      const path = await invoke("pick_markdown");
-      if (path) await openPath(path);
+      const paths = await invoke("pick_markdown");
+      if (!paths || paths.length === 0) return;
+      if (paths.length === 1) {
+        await openPath(paths[0]);
+      } else {
+        openOrderDialog(paths);
+      }
     } catch (error) {
       setStatus(String(error), true);
     }
     loadRecent();
+  }
+
+  async function combineMarkdowns() {
+    try {
+      const paths = await invoke("pick_markdown");
+      if (paths && paths.length > 0) {
+        openOrderDialog(paths);
+      }
+    } catch (error) {
+      setStatus(String(error), true);
+    }
   }
 
   async function exportHtml() {
@@ -289,8 +354,9 @@
       const saved = "Saved the repaired Markdown to " + fixed.path +
         (fixed.formulas ? " (" + wrapped + " given their $ $)" : "");
       // Same blocks in the same order, so the corrections stay valid.
-      if (fixed.path !== source.path) {
+      if (!source.path || fixed.path !== source.path) {
         source = { path: fixed.path };
+        customTitle = null;
         stamp = null;
         loadRecent();
       }
@@ -965,8 +1031,171 @@
     if (event.target === el.guideDialog) el.guideDialog.close();
   });
 
+  // ── Multi-markdown ordering ───────────────────────────────────────────
+
+  function openOrderDialog(paths) {
+    orderPaths = [];
+    if (paths && paths.length > 0) {
+      for (const p of paths) {
+        if (!orderPaths.includes(p)) orderPaths.push(p);
+      }
+    }
+    el.orderTitleInput.value = customTitle || "";
+    renderOrderList();
+    if (!el.orderDialog.open) el.orderDialog.showModal();
+    el.orderCompile.focus();
+  }
+
+  function renderOrderList() {
+    const total = orderPaths.length;
+    el.orderCount.textContent = total === 1 ? "1 file" : total + " files";
+    el.orderEmpty.hidden = total > 0;
+    el.orderCompile.disabled = total === 0;
+
+    el.orderList.replaceChildren(...orderPaths.map((path, index) => {
+      const item = node("li", "order-item");
+      item.draggable = true;
+      item.dataset.index = String(index);
+
+      // Drag handle icon
+      const handle = node("span", "order-drag-handle");
+      handle.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="5" cy="3" r="1.5"/><circle cx="11" cy="3" r="1.5"/><circle cx="5" cy="8" r="1.5"/><circle cx="11" cy="8" r="1.5"/><circle cx="5" cy="13" r="1.5"/><circle cx="11" cy="13" r="1.5"/></svg>';
+      handle.title = "Drag to reorder";
+
+      // Order number badge
+      const badge = node("span", "order-index", String(index + 1));
+
+      // Info: file name and directory
+      const info = node("div", "order-info");
+      info.append(node("span", "order-name", fileName(path)));
+      info.append(node("span", "order-dir", parentDir(path)));
+
+      // Actions: Move up, Move down, Remove
+      const actions = node("div", "order-actions");
+
+      const upBtn = node("button", "btn small", "▲");
+      upBtn.type = "button";
+      upBtn.title = "Move up";
+      upBtn.disabled = index === 0;
+      upBtn.addEventListener("click", () => {
+        if (index > 0) {
+          const temp = orderPaths[index];
+          orderPaths[index] = orderPaths[index - 1];
+          orderPaths[index - 1] = temp;
+          renderOrderList();
+          const items = el.orderList.querySelectorAll(".order-item");
+          if (items[index - 1]) {
+            const btn = items[index - 1].querySelector('button[title="Move up"]');
+            if (btn) btn.focus();
+          }
+        }
+      });
+
+      const downBtn = node("button", "btn small", "▼");
+      downBtn.type = "button";
+      downBtn.title = "Move down";
+      downBtn.disabled = index === total - 1;
+      downBtn.addEventListener("click", () => {
+        if (index < total - 1) {
+          const temp = orderPaths[index];
+          orderPaths[index] = orderPaths[index + 1];
+          orderPaths[index + 1] = temp;
+          renderOrderList();
+          const items = el.orderList.querySelectorAll(".order-item");
+          if (items[index + 1]) {
+            const btn = items[index + 1].querySelector('button[title="Move down"]');
+            if (btn) btn.focus();
+          }
+        }
+      });
+
+      const removeBtn = node("button", "btn small", "✕");
+      removeBtn.type = "button";
+      removeBtn.title = "Remove";
+      removeBtn.addEventListener("click", () => {
+        orderPaths.splice(index, 1);
+        renderOrderList();
+      });
+
+      actions.append(upBtn, downBtn, removeBtn);
+      item.append(handle, badge, info, actions);
+
+      // Drag and drop event listeners
+      item.addEventListener("dragstart", (e) => {
+        draggedIndex = index;
+        item.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(index));
+      });
+
+      item.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        item.classList.add("drag-over");
+      });
+
+      item.addEventListener("dragleave", () => {
+        item.classList.remove("drag-over");
+      });
+
+      item.addEventListener("drop", (e) => {
+        e.preventDefault();
+        item.classList.remove("drag-over");
+        if (draggedIndex !== null && draggedIndex !== index) {
+          const [moved] = orderPaths.splice(draggedIndex, 1);
+          orderPaths.splice(index, 0, moved);
+          draggedIndex = null;
+          renderOrderList();
+        }
+      });
+
+      item.addEventListener("dragend", () => {
+        item.classList.remove("dragging");
+        draggedIndex = null;
+      });
+
+      return item;
+    }));
+  }
+
+  el.orderAdd.addEventListener("click", async () => {
+    try {
+      const paths = await invoke("pick_markdown");
+      if (paths && paths.length > 0) {
+        for (const p of paths) {
+          if (!orderPaths.includes(p)) orderPaths.push(p);
+        }
+        renderOrderList();
+      }
+    } catch (error) {
+      setStatus(String(error), true);
+    }
+  });
+
+  el.orderClear.addEventListener("click", () => {
+    orderPaths = [];
+    renderOrderList();
+  });
+
+  el.orderCancel.addEventListener("click", () => {
+    el.orderDialog.close();
+  });
+
+  el.orderDialog.addEventListener("click", (event) => {
+    if (event.target === el.orderDialog) el.orderDialog.close();
+  });
+
+  el.orderCompile.addEventListener("click", () => {
+    if (orderPaths.length === 0) return;
+    const title = el.orderTitleInput.value.trim();
+    el.orderDialog.close();
+    openMultiPath(orderPaths, title).then(loadRecent);
+  });
+
   el.open.addEventListener("click", open);
   el.openWelcome.addEventListener("click", open);
+  el.openMulti.addEventListener("click", combineMarkdowns);
+  el.openMultiWelcome.addEventListener("click", combineMarkdowns);
   el.detailClose.addEventListener("click", deselect);
   el.filter.addEventListener("input", renderBlocks);
   el.views.addEventListener("click", (event) => {
@@ -1048,7 +1277,11 @@
   layout();
   loadRecent();
   invoke("startup_file")
-    .then((path) => { if (path) openPath(path); })
+    .then((paths) => {
+      if (!paths || paths.length === 0) return;
+      if (paths.length === 1) openPath(paths[0]);
+      else openOrderDialog(paths);
+    })
     .catch((error) => setStatus(String(error), true))
     .finally(loadRecent);
 
@@ -1056,8 +1289,20 @@
   listen("tauri://drag-leave", () => { el.drop.hidden = true; });
   listen("tauri://drag-drop", (event) => {
     el.drop.hidden = true;
-    const path = (event.payload.paths || []).find((p) => SUPPORTED_INPUT.test(p));
-    if (path) openPath(path).then(loadRecent);
-    else setStatus("Drop a Markdown or HTML file (.md, .html, .txt)", true);
+    const paths = (event.payload.paths || []).filter((p) => SUPPORTED_INPUT.test(p));
+    if (paths.length === 0) {
+      setStatus("Drop Markdown or HTML files (.md, .html, .txt)", true);
+      return;
+    }
+    if (el.orderDialog.open) {
+      for (const p of paths) {
+        if (!orderPaths.includes(p)) orderPaths.push(p);
+      }
+      renderOrderList();
+    } else if (paths.length === 1) {
+      openPath(paths[0]).then(loadRecent);
+    } else {
+      openOrderDialog(paths);
+    }
   });
 })();

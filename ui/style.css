@@ -825,6 +825,179 @@ pre {
 .config-form.stack input[type="password"] { height: 30px; width: 100%; font: 13px var(--font-code); }
 .config-error.ok { color: var(--text); }
 
+/* ── Order / Multi-Markdown dialog ────────────────────────────────────── */
+
+.order-dialog {
+  width: min(600px, calc(100vw - 48px));
+}
+
+.order-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 440px;
+  padding: 0 20px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.order-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.order-count {
+  margin-inline-start: auto;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.order-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 48px;
+}
+
+.order-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  background: var(--desk);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+  transition: background var(--ease), border-color var(--ease);
+}
+
+.order-item:active {
+  cursor: grabbing;
+}
+
+.order-item.dragging {
+  opacity: 0.35;
+  background: var(--hover);
+  border-style: dashed;
+  border-color: var(--rule-strong);
+}
+
+.order-item.drag-over {
+  border-color: var(--ink);
+  background: var(--ink-wash);
+}
+
+.order-drag-handle {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  cursor: grab;
+  flex-shrink: 0;
+}
+
+.order-index {
+  display: grid;
+  place-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.order-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.order-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--print);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.order-dir {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.order-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.order-actions .btn.small {
+  padding: 2px 7px;
+  font-size: 12px;
+  height: 24px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.order-empty {
+  margin: 0;
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--desk);
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius);
+}
+
+.order-options {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.order-options label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.order-options label .hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.order-options input[type="text"] {
+  height: 30px;
+  width: 100%;
+  padding: 0 8px;
+  font: 13px var(--font-ui);
+  background: var(--desk);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  color: var(--text);
+}
+
 /* ── Drop target ─────────────────────────────────────────────────────── */
 
 .drop {

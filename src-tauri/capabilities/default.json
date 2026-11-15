@@ -6,6 +6,7 @@
   "permissions": [
     "core:event:default",
     "allow-pick-markdown",
+    "allow-grant-paths",
     "allow-startup-file",
     "allow-analyze",
     "allow-compile",
