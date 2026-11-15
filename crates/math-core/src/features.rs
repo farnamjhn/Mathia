@@ -183,14 +183,41 @@ impl Lexicon {
     /// `norm` so names keep their original case.
     fn find_lead(&self, norm: &[char], low: &[char]) -> Option<KeywordHit> {
         let start = low.iter().position(|c| c.is_alphanumeric())?;
-        let (kind, len) = self.keyword_at(low, start)?;
         let n = norm.len();
-        let mut p = skip_ws(norm, start + len);
-
-        let num_start = p;
-        p = scan_number(norm, p);
-        let number = (p > num_start).then(|| norm[num_start..p].iter().collect::<String>());
-        p = skip_ws(norm, p);
+        let (kind, mut p, number) = match self.keyword_at(low, start) {
+            Some((kind, len)) => {
+                let mut p = skip_ws(norm, start + len);
+                let num_start = p;
+                p = scan_number(norm, p);
+                let number = (p > num_start).then(|| norm[num_start..p].iter().collect::<String>());
+                (kind, skip_ws(norm, p), number)
+            }
+            None if norm[start].is_numeric() => {
+                // Textbook style where the number precedes the keyword:
+                // "1.2 Theorem.", "1.2. Lemma (Zorn).", "(1.2) Theorem.", "۳.۲ قضیه."
+                let end = scan_number(norm, start);
+                let number = norm[start..end].iter().collect::<String>();
+                let mut q = skip_ws(norm, end);
+                if norm[..start]
+                    .iter()
+                    .rev()
+                    .find(|c| !c.is_whitespace())
+                    == Some(&'(')
+                    && norm.get(q) == Some(&')')
+                {
+                    q = skip_ws(norm, q + 1);
+                }
+                if norm
+                    .get(q)
+                    .is_some_and(|c| matches!(c, '.' | ':' | '-' | '–' | '—'))
+                {
+                    q = skip_ws(norm, q + 1);
+                }
+                let (kind, len) = self.keyword_at(low, q)?;
+                (kind, skip_ws(norm, q + len), Some(number))
+            }
+            None => return None,
+        };
 
         let mut name = None;
         if norm.get(p) == Some(&'(')
@@ -410,5 +437,39 @@ mod tests {
         assert!(features("که در آن $c$ ثابت است.").continuation);
         assert!(features("where $c$ is a constant.").continuation);
         assert!(!features("whereas this one is different.").continuation);
+    }
+
+    #[test]
+    fn number_first_textbook_labels() {
+        let hit = features("1.2 Theorem. Let $G$ be a finite group.").lead.unwrap();
+        assert_eq!(hit.kind, BlockType::Theorem);
+        assert_eq!(hit.number.as_deref(), Some("1.2"));
+        assert!(hit.labelled && !hit.reference && !hit.body_empty);
+
+        let hit = features("**1.2.3. Lemma (Zorn):** Every chain has an upper bound.")
+            .lead
+            .unwrap();
+        assert_eq!(hit.kind, BlockType::Lemma);
+        assert_eq!(hit.number.as_deref(), Some("1.2.3"));
+        assert_eq!(hit.name.as_deref(), Some("Zorn"));
+        assert!(hit.labelled);
+
+        let hit = features("(2.1) Corollary. Hence $f$ is bounded.").lead.unwrap();
+        assert_eq!(hit.kind, BlockType::Corollary);
+        assert_eq!(hit.number.as_deref(), Some("2.1"));
+        assert!(hit.labelled);
+
+        let hit = features("۳.۲ قضیه (هاینه–کانتور). اگر $f$ پیوسته باشد...")
+            .lead
+            .unwrap();
+        assert_eq!(hit.kind, BlockType::Theorem);
+        assert_eq!(hit.number.as_deref(), Some("۳.۲"));
+        assert_eq!(hit.name.as_deref(), Some("هاینه–کانتور"));
+        assert!(hit.labelled);
+
+        let hit = features("1.2 Theorem implies that $f$ is bounded.")
+            .lead
+            .unwrap();
+        assert!(hit.reference && !hit.labelled);
     }
 }

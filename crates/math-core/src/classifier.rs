@@ -1423,4 +1423,30 @@ mod tests {
         let run = c.classify_with_judge_detailed(&nodes, &FlipFlop, 100, ScopeOverrides::default());
         assert!(run.rounds <= 3, "{}", run.rounds);
     }
+
+    #[test]
+    fn number_first_textbook_blocks_are_classified_and_linked() {
+        let blocks = classify(
+            "1.1 Definition. A group is a set with an associative binary operation.\n\n\
+             1.2 Lemma (Euclid). If $p \\mid ab$, then $p \\mid a$ or $p \\mid b$.\n\n\
+             **1.3. Theorem (Lagrange).** The order of a subgroup divides $|G|$.\n\n\
+             Proof of Theorem 1.3. Cosets partition $G$. □\n\n\
+             ۳.۲ قضیه. هر دنبالهٔ کراندار زیر‌دنبالهٔ همگرا دارد.",
+        );
+        assert_eq!(
+            kinds(&blocks),
+            [
+                BlockType::Definition,
+                BlockType::Lemma,
+                BlockType::Theorem,
+                BlockType::Proof,
+                BlockType::Theorem,
+            ]
+        );
+        assert_eq!(blocks[0].title, "Definition 1.1");
+        assert_eq!(blocks[1].title, "Lemma 1.2 (Euclid)");
+        assert_eq!(blocks[2].title, "Theorem 1.3 (Lagrange)");
+        assert_eq!(blocks[3].proves.as_deref(), Some("block-theorem-1"));
+        assert_eq!(blocks[4].title, "قضیه ۳.۲");
+    }
 }
