@@ -758,6 +758,7 @@ pre {
 .dialog-head { flex: none; padding: 18px 20px 14px; }
 .dialog-head h2 { font: 600 21px/1.25 var(--font-serif); color: var(--print); }
 .dialog-head p { margin-top: 4px; max-width: 68ch; color: var(--muted); }
+.prompt-tabs { margin-top: 10px; margin-bottom: 2px; }
 
 .prompt {
   flex: 1;

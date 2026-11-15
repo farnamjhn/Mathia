@@ -36,7 +36,12 @@
     detailFacts: $("detail-facts"), detailScores: $("detail-scores"),
     detailFeatures: $("detail-features"),
     guide: $("guide"), guideDialog: $("guide-dialog"), guideClose: $("guide-close"),
+    guideDesc: $("guide-desc"), promptTabInitial: $("prompt-tab-initial"),
+    promptTabContinuation: $("prompt-tab-continuation"),
+    copyContinuationPrompt: $("copy-continuation-prompt"),
+    orderPromptBtn: $("order-prompt-btn"),
     viewPrompt: $("view-prompt"), promptText: $("prompt-text"),
+    promptContinuation: $("prompt-continuation"),
     copyPrompt: $("copy-prompt"), copyPromptEmpty: $("copy-prompt-empty"),
     exportFolder: $("export-folder"),
     fixMarkdown: $("fix-markdown"),
@@ -101,6 +106,9 @@
   let view = "all";
   /** Whether the user wants the preview pane (it only shows with a document). */
   let previewOpen = true;
+  let initialPromptText = el.promptText ? el.promptText.value : "";
+  let continuationPromptText = el.promptContinuation ? el.promptContinuation.value : "";
+  let promptMode = "initial";
 
   function emptyOverrides() {
     return { delta: {}, suppressed: [], retype: {}, end: {} };
@@ -955,8 +963,22 @@
     if (!ok) throw new Error("copy command was refused");
   }
 
-  async function copyPrompt(button) {
-    const text = el.promptText.value;
+  function setPromptMode(mode) {
+    promptMode = mode === "continuation" ? "continuation" : "initial";
+    const isCont = promptMode === "continuation";
+    if (el.promptTabInitial) el.promptTabInitial.setAttribute("aria-pressed", String(!isCont));
+    if (el.promptTabContinuation) el.promptTabContinuation.setAttribute("aria-pressed", String(isCont));
+    if (el.promptText) el.promptText.value = isCont ? continuationPromptText : initialPromptText;
+    if (el.guideDesc) {
+      el.guideDesc.innerHTML = isCont
+        ? "Paste this into your vision model for <strong>subsequent batches</strong> when transcribing a multi-part document, so split sentences, continuing proofs, and lists concatenate seamlessly."
+        : "Paste this into a vision model as the first message or system prompt for the <strong>first batch</strong> (or a single document), then attach photos of the pages. Copy its answer with the code block's own copy button, so no <code>$</code> is lost, and save it as a <code>.md</code> file.";
+    }
+    if (el.promptText) el.promptText.scrollTop = 0;
+  }
+
+  async function copyPrompt(button, customText) {
+    const text = typeof customText === "string" ? customText : el.promptText.value;
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(text);
       else copyViaSelection(text);
@@ -968,7 +990,10 @@
         return;
       }
     }
-    setStatus("Prompt copied. Paste it into your vision model, then attach the pages.");
+    const isCont = customText ? (customText === continuationPromptText) : (promptMode === "continuation");
+    setStatus(isCont
+      ? "Continuation prompt copied. Paste it into your vision model for the next batch."
+      : "Prompt copied. Paste it into your vision model, then attach the pages.");
     const label = button.dataset.label || button.textContent;
     button.dataset.label = label;
     button.textContent = "Copied";
@@ -1015,17 +1040,24 @@
   // A click in the preview frame never reaches this document.
   window.addEventListener("blur", () => closeMenus());
 
-  function showGuide() {
+  function showGuide(mode) {
+    if (mode) setPromptMode(mode);
     if (!el.guideDialog.open) el.guideDialog.showModal();
-    el.promptText.scrollTop = 0;
+    if (el.promptText) el.promptText.scrollTop = 0;
     el.copyPrompt.focus();
   }
 
-  el.guide.addEventListener("click", showGuide);
-  el.viewPrompt.addEventListener("click", showGuide);
+  if (el.promptTabInitial) el.promptTabInitial.addEventListener("click", () => setPromptMode("initial"));
+  if (el.promptTabContinuation) el.promptTabContinuation.addEventListener("click", () => setPromptMode("continuation"));
+  el.guide.addEventListener("click", () => showGuide("initial"));
+  el.viewPrompt.addEventListener("click", () => showGuide("initial"));
+  if (el.orderPromptBtn) el.orderPromptBtn.addEventListener("click", () => showGuide("continuation"));
   el.guideClose.addEventListener("click", () => el.guideDialog.close());
   el.copyPrompt.addEventListener("click", () => copyPrompt(el.copyPrompt));
-  el.copyPromptEmpty.addEventListener("click", () => copyPrompt(el.copyPromptEmpty));
+  el.copyPromptEmpty.addEventListener("click", () => copyPrompt(el.copyPromptEmpty, initialPromptText));
+  if (el.copyContinuationPrompt) {
+    el.copyContinuationPrompt.addEventListener("click", () => copyPrompt(el.copyContinuationPrompt, continuationPromptText));
+  }
   // A click on the backdrop (outside the dialog box) closes it.
   el.guideDialog.addEventListener("click", (event) => {
     if (event.target === el.guideDialog) el.guideDialog.close();
