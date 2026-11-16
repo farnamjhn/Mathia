@@ -779,10 +779,10 @@ describe("deterministic mind map", () => {
     await s.page.getByRole("button", { name: "Split view", exact: true }).click();
     const visible = () => s.page.locator(".mx-map-node:visible").count();
     assert.equal(await visible(), initial.total);
-    const canvas = s.page.locator(".mx-map-canvas > g");
-    const beforeZoom = await canvas.getAttribute("transform");
+    const canvas = s.page.locator(".mx-map-world");
+    const beforeZoom = await canvas.getAttribute("style");
     await s.page.getByRole("button", { name: "Zoom in", exact: true }).click();
-    assert.notEqual(await canvas.getAttribute("transform"), beforeZoom);
+    assert.notEqual(await canvas.getAttribute("style"), beforeZoom);
     await s.page.getByRole("button", { name: "Collapse all", exact: true }).click();
     assert.equal(await visible(), 1);
     await s.page.getByRole("button", { name: "Expand all", exact: true }).click();
@@ -796,15 +796,61 @@ describe("deterministic mind map", () => {
   });
 
   test("Persian cards isolate KaTeX and fit their measured height", async () => {
-    const s = await open(pages.fa);
+    const s = await open(pages.mindmap);
     await s.page.getByRole("button", { name: "نمای دوگانه", exact: true }).click();
     assert.equal(await s.page.locator(".mx-map-card[dir=auto]").count() > 0, true);
+    assert.ok(await s.page.locator(".mx-map-card .katex").count() > 0);
+    assert.deepEqual(await s.page.locator(".mx-map-card .katex").evaluateAll((math) => math.map((el) => {
+      const style = getComputedStyle(el);
+      return { direction: style.direction, bidi: style.unicodeBidi };
+    })), Array(await s.page.locator(".mx-map-card .katex").count()).fill({ direction: "ltr", bidi: "isolate" }));
     const bad = await s.page.evaluate(() => Array.from(document.querySelectorAll(".mx-map-card")).filter((card) => {
-      const fo = card.closest("foreignObject");
-      return card.scrollHeight > Number(fo.getAttribute("height"));
+      const node = card.closest(".mx-map-node");
+      return card.scrollHeight > parseFloat(node.style.height);
     }).length);
     assert.equal(bad, 0);
     await finish(s);
+  });
+
+  test("HTML cards stay attached to connectors across fit, zoom, and branch changes", async () => {
+    for (const url of [pages.plain, pages.mindmap]) {
+      const s = await open(url);
+      const rtl = url === pages.mindmap;
+      await s.page.getByRole("button", { name: rtl ? "نقشه ذهنی" : "Mind map", exact: true }).click();
+      async function assertGeometry() {
+        // Wait until card position transitions finish before comparing screen
+        // coordinates, including the shared HTML camera and SVG edge matrix.
+        await s.page.waitForTimeout(300);
+        const geometry = await s.page.evaluate(() => {
+          const viewport = document.querySelector(".mx-map-canvas");
+          const nodes = Array.from(viewport.querySelectorAll(".mx-map-node"));
+          const rects = new Map(nodes.map((n) => [n.dataset.mapId, n.querySelector(".mx-map-card").getBoundingClientRect()]));
+          const errors = [];
+          viewport.querySelectorAll(".mx-map-edge").forEach((edge) => {
+            const from = rects.get(edge.dataset.mapFrom), to = rects.get(edge.dataset.mapTo);
+            const matrix = edge.getScreenCTM();
+            const start = edge.getPointAtLength(0).matrixTransform(matrix);
+            const end = edge.getPointAtLength(edge.getTotalLength()).matrixTransform(matrix);
+            if (Math.abs(start.x - from.right) > 3 || Math.abs(start.y - (from.top + from.height / 2)) > 3
+                || Math.abs(end.x - to.left) > 3 || Math.abs(end.y - (to.top + to.height / 2)) > 3) {
+              errors.push(edge.dataset.mapTo);
+            }
+          });
+          return { errors, foreignObjects: viewport.querySelectorAll("foreignObject").length };
+        });
+        assert.deepEqual(geometry.errors, [], "cards and connector endpoints share screen coordinates");
+        assert.equal(geometry.foreignObjects, 0, "interactive KaTeX stays outside SVG on WebKit");
+      }
+      await assertGeometry();
+      await s.page.getByRole("button", { name: rtl ? "بزرگ‌نمایی" : "Zoom in", exact: true }).click();
+      await assertGeometry();
+      await s.page.getByRole("button", { name: rtl ? "بستن همه" : "Collapse all", exact: true }).click();
+      await s.page.getByRole("button", { name: rtl ? "باز کردن همه" : "Expand all", exact: true }).click();
+      await assertGeometry();
+      await s.page.getByRole("button", { name: rtl ? "جا دادن" : "Fit", exact: true }).click();
+      await assertGeometry();
+      await finish(s);
+    }
   });
 
   test("SVG and PNG export complete without errors or network access", async () => {

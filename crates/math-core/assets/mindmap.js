@@ -42,11 +42,16 @@
     panel.setAttribute("aria-label", say("Mind map", "نقشه ذهنی"));
     var toolbar = element("div", "mx-map-toolbar");
     panel.appendChild(toolbar);
-    var svg = svgElement("svg");
-    svg.classList.add("mx-map-canvas");
-    svg.setAttribute("aria-label", say("Mind map. Drag to pan; scroll to zoom.", "نقشه ذهنی؛ کشیدن برای جابجایی و پیمایش برای بزرگ‌نمایی"));
-    var world = svgElement("g"), edges = svgElement("g"), cards = svgElement("g");
-    world.append(edges, cards); svg.appendChild(world); panel.appendChild(svg);
+    // Keep interactive HTML outside SVG: WebKit can paint positioned KaTeX
+    // descendants of foreignObject at the SVG origin, ignoring pan and zoom.
+    // One HTML world transforms both the connector SVG and the card layer.
+    var viewport = element("div", "mx-map-canvas");
+    viewport.setAttribute("aria-label", say("Mind map. Drag to pan; scroll to zoom.", "نقشه ذهنی؛ کشیدن برای جابجایی و پیمایش برای بزرگ‌نمایی"));
+    var world = element("div", "mx-map-world");
+    var svg = svgElement("svg"), edges = svgElement("g"), cards = element("div", "mx-map-cards");
+    svg.classList.add("mx-map-links");
+    svg.setAttribute("aria-hidden", "true");
+    svg.appendChild(edges); world.append(svg, cards); viewport.appendChild(world); panel.appendChild(viewport);
     var status = element("span", "mx-map-status");
     status.setAttribute("role", "status");
     panel.appendChild(status); document.body.appendChild(panel);
@@ -90,10 +95,8 @@
       proposition: ["PROP", "گزاره"], example: ["EX", "مثال"], formula: ["ƒ", "فرمول"], note: ["NOTE", "نکته"]
     };
     function mount(node, ancestors) {
-      var group = svgElement("g"), fo = svgElement("foreignObject");
-      group.classList.add("mx-map-node");
+      var group = element("div", "mx-map-node");
       group.dataset.mapId = node.id;
-      fo.setAttribute("width", "280"); fo.setAttribute("height", "200");
       var card = document.createElementNS(htmlNs, "div");
       card.className = "mx-map-card mx-map-" + node.node_type;
       card.setAttribute("dir", "auto");
@@ -113,8 +116,8 @@
         }, say("Expand or collapse branch", "باز و بسته کردن شاخه"));
         toggle.className = "mx-map-fold";
       }
-      fo.appendChild(card); group.appendChild(fo); cards.appendChild(group);
-      entries.set(node.id, { node: node, ancestors: ancestors, group: group, fo: fo, card: card, toggle: toggle, height: 100 });
+      group.appendChild(card); cards.appendChild(group);
+      entries.set(node.id, { node: node, ancestors: ancestors, group: group, card: card, toggle: toggle, height: 100, x: 0, y: 0 });
       node.children.forEach(function (child) { mount(child, ancestors.concat(node.id)); });
     }
     mount(tree, []);
@@ -123,7 +126,7 @@
       entries.forEach(function (e) {
         e.group.style.display = "";
         e.height = Math.max(72, e.card.scrollHeight + 4);
-        e.fo.setAttribute("height", String(e.height));
+        e.group.style.height = e.height + "px";
         if (e.toggle) {
           e.toggle.textContent = collapsed.has(e.node.id) ? "+" : "−";
           e.toggle.setAttribute("aria-expanded", String(!collapsed.has(e.node.id)));
@@ -140,34 +143,41 @@
       function place(node, depth, top) {
         var e = entries.get(node.id), x = depth * 330, y = top + (e.space - e.height) / 2;
         visible.add(node.id); width = Math.max(width, x + 280);
-        e.group.setAttribute("transform", "translate(" + x + " " + y + ")");
-        e.group.style.transform = "translate(" + x + "px," + y + "px)";
+        e.x = x; e.y = y;
+        e.group.style.left = x + "px";
+        e.group.style.top = y + "px";
         var offset = top;
         e.visibleChildren.forEach(function (child) {
           var c = entries.get(child.id), cy = offset + c.space / 2;
           var path = svgElement("path"), start = y + e.height / 2;
           path.setAttribute("d", "M" + (x + 280) + "," + start + " C" + (x + 305) + "," + start + " " + (x + 305) + "," + cy + " " + (x + 330) + "," + cy);
-          path.setAttribute("class", "mx-map-edge"); edges.appendChild(path);
+          path.setAttribute("class", "mx-map-edge");
+          path.dataset.mapFrom = node.id; path.dataset.mapTo = child.id;
+          edges.appendChild(path);
           place(child, depth + 1, offset); offset += c.space + 22;
         });
       }
       place(tree, 0, 0);
       entries.forEach(function (e, id) { e.group.style.display = visible.has(id) ? "" : "none"; });
       bounds = { width: width, height: entries.get(tree.id).space };
+      world.style.width = bounds.width + "px";
+      world.style.height = bounds.height + "px";
+      svg.setAttribute("width", String(bounds.width));
+      svg.setAttribute("height", String(bounds.height));
       transform();
     }
-    function transform() { world.setAttribute("transform", "translate(" + tx + " " + ty + ") scale(" + scale + ")"); }
+    function transform() { world.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")"; }
     function zoom(factor, x, y) {
-      x = x === undefined ? svg.clientWidth / 2 : x;
-      y = y === undefined ? svg.clientHeight / 2 : y;
+      x = x === undefined ? viewport.clientWidth / 2 : x;
+      y = y === undefined ? viewport.clientHeight / 2 : y;
       var next = Math.max(.001, Math.min(3, scale * factor));
       tx = x - (x - tx) * next / scale; ty = y - (y - ty) * next / scale; scale = next; transform();
     }
     function fit() {
       if (panel.hidden) return;
-      scale = Math.max(.001, Math.min(1.3, (svg.clientWidth - 48) / bounds.width, (svg.clientHeight - 48) / bounds.height));
-      tx = (svg.clientWidth - bounds.width * scale) / 2;
-      ty = (svg.clientHeight - bounds.height * scale) / 2; transform();
+      scale = Math.max(.001, Math.min(1.3, (viewport.clientWidth - 48) / bounds.width, (viewport.clientHeight - 48) / bounds.height));
+      tx = (viewport.clientWidth - bounds.width * scale) / 2;
+      ty = (viewport.clientHeight - bounds.height * scale) / 2; transform();
     }
     var observer;
     function watchDocument() {
@@ -213,21 +223,21 @@
       if (changed && mode !== "document") layout();
       select(target.id);
     });
-    svg.addEventListener("wheel", function (event) {
+    viewport.addEventListener("wheel", function (event) {
       event.preventDefault();
-      var rect = svg.getBoundingClientRect(); zoom(Math.exp(-event.deltaY * .0015), event.clientX - rect.left, event.clientY - rect.top);
+      var rect = viewport.getBoundingClientRect(); zoom(Math.exp(-event.deltaY * .0015), event.clientX - rect.left, event.clientY - rect.top);
     }, { passive: false });
     var drag = null;
-    svg.addEventListener("pointerdown", function (event) {
-      if (event.button !== 0 || event.target.closest("foreignObject")) return;
-      drag = { x: event.clientX, y: event.clientY, tx: tx, ty: ty }; svg.setPointerCapture(event.pointerId);
+    viewport.addEventListener("pointerdown", function (event) {
+      if (event.button !== 0 || event.target.closest(".mx-map-node")) return;
+      drag = { x: event.clientX, y: event.clientY, tx: tx, ty: ty }; viewport.setPointerCapture(event.pointerId);
     });
-    svg.addEventListener("pointermove", function (event) {
+    viewport.addEventListener("pointermove", function (event) {
       if (!drag) return;
       tx = drag.tx + event.clientX - drag.x; ty = drag.ty + event.clientY - drag.y; transform();
     });
-    ["pointerup", "pointercancel", "lostpointercapture"].forEach(function (name) { svg.addEventListener(name, function () { drag = null; }); });
-    new ResizeObserver(function () { if (!panel.hidden) { layout(); fit(); } }).observe(svg);
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach(function (name) { viewport.addEventListener(name, function () { drag = null; }); });
+    new ResizeObserver(function () { if (!panel.hidden) { layout(); fit(); } }).observe(viewport);
 
     function download(blob, extension) {
       // The desktop host performs the download outside its sandboxed preview.
@@ -243,23 +253,36 @@
     async function exportMap(png) {
       try {
         if (document.fonts) await document.fonts.ready;
-        var copy = svg.cloneNode(true), w = Math.ceil(bounds.width + 48), h = Math.ceil(bounds.height + 48);
+        var copy = svgElement("svg"), w = Math.ceil(bounds.width + 48), h = Math.ceil(bounds.height + 48);
         copy.setAttribute("xmlns", ns); copy.setAttribute("width", w); copy.setAttribute("height", h);
         copy.setAttribute("viewBox", "0 0 " + w + " " + h);
         copy.style.cssText = "background:" + getComputedStyle(document.body).backgroundColor;
-        copy.firstElementChild.setAttribute("transform", "translate(24 24)");
-        // Inline computed styles so the exported SVG is independent of theme,
-        // ancestor selectors, CSS variables, and the original document.
-        var originals = svg.querySelectorAll("*"), clones = copy.querySelectorAll("*");
-        originals.forEach(function (original, i) {
-          var computed = getComputedStyle(original), clone = clones[i];
-          for (var j = 0; j < computed.length; j++) {
-            var prop = computed[j]; clone.style.setProperty(prop, computed.getPropertyValue(prop));
-          }
-          clone.style.transition = "none";
-          clone.style.animation = "none";
+        // Rebuild at layout coordinates, independently of the viewport camera
+        // and in-progress CSS transitions. foreignObject is export-only.
+        function inlineStyles(original, clone) {
+          var originals = [original].concat(Array.from(original.querySelectorAll("*")));
+          var clones = [clone].concat(Array.from(clone.querySelectorAll("*")));
+          originals.forEach(function (source, i) {
+            var computed = getComputedStyle(source), target = clones[i];
+            for (var j = 0; j < computed.length; j++) {
+              var prop = computed[j]; target.style.setProperty(prop, computed.getPropertyValue(prop));
+            }
+            target.style.transition = "none";
+            target.style.animation = "none";
+          });
+        }
+        var lines = edges.cloneNode(true);
+        inlineStyles(edges, lines);
+        lines.style.transform = "translate(24px,24px)";
+        copy.appendChild(lines);
+        entries.forEach(function (entry) {
+          if (entry.group.style.display === "none") return;
+          var fo = svgElement("foreignObject"), card = entry.card.cloneNode(true);
+          fo.setAttribute("x", String(entry.x + 24)); fo.setAttribute("y", String(entry.y + 24));
+          fo.setAttribute("width", "280"); fo.setAttribute("height", String(entry.height));
+          inlineStyles(entry.card, card);
+          fo.appendChild(card); copy.appendChild(fo);
         });
-        copy.firstElementChild.style.transform = "translate(24px,24px)";
         var style = svgElement("style");
         style.textContent = Array.from(document.querySelectorAll("style")).map(function (el) {
           return (el.textContent.match(/@font-face\s*\{[^}]+\}/g) || []).filter(function (rule) { return rule.indexOf("data:") !== -1; }).join("\n");

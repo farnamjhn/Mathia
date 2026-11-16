@@ -1,7 +1,7 @@
 # Runtime tests (headless Chrome)
 
 Tests for the JavaScript embedded in compiled documents (`crates/math-core/assets/runtime.js`
-and `ai.js`). They compile real fixtures with the `mathia` CLI and drive the system Chrome.
+`ai.js`, and `mindmap.js`). They compile real fixtures with the `mathia` CLI and drive the system Chrome.
 
 ```sh
 cd tests/js
@@ -11,6 +11,17 @@ npm test           # = node --test
 
 Requirements: Node 20+, Google Chrome installed, vendored KaTeX
 (`scripts/vendor-katex.sh`), and a working `cargo`.
+
+To run the mind map regressions with an already installed Playwright WebKit browser:
+
+```sh
+MATHIA_TEST_BROWSER=webkit node --test --test-name-pattern="deterministic mind map" runtime.test.mjs
+```
+
+These compare the cards with connector endpoints in screen coordinates after fit,
+zoom, and branch changes, including Persian labels with KaTeX. WebKit coverage is
+needed for the macOS desktop preview; Chromium alone cannot catch its SVG
+`foreignObject` compositing issue.
 
 How it works (`harness.mjs`):
 
