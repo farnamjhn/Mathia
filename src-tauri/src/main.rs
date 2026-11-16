@@ -244,6 +244,37 @@ async fn export(
     Ok(Some(display(&dest)))
 }
 
+/// Save a rendered map from the sandboxed preview through the native dialog.
+#[tauri::command]
+async fn export_mindmap(
+    app: AppHandle,
+    extension: String,
+    bytes: Vec<u8>,
+) -> Result<Option<String>, String> {
+    if !matches!(extension.as_str(), "svg" | "png") || bytes.len() > 48 * 1024 * 1024 {
+        return Err("Unsupported mind map export".into());
+    }
+    let valid = match extension.as_str() {
+        "png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        _ => std::str::from_utf8(&bytes).is_ok_and(|text| text.trim_start().starts_with("<svg")),
+    };
+    if !valid {
+        return Err("Invalid mind map image".into());
+    }
+    let Some(dest) = app
+        .dialog()
+        .file()
+        .add_filter(extension.to_uppercase(), &[extension.as_str()])
+        .set_file_name(format!("mathia-mindmap.{extension}"))
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let dest = dest.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(&dest, bytes).map_err(|e| format!("{}: {e}", dest.display()))?;
+    Ok(Some(display(&dest)))
+}
+
 /// What `fix_markdown` reports.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -731,6 +762,7 @@ fn main() {
             analyze,
             compile,
             export,
+            export_mindmap,
             export_pdf,
             fix_markdown,
             get_config,

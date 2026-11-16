@@ -224,6 +224,8 @@ pub struct HtmlOptions {
     pub math: MathAssets,
     /// Overrides the title taken from the document's first heading.
     pub title: Option<String>,
+    /// Source basename used as the mind map root when the document has no H1.
+    pub source_name: Option<String>,
     /// Text fonts to embed; the first family leads the font stack.
     pub fonts: Vec<EmbeddedFont>,
     pub ai: AiOptions,
@@ -276,6 +278,7 @@ struct DocumentTemplate<'a> {
     math_head: String,
     toc: Vec<TocView<'a>>,
     blocks: Vec<BlockView<'a>>,
+    mindmap_json: String,
     raw_content: &'a str,
 }
 
@@ -295,7 +298,8 @@ pub fn render_with_raw_content(
         .or(doc.title.as_deref())
         .unwrap_or(if rtl { "جزوه" } else { "Study guide" });
 
-    let runtime_js = RUNTIME_JS.replace("</script", "<\\/script");
+    let runtime_js = format!("{}\n{}", RUNTIME_JS, include_str!("../assets/mindmap.js"))
+        .replace("</script", "<\\/script");
     let katex = match &options.math {
         MathAssets::Inline(katex) => Some(KatexAssets {
             // Keep embedded sources from closing their own element.
@@ -346,6 +350,7 @@ pub fn render_with_raw_content(
     }
     let mut css = font_css(&options.fonts);
     css.push_str(STYLE_CSS);
+    css.push_str(include_str!("../assets/mindmap.css"));
     if has_ai {
         css.push_str(AI_CSS);
     }
@@ -432,6 +437,11 @@ pub fn render_with_raw_content(
                 html: &b.html,
             })
             .collect(),
+        mindmap_json: serde_json::to_string(&crate::mindmap::extract(
+            doc,
+            options.source_name.as_deref().unwrap_or(title),
+        ))
+        .expect("mind map contains only strings and integers"),
         raw_content,
     };
     Ok(template.render()?)
@@ -626,6 +636,34 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn mindmap_payload_is_escaped_roundtrips_and_uses_the_source_basename() {
+        let doc = analyze(
+            "## Section\n\n**Definition 1.** Let $V$ be a space.",
+            &ScoringConfig::default(),
+        );
+        let options = HtmlOptions {
+            source_name: Some("notes<&>.md".into()),
+            ..Default::default()
+        };
+        let html = render(&doc, &options).unwrap();
+        let dom = crate::dom::Dom::parse(&html);
+        let data = (0..dom.len())
+            .find(|&id| dom.attr(id, "id") == Some("mx-mindmap-data"))
+            .unwrap();
+        let tree: crate::mindmap::MindMapNode =
+            serde_json::from_str(&dom.text_content(data)).unwrap();
+        assert_eq!(tree.label, "notes<&>.md");
+        assert_eq!(tree.children[0].id, doc.blocks[0].id);
+        assert!(!html.contains("notes<&>.md"));
+        assert!(
+            dom.children(data)
+                .iter()
+                .all(|&id| dom.element(id).is_none())
+        );
+        assert!(html.contains("foreignObject"));
     }
 
     #[test]

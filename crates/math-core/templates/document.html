@@ -25,6 +25,7 @@
 {%- endfor %}
 </ol>
 </nav>
+<div id="mx-mindmap-data" hidden>{{ mindmap_json }}</div>
 <main id="mx-main" class="mx-main">
 {%- if !raw_content.is_empty() %}
 {{ raw_content|safe }}

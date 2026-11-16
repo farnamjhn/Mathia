@@ -758,3 +758,66 @@ describe("host frame", () => {
     await finish(alone);
   });
 });
+
+describe("deterministic mind map", () => {
+  test("tree targets, views, collapse, zoom, and document navigation", async () => {
+    const s = await open(pages.plain);
+    const initial = await s.page.evaluate(() => {
+      const tree = window.Mathia.mindmap.tree;
+      const walk = (n) => [n, ...n.children.flatMap(walk)];
+      const nodes = walk(tree);
+      return {
+        title: tree.label,
+        missing: nodes.filter((n) => !document.getElementById(n.id)).map((n) => n.id),
+        proof: nodes.some((n) => /proof|solution/.test(n.node_type)),
+        total: nodes.length,
+      };
+    });
+    assert.equal(initial.title, "Group Theory Notes");
+    assert.deepEqual(initial.missing, []);
+    assert.equal(initial.proof, false);
+    await s.page.getByRole("button", { name: "Split view", exact: true }).click();
+    const visible = () => s.page.locator(".mx-map-node:visible").count();
+    assert.equal(await visible(), initial.total);
+    const canvas = s.page.locator(".mx-map-canvas > g");
+    const beforeZoom = await canvas.getAttribute("transform");
+    await s.page.getByRole("button", { name: "Zoom in", exact: true }).click();
+    assert.notEqual(await canvas.getAttribute("transform"), beforeZoom);
+    await s.page.getByRole("button", { name: "Collapse all", exact: true }).click();
+    assert.equal(await visible(), 1);
+    await s.page.getByRole("button", { name: "Expand all", exact: true }).click();
+    assert.equal(await visible(), initial.total);
+    await s.page.getByRole("button", { name: "Mind map", exact: true }).click();
+    assert.equal(await s.page.locator("#mx-main").isVisible(), false);
+    await s.page.locator('[data-map-id="block-theorem-1"] .mx-map-label').click();
+    assert.equal(await s.page.locator("#mx-main").isVisible(), true);
+    assert.equal(await s.page.locator("#block-theorem-1").evaluate((el) => el.classList.contains("mathia-scroll-highlight")), true);
+    await finish(s);
+  });
+
+  test("Persian cards isolate KaTeX and fit their measured height", async () => {
+    const s = await open(pages.fa);
+    await s.page.getByRole("button", { name: "نمای دوگانه", exact: true }).click();
+    assert.equal(await s.page.locator(".mx-map-card[dir=auto]").count() > 0, true);
+    const bad = await s.page.evaluate(() => Array.from(document.querySelectorAll(".mx-map-card")).filter((card) => {
+      const fo = card.closest("foreignObject");
+      return card.scrollHeight > Number(fo.getAttribute("height"));
+    }).length);
+    assert.equal(bad, 0);
+    await finish(s);
+  });
+
+  test("SVG and PNG export complete without errors or network access", async () => {
+    const s = await open(pages.plain);
+    await s.page.getByRole("button", { name: "Mind map", exact: true }).click();
+    for (const format of ["SVG", "PNG"]) {
+      const pending = s.page.waitForEvent("download", { timeout: 30_000 });
+      await s.page.getByRole("button", { name: `Export mind map as ${format}`, exact: true }).click();
+      const download = await pending;
+      assert.equal(download.suggestedFilename(), `mathia-mindmap.${format.toLowerCase()}`);
+      assert.equal(await download.failure(), null);
+    }
+    assert.equal(await s.page.locator(".mx-map-status").textContent(), "");
+    await finish(s);
+  });
+});

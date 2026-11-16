@@ -674,6 +674,23 @@
       exportPdf();
       return;
     }
+    if (data && data.mathia === "mindmap-export" && ["svg", "png"].includes(data.extension)
+        && typeof data.data === "string"
+        && data.data.startsWith(data.extension === "svg" ? "data:image/svg+xml;base64," : "data:image/png;base64,")) {
+      if (data.data.length > 64 * 1024 * 1024) {
+        setStatus("Mind map export is too large.", true);
+        return;
+      }
+      try {
+        const bytes = Array.from(atob(data.data.slice(data.data.indexOf(",") + 1)), (c) => c.charCodeAt(0));
+        invoke("export_mindmap", { extension: data.extension, bytes })
+          .then((dest) => { if (dest) setStatus("Exported mind map to " + dest); })
+          .catch((error) => setStatus(String(error), true));
+      } catch (error) {
+        setStatus(String(error), true);
+      }
+      return;
+    }
     if (!data || data.mathia !== "select" || typeof data.id !== "string") return;
     if (analysis && analysis.document.blocks.some((b) => b.id === data.id)) select(data.id, true);
   });

@@ -1,0 +1,47 @@
+/* Shared by exported documents and the desktop preview. */
+.mx-map-switch { position:fixed; z-index:5; inset-block-start:18px; inset-inline-end:112px; display:flex; gap:2px; padding:3px; border:1px solid var(--mx-border); border-radius:7px; background:var(--mx-bg); }
+.mx-map-switch button, .mx-map-toolbar button { font:500 12px var(--mx-font-sans); padding:5px 8px; border:1px solid transparent; border-radius:4px; background:var(--mx-bg-secondary); color:var(--mx-text); cursor:pointer; }
+.mx-map-switch button[aria-pressed="true"] { background:var(--mx-text); color:var(--mx-bg); }
+.mx-map-panel { position:fixed; inset-block:66px 0; inset-inline-end:0; width:50%; z-index:4; display:flex; flex-direction:column; background:var(--mx-bg-secondary); border-inline-start:1px solid var(--mx-border); }
+.mx-map-panel[hidden], .mx-main[hidden] { display:none; }
+.mx-map-toolbar { display:flex; flex-wrap:wrap; gap:5px; padding:10px; border-bottom:1px solid var(--mx-border); }
+.mx-map-toolbar button:hover { border-color:var(--mx-gray-500); }
+.mx-map-canvas { display:block; width:100%; flex:1; min-height:0; direction:ltr; touch-action:none; cursor:grab; }
+.mx-map-canvas:active { cursor:grabbing; }
+.mx-map-node { transition:transform .22s ease; }
+.mx-map-edge { fill:none; stroke:var(--mx-gray-400); stroke-width:1.5; }
+.mx-map-card { display:flex; position:relative; width:280px; max-width:280px; border:1px solid var(--mx-gray-400); border-inline-start:4px solid var(--mx-gray-500); border-radius:10px; background:var(--mx-surface); color:var(--mx-text); box-shadow:0 3px 12px #0001; overflow:hidden; font:14px/1.5 var(--mx-font-sans); }
+.mx-map-definition { border-inline-start-color:#3b82f6; }
+.mx-map-theorem, .mx-map-lemma, .mx-map-corollary, .mx-map-proposition { border-inline-start-color:#a78bfa; }
+.mx-map-example { border-inline-start-color:#10b981; }
+.mx-map-label { display:block; flex:1; min-width:0; border:0; padding:12px; background:transparent; color:inherit; font:inherit; text-align:start; cursor:pointer; overflow-wrap:anywhere; }
+.mx-map-badge { display:block; margin-bottom:5px; color:var(--mx-gray-600); font-size:10px; letter-spacing:.04em; }
+.mx-map-definition .mx-map-badge { color:#3b82f6; }
+.mx-map-theorem .mx-map-badge, .mx-map-lemma .mx-map-badge, .mx-map-corollary .mx-map-badge, .mx-map-proposition .mx-map-badge { color:#a78bfa; }
+.mx-map-example .mx-map-badge { color:#10b981; }
+.mx-map-title { display:block; font-weight:650; }
+.mx-map-subtitle { display:block; margin-top:6px; font-size:12px; }
+.mx-map-fold { flex:0 0 30px; border:0; border-inline-start:1px solid var(--mx-border); color:var(--mx-text); background:var(--mx-bg-secondary); cursor:pointer; font-size:18px; }
+.mx-map-label:hover { background:var(--mx-gray-100); }
+.mx-map-selected { outline:2px solid var(--mx-text); outline-offset:-2px; }
+.mx-map-card button:focus-visible, .mx-map-toolbar button:focus-visible, .mx-map-switch button:focus-visible { outline:2px solid var(--mx-text); outline-offset:-3px; }
+.mx-map-card .katex, .mx-map-math { direction:ltr !important; unicode-bidi:isolate; }
+.mx-map-status { font-size:12px; padding-inline:10px; }
+body[data-mx-view="split"] .mx-main { position:fixed; inset-block:66px 0; inset-inline-start:0; width:50%; max-width:none; margin:0; overflow:auto; padding:24px; }
+body[data-mx-view="split"] .mx-toc, body[data-mx-view="map"] .mx-toc, body[data-mx-view="split"] .mx-toc-toggle, body[data-mx-view="map"] .mx-toc-toggle { display:none; }
+body[data-mx-view="map"] .mx-map-panel { width:100%; }
+body[data-mx-view="document"] .mx-main { padding-top:76px; }
+.mathia-scroll-highlight { animation:mx-map-pulse 1.5s ease; }
+@keyframes mx-map-pulse { 0%,100% { box-shadow:0 0 0 0 transparent; } 20%,65% { box-shadow:0 0 0 5px #a78bfa99; background-color:#a78bfa22; } }
+@media (max-width:640px) {
+  .mx-map-switch { inset-inline:60px 108px; overflow-x:auto; white-space:nowrap; }
+  body[data-mx-view="split"] .mx-main { width:100%; inset-block:66px 50%; }
+  body[data-mx-view="split"] .mx-map-panel { width:100%; inset-block:50% 0; border-top:1px solid var(--mx-border); }
+}
+@media (prefers-reduced-motion:reduce) { .mx-map-node { transition:none; } .mathia-scroll-highlight { animation:none; outline:3px solid #a78bfa; } }
+@media print {
+  .mx-map-switch, .mx-map-panel { display:none !important; }
+  body[data-mx-view] .mx-main { display:block !important; position:static; width:auto; max-width:none; overflow:visible; padding:0; margin:0; }
+}
+body.mx-map-has-ai .mx-print { inset-inline-end:108px; }
+body.mx-map-has-ai .mx-map-switch { inset-inline-end:154px; }

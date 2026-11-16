@@ -94,6 +94,7 @@ impl CompileOptions {
                 MathAssets::bundled()
             },
             title: self.title.clone().filter(|t| !t.trim().is_empty()),
+            source_name: None,
             fonts: vec![math_core::EmbeddedFont::bundled()],
             ai: AiOptions {
                 providers,
@@ -343,7 +344,7 @@ impl Session {
         out_dir: &Path,
         options: &CompileOptions,
     ) -> Result<Vec<PathBuf>, String> {
-        let html_options = options.html_options()?;
+        let mut html_options = options.html_options()?;
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
             .map_err(|e| format!("{}: {e}", dir.display()))?
             .filter_map(|entry| entry.ok().map(|e| e.path()))
@@ -352,6 +353,9 @@ impl Session {
         files.sort();
         let mut written = Vec::new();
         for file in files {
+            html_options.source_name = file
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned());
             let markdown =
                 std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
             let document = math_core::analyze(&markdown, &self.config);
@@ -392,7 +396,13 @@ impl Session {
         options: &CompileOptions,
     ) -> Result<(String, usize), String> {
         let content = self.read(source)?;
-        let html_options = options.html_options()?;
+        let mut html_options = options.html_options()?;
+        html_options.source_name = match source {
+            Source::Path(path) => path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned()),
+            _ => None,
+        };
         if self.is_html_source(source) || math_core::is_html(&content) {
             let analysis = math_core::clean_html::analyze_html_detailed(&content);
             let semantic = analysis

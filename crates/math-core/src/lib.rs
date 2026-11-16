@@ -15,6 +15,7 @@ pub mod error;
 pub mod features;
 pub mod html;
 mod html_import;
+pub mod mindmap;
 pub mod model;
 pub mod normalize;
 pub mod parser;
