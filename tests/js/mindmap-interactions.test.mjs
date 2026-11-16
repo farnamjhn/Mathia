@@ -8,7 +8,7 @@ import { runInNewContext } from "node:vm";
 
 const runtime = readFileSync(new URL("../../crates/math-core/assets/mindmap.js", import.meta.url), "utf8");
 
-function setup() {
+function setup(customTree) {
   class Element {
     constructor(tag) {
       this.tagName = tag;
@@ -52,7 +52,7 @@ function setup() {
     scrollIntoView() { this.scrolls = (this.scrolls || 0) + 1; }
   }
   const body = new Element("body"), main = new Element("main"), data = new Element("div");
-  const tree = {
+  const tree = customTree || {
     id: "root", label: "Root", node_type: "root", children: [
       { id: "section", label: "Section", node_type: "heading", children: [
         { id: "definition", label: "Definition", node_type: "definition", children: [] },
@@ -60,7 +60,11 @@ function setup() {
     ],
   };
   const targets = new Map([ ["mx-main", main], ["mx-mindmap-data", data] ]);
-  for (const id of ["root", "section", "definition"]) targets.set(id, new Element("section"));
+  function addTargets(node) {
+    targets.set(node.id, new Element("section"));
+    node.children.forEach(addTargets);
+  }
+  addTargets(tree);
   data.textContent = JSON.stringify(tree);
   const document = {
     body, documentElement: { dir: "ltr" }, readyState: "complete",
@@ -139,7 +143,7 @@ test("manual positions survive folding and view changes; reset restores automati
 });
 
 test("click threshold, fold buttons, keyboard movement, and pointer cancellation", () => {
-  const s = setup(), initial = s.position("definition");
+  const s = setup(), initial = s.position("definition"), section = s.position("section");
   const label = s.node("definition").querySelector(".mx-map-label");
   s.drag("definition", 2, 1);
   assert.deepEqual(s.position("definition"), initial);
@@ -149,7 +153,7 @@ test("click threshold, fold buttons, keyboard movement, and pointer cancellation
   const fold = s.node("section").querySelector(".mx-map-fold");
   s.fire(s.viewport, "pointerdown", { target: fold });
   s.fire(s.viewport, "pointermove", { target: fold, clientX: 100 });
-  assert.equal(s.position("section").x, 330, "fold controls do not start a drag");
+  assert.deepEqual(s.position("section"), section, "fold controls do not start a drag");
   s.fire(s.viewport, "pointerdown", { target: label });
   s.fire(s.viewport, "pointermove", { target: label, clientX: 30, pointerId: 2 });
   assert.equal(s.position("definition").x, initial.x - 20, "other pointers are ignored");
@@ -169,4 +173,27 @@ test("background dragging still pans the camera without moving cards", () => {
   assert.notEqual(s.camera(), camera);
   assert.deepEqual(s.position("definition"), before);
   assert.equal(s.viewport.classList.contains("mx-map-drag-active"), false);
+});
+
+
+test("initial layout separates columns and groups unequal section subtrees", () => {
+  const leaf = (id) => ({ id, label: id, node_type: "definition", children: [] });
+  const section = (id, children) => ({ id, label: id, node_type: "heading", children });
+  const s = setup({ id: "root", label: "Root", node_type: "root", children: [
+    section("short", [leaf("one")]),
+    section("long", [leaf("two"), leaf("three"), leaf("four")]),
+    section("last", [leaf("five")]),
+  ] });
+  const height = (id) => parseFloat(s.node(id).style.height);
+  const bottom = (id) => s.position(id).y + height(id);
+  assert.ok(s.position("short").x - s.position("root").x - 280 >= 140, "columns leave room for connectors");
+  assert.ok(s.position("three").y - bottom("two") >= 48, "related cards have breathing room");
+  assert.ok(s.position("two").y - bottom("one") >= 88, "section groups have additional separation");
+  assert.ok(s.position("five").y - bottom("four") >= 88, "unequal subtrees remain separated");
+  assert.equal(s.position("long").y + height("long") / 2,
+    (s.position("two").y + bottom("four")) / 2, "section is centered beside its children");
+  const initial = s.position("four");
+  s.click(s.node("long").querySelector(".mx-map-fold"));
+  s.click(s.node("long").querySelector(".mx-map-fold"));
+  assert.deepEqual(s.position("four"), initial, "expanding a section restores the composed layout");
 });

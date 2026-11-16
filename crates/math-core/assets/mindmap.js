@@ -127,6 +127,15 @@
       node.children.forEach(function (child) { mount(child, ancestors.concat(node.id)); });
     }
     mount(tree, []);
+    // Leave room for connectors and separate section subtrees more clearly
+    // than individual cards within the same section.
+    var columnStep = 440;
+    function gapBefore(children, index) {
+      if (!index) return 0;
+      var previous = children[index - 1], current = children[index];
+      return previous.node_type === "heading" || current.node_type === "heading"
+        || previous.children.length || current.children.length ? 88 : 48;
+    }
     function layout() {
       edges.replaceChildren();
       connections = [];
@@ -142,7 +151,7 @@
       function measure(node) {
         var e = entries.get(node.id);
         e.visibleChildren = collapsed.has(node.id) ? [] : node.children;
-        e.space = Math.max(e.height, e.visibleChildren.reduce(function (sum, child) { return sum + measure(child) + 22; }, -22));
+        e.space = Math.max(e.height, e.visibleChildren.reduce(function (sum, child, index, children) { return sum + gapBefore(children, index) + measure(child); }, 0));
         return e.space;
       }
       measure(tree);
@@ -150,17 +159,18 @@
       function place(node, depth, top) {
         var e = entries.get(node.id);
         visible.add(node.id);
-        e.x = e.position ? e.position.x : depth * 330;
+        e.x = e.position ? e.position.x : depth * columnStep;
         e.y = e.position ? e.position.y : top + (e.space - e.height) / 2;
         positionCard(e);
         var offset = top;
-        e.visibleChildren.forEach(function (child) {
+        e.visibleChildren.forEach(function (child, index, children) {
+          offset += gapBefore(children, index);
           var c = entries.get(child.id), path = svgElement("path");
           path.setAttribute("class", "mx-map-edge");
           path.dataset.mapFrom = node.id; path.dataset.mapTo = child.id;
           edges.appendChild(path);
           connections.push({ from: e, to: c, path: path });
-          place(child, depth + 1, offset); offset += c.space + 22;
+          place(child, depth + 1, offset); offset += c.space;
         });
       }
       place(tree, 0, 0);
