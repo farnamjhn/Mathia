@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -853,15 +853,52 @@ describe("deterministic mind map", () => {
     }
   });
 
+  test("dragging moves one card at the current zoom without navigating or panning", async () => {
+    const s = await open(pages.plain);
+    await s.page.getByRole("button", { name: "Mind map", exact: true }).click();
+    await s.page.getByRole("button", { name: "Zoom in", exact: true }).click();
+    const node = s.page.locator('[data-map-id="block-definition-1"]');
+    const state = () => node.evaluate((el) => ({ x: parseFloat(el.style.left), y: parseFloat(el.style.top),
+      scale: new DOMMatrix(getComputedStyle(document.querySelector(".mx-map-world")).transform).a,
+      camera: document.querySelector(".mx-map-world").style.transform }));
+    const before = await state(), rect = await node.locator(".mx-map-label").boundingBox();
+    await s.page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    await s.page.mouse.down();
+    await s.page.mouse.move(rect.x + rect.width / 2 + 80, rect.y + rect.height / 2 - 40, { steps: 8 });
+    await s.page.mouse.up();
+    const moved = await state();
+    assert.ok(Math.abs(moved.x - before.x - 80 / before.scale) < 1);
+    assert.ok(Math.abs(moved.y - before.y + 40 / before.scale) < 1);
+    assert.equal(moved.camera, before.camera);
+    assert.equal(await s.page.locator("#mx-main").isVisible(), false);
+    await s.page.getByRole("button", { name: "Collapse all", exact: true }).click();
+    await s.page.getByRole("button", { name: "Expand all", exact: true }).click();
+    assert.equal((await state()).x, moved.x);
+    assert.equal((await state()).y, moved.y);
+    await s.page.getByRole("button", { name: "Reset layout", exact: true }).click();
+    assert.equal((await state()).x, before.x);
+    assert.equal((await state()).y, before.y);
+    await node.locator(".mx-map-label").click();
+    assert.equal(await s.page.locator("#mx-main").isVisible(), true);
+    await finish(s);
+  });
+
   test("SVG and PNG export complete without errors or network access", async () => {
     const s = await open(pages.plain);
     await s.page.getByRole("button", { name: "Mind map", exact: true }).click();
+    // Move the root beyond the original origin; exports must include it.
+    await s.page.locator('[data-map-id="sec-1"] .mx-map-label').press("Alt+ArrowLeft");
     for (const format of ["SVG", "PNG"]) {
       const pending = s.page.waitForEvent("download", { timeout: 30_000 });
       await s.page.getByRole("button", { name: `Export mind map as ${format}`, exact: true }).click();
       const download = await pending;
       assert.equal(download.suggestedFilename(), `mathia-mindmap.${format.toLowerCase()}`);
       assert.equal(await download.failure(), null);
+      if (format === "SVG") {
+        const exported = readFileSync(await download.path(), "utf8");
+        assert.match(exported, /viewBox="-44 /, "export includes negative card coordinates");
+        assert.match(exported, /<foreignObject\b[^>]*\bx="-20"/, "export retains the moved root");
+      }
     }
     assert.equal(await s.page.locator(".mx-map-status").textContent(), "");
     await finish(s);

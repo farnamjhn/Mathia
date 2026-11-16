@@ -18,7 +18,7 @@
 .mx-map-definition { border-inline-start-color:#3b82f6; }
 .mx-map-theorem, .mx-map-lemma, .mx-map-corollary, .mx-map-proposition { border-inline-start-color:#a78bfa; }
 .mx-map-example { border-inline-start-color:#10b981; }
-.mx-map-label { display:block; flex:1; min-width:0; border:0; padding:12px; background:transparent; color:inherit; font:inherit; text-align:start; cursor:pointer; overflow-wrap:anywhere; }
+.mx-map-label { display:block; flex:1; min-width:0; border:0; padding:12px; background:transparent; color:inherit; font:inherit; text-align:start; cursor:grab; overflow-wrap:anywhere; user-select:none; -webkit-user-select:none; }
 .mx-map-badge { display:block; margin-bottom:5px; color:var(--mx-gray-600); font-size:10px; letter-spacing:.04em; }
 .mx-map-definition .mx-map-badge { color:#3b82f6; }
 .mx-map-theorem .mx-map-badge, .mx-map-lemma .mx-map-badge, .mx-map-corollary .mx-map-badge, .mx-map-proposition .mx-map-badge { color:#a78bfa; }
@@ -26,6 +26,8 @@
 .mx-map-title { display:block; font-weight:650; }
 .mx-map-subtitle { display:block; margin-top:6px; font-size:12px; }
 .mx-map-fold { flex:0 0 30px; border:0; border-inline-start:1px solid var(--mx-border); color:var(--mx-text); background:var(--mx-bg-secondary); cursor:pointer; font-size:18px; }
+.mx-map-dragging { z-index:2; transition:none; }
+.mx-map-drag-active, .mx-map-drag-active .mx-map-label { cursor:grabbing; user-select:none; -webkit-user-select:none; }
 .mx-map-label:hover { background:var(--mx-gray-100); }
 .mx-map-selected { outline:2px solid var(--mx-text); outline-offset:-2px; }
 .mx-map-card button:focus-visible, .mx-map-toolbar button:focus-visible, .mx-map-switch button:focus-visible { outline:2px solid var(--mx-text); outline-offset:-3px; }

@@ -19,7 +19,9 @@ MATHIA_TEST_BROWSER=webkit node --test --test-name-pattern="deterministic mind m
 ```
 
 These compare the cards with connector endpoints in screen coordinates after fit,
-zoom, and branch changes, including Persian labels with KaTeX. WebKit coverage is
+zoom, and branch changes, including Persian labels with KaTeX. They also exercise
+card dragging, click navigation after dragging, layout reset, and exports with
+cards moved beyond the original origin. WebKit coverage is
 needed for the macOS desktop preview; Chromium alone cannot catch its SVG
 `foreignObject` compositing issue.
 
@@ -40,3 +42,13 @@ How it works (`harness.mjs`):
 streaming server on port 9999) that exercises real chunked streaming and aborts of the Ask
 panel. It expects `target/algebra_en_ai.html` and `target/analysis_fa_ai.html` built with
 `--ai --ai-custom mock=http://127.0.0.1:9999/v1`.
+
+Pointer interactions also have a browser-independent runtime test:
+
+```sh
+node --test mindmap-interactions.test.mjs
+```
+
+It runs the actual mind map script with a minimal element/event fixture, checking
+zoom-adjusted movement, drag versus click, cancellation, keyboard movement, and
+position retention through folding and view changes. It does not verify painting.

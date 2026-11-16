@@ -11,7 +11,7 @@
     var ns = "http:" + "//www.w3.org/2000/svg";
     var htmlNs = "http:" + "//www.w3.org/1999/xhtml";
     var mode = "document", scale = 1, tx = 24, ty = 24;
-    var collapsed = new Set(), entries = new Map(), bounds = { width: 1, height: 1 };
+    var collapsed = new Set(), entries = new Map(), bounds = { x: 0, y: 0, width: 1, height: 1 }, connections = [];
     var say = function (en, fa) { return rtl ? fa : en; };
     function element(tag, cls, text) {
       var el = document.createElement(tag);
@@ -58,6 +58,10 @@
     button(toolbar, "+", function () { zoom(1.2); }, say("Zoom in", "بزرگ‌نمایی"));
     button(toolbar, "−", function () { zoom(1 / 1.2); }, say("Zoom out", "کوچک‌نمایی"));
     button(toolbar, say("Fit", "جا دادن"), fit);
+    button(toolbar, say("Reset layout", "بازنشانی چیدمان"), function () {
+      entries.forEach(function (entry) { entry.position = null; });
+      layout(); fit();
+    });
     button(toolbar, say("Expand all", "باز کردن همه"), function () { collapsed.clear(); layout(); fit(); });
     button(toolbar, say("Collapse all", "بستن همه"), function () {
       entries.forEach(function (entry) { if (entry.node.children.length) collapsed.add(entry.node.id); });
@@ -102,6 +106,8 @@
       card.setAttribute("dir", "auto");
       var body = button(card, "", function () { navigate(node.id); }, node.label);
       body.className = "mx-map-label";
+      body.title = node.label + " — " + say("Drag to move; click to read. Alt + arrow keys also move this card.", "برای جابجایی بکشید؛ برای خواندن کلیک کنید. کلیدهای Alt و جهت نیز کارت را جابجا می‌کنند.");
+      body.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight");
       var badge = badges[node.node_type] || badges.note;
       body.appendChild(element("span", "mx-map-badge", say(badge[0], badge[1])));
       var title = element("span", "mx-map-title"); label(title, node.label); body.appendChild(title);
@@ -117,12 +123,13 @@
         toggle.className = "mx-map-fold";
       }
       group.appendChild(card); cards.appendChild(group);
-      entries.set(node.id, { node: node, ancestors: ancestors, group: group, card: card, toggle: toggle, height: 100, x: 0, y: 0 });
+      entries.set(node.id, { node: node, ancestors: ancestors, group: group, card: card, toggle: toggle, height: 100, x: 0, y: 0, position: null });
       node.children.forEach(function (child) { mount(child, ancestors.concat(node.id)); });
     }
     mount(tree, []);
     function layout() {
       edges.replaceChildren();
+      connections = [];
       entries.forEach(function (e) {
         e.group.style.display = "";
         e.height = Math.max(72, e.card.scrollHeight + 4);
@@ -139,32 +146,57 @@
         return e.space;
       }
       measure(tree);
-      var visible = new Set(), width = 0;
+      var visible = new Set();
       function place(node, depth, top) {
-        var e = entries.get(node.id), x = depth * 330, y = top + (e.space - e.height) / 2;
-        visible.add(node.id); width = Math.max(width, x + 280);
-        e.x = x; e.y = y;
-        e.group.style.left = x + "px";
-        e.group.style.top = y + "px";
+        var e = entries.get(node.id);
+        visible.add(node.id);
+        e.x = e.position ? e.position.x : depth * 330;
+        e.y = e.position ? e.position.y : top + (e.space - e.height) / 2;
+        positionCard(e);
         var offset = top;
         e.visibleChildren.forEach(function (child) {
-          var c = entries.get(child.id), cy = offset + c.space / 2;
-          var path = svgElement("path"), start = y + e.height / 2;
-          path.setAttribute("d", "M" + (x + 280) + "," + start + " C" + (x + 305) + "," + start + " " + (x + 305) + "," + cy + " " + (x + 330) + "," + cy);
+          var c = entries.get(child.id), path = svgElement("path");
           path.setAttribute("class", "mx-map-edge");
           path.dataset.mapFrom = node.id; path.dataset.mapTo = child.id;
           edges.appendChild(path);
+          connections.push({ from: e, to: c, path: path });
           place(child, depth + 1, offset); offset += c.space + 22;
         });
       }
       place(tree, 0, 0);
       entries.forEach(function (e, id) { e.group.style.display = visible.has(id) ? "" : "none"; });
-      bounds = { width: width, height: entries.get(tree.id).space };
-      world.style.width = bounds.width + "px";
-      world.style.height = bounds.height + "px";
-      svg.setAttribute("width", String(bounds.width));
-      svg.setAttribute("height", String(bounds.height));
-      transform();
+      updateConnections(); updateBounds(); transform();
+    }
+    function positionCard(entry) {
+      entry.group.style.left = entry.x + "px";
+      entry.group.style.top = entry.y + "px";
+    }
+    function updateConnections() {
+      connections.forEach(function (edge) {
+        var x = edge.from.x + 280, y = edge.from.y + edge.from.height / 2;
+        var endX = edge.to.x, endY = edge.to.y + edge.to.height / 2;
+        var bend = Math.max(25, Math.min(160, Math.abs(endX - x) / 2));
+        edge.path.setAttribute("d", "M" + x + "," + y + " C" + (x + bend) + "," + y + " " + (endX - bend) + "," + endY + " " + endX + "," + endY);
+        edge.left = Math.min(x, endX, endX - bend);
+        edge.right = Math.max(x, endX, x + bend);
+      });
+    }
+    function updateBounds() {
+      var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+      entries.forEach(function (entry) {
+        if (entry.group.style.display === "none") return;
+        left = Math.min(left, entry.x); top = Math.min(top, entry.y);
+        right = Math.max(right, entry.x + 280); bottom = Math.max(bottom, entry.y + entry.height);
+      });
+      // Backward connections can bend outside the card rectangles.
+      connections.forEach(function (edge) { left = Math.min(left, edge.left); right = Math.max(right, edge.right); });
+      bounds = { x: left, y: top, width: right - left, height: bottom - top };
+      world.style.width = bounds.width + "px"; world.style.height = bounds.height + "px";
+      svg.setAttribute("width", String(bounds.width)); svg.setAttribute("height", String(bounds.height));
+    }
+    function moveCard(entry, x, y) {
+      entry.position = { x: x, y: y }; entry.x = x; entry.y = y;
+      positionCard(entry); updateConnections(); updateBounds();
     }
     function transform() { world.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")"; }
     function zoom(factor, x, y) {
@@ -176,8 +208,8 @@
     function fit() {
       if (panel.hidden) return;
       scale = Math.max(.001, Math.min(1.3, (viewport.clientWidth - 48) / bounds.width, (viewport.clientHeight - 48) / bounds.height));
-      tx = (viewport.clientWidth - bounds.width * scale) / 2;
-      ty = (viewport.clientHeight - bounds.height * scale) / 2; transform();
+      tx = (viewport.clientWidth - bounds.width * scale) / 2 - bounds.x * scale;
+      ty = (viewport.clientHeight - bounds.height * scale) / 2 - bounds.y * scale; transform();
     }
     var observer;
     function watchDocument() {
@@ -225,18 +257,55 @@
     });
     viewport.addEventListener("wheel", function (event) {
       event.preventDefault();
+      if (drag) return;
       var rect = viewport.getBoundingClientRect(); zoom(Math.exp(-event.deltaY * .0015), event.clientX - rect.left, event.clientY - rect.top);
     }, { passive: false });
-    var drag = null;
+    var drag = null, suppressClick = false;
     viewport.addEventListener("pointerdown", function (event) {
-      if (event.button !== 0 || event.target.closest(".mx-map-node")) return;
-      drag = { x: event.clientX, y: event.clientY, tx: tx, ty: ty }; viewport.setPointerCapture(event.pointerId);
+      if (event.button !== 0 || drag) return;
+      suppressClick = false;
+      if (event.target.closest(".mx-map-fold")) return;
+      var node = event.target.closest(".mx-map-node");
+      var entry = node ? entries.get(node.dataset.mapId) : null;
+      drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, tx: tx, ty: ty,
+        entry: entry, originX: entry ? entry.x : 0, originY: entry ? entry.y : 0, moved: false };
+      // Delay card capture until movement crosses the threshold so an ordinary
+      // click still targets the label button and navigates to the document.
+      if (!entry) viewport.setPointerCapture(event.pointerId);
     });
     viewport.addEventListener("pointermove", function (event) {
-      if (!drag) return;
-      tx = drag.tx + event.clientX - drag.x; ty = drag.ty + event.clientY - drag.y; transform();
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      var dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+      if (!drag.moved) {
+        drag.moved = true; suppressClick = true;
+        viewport.setPointerCapture(event.pointerId);
+        viewport.classList.add("mx-map-drag-active");
+        if (drag.entry) drag.entry.group.classList.add("mx-map-dragging");
+      }
+      event.preventDefault();
+      if (drag.entry) moveCard(drag.entry, drag.originX + dx / scale, drag.originY + dy / scale);
+      else { tx = drag.tx + dx; ty = drag.ty + dy; transform(); }
     });
-    ["pointerup", "pointercancel", "lostpointercapture"].forEach(function (name) { viewport.addEventListener(name, function () { drag = null; }); });
+    function endDrag(event) {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      if (drag.entry) drag.entry.group.classList.remove("mx-map-dragging");
+      viewport.classList.remove("mx-map-drag-active"); drag = null;
+    }
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach(function (name) { viewport.addEventListener(name, endDrag); });
+    viewport.addEventListener("click", function (event) {
+      if (!suppressClick || event.detail === 0) return;
+      suppressClick = false; event.preventDefault(); event.stopPropagation();
+    }, true);
+    viewport.addEventListener("keydown", function (event) {
+      var deltas = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+      if (!event.altKey || !deltas[event.key] || drag) return;
+      var node = event.target.closest(".mx-map-node");
+      if (!node) return;
+      event.preventDefault();
+      var entry = entries.get(node.dataset.mapId), step = event.shiftKey ? 50 : 20;
+      moveCard(entry, entry.x + deltas[event.key][0] * step, entry.y + deltas[event.key][1] * step);
+    });
     new ResizeObserver(function () { if (!panel.hidden) { layout(); fit(); } }).observe(viewport);
 
     function download(blob, extension) {
@@ -255,7 +324,7 @@
         if (document.fonts) await document.fonts.ready;
         var copy = svgElement("svg"), w = Math.ceil(bounds.width + 48), h = Math.ceil(bounds.height + 48);
         copy.setAttribute("xmlns", ns); copy.setAttribute("width", w); copy.setAttribute("height", h);
-        copy.setAttribute("viewBox", "0 0 " + w + " " + h);
+        copy.setAttribute("viewBox", (bounds.x - 24) + " " + (bounds.y - 24) + " " + w + " " + h);
         copy.style.cssText = "background:" + getComputedStyle(document.body).backgroundColor;
         // Rebuild at layout coordinates, independently of the viewport camera
         // and in-progress CSS transitions. foreignObject is export-only.
@@ -273,12 +342,12 @@
         }
         var lines = edges.cloneNode(true);
         inlineStyles(edges, lines);
-        lines.style.transform = "translate(24px,24px)";
+        lines.style.transform = "none";
         copy.appendChild(lines);
         entries.forEach(function (entry) {
           if (entry.group.style.display === "none") return;
           var fo = svgElement("foreignObject"), card = entry.card.cloneNode(true);
-          fo.setAttribute("x", String(entry.x + 24)); fo.setAttribute("y", String(entry.y + 24));
+          fo.setAttribute("x", String(entry.x)); fo.setAttribute("y", String(entry.y));
           fo.setAttribute("width", "280"); fo.setAttribute("height", String(entry.height));
           inlineStyles(entry.card, card);
           fo.appendChild(card); copy.appendChild(fo);
