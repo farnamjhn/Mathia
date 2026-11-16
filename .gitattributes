@@ -1,0 +1,4 @@
+# Sample inputs for the importer and classifier, not project source. Keeping
+# them out of GitHub's language statistics stops the two large HTML fixtures
+# from making the repository look like an HTML project.
+sample-data/** linguist-vendored
