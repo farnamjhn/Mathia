@@ -285,8 +285,7 @@ fn is_chrome(el: &Element) -> bool {
 /// aside, footer) are left alone: those are chrome too, not content.
 fn hoist_headings_from_chrome(dom: &mut Dom, root: NodeId) {
     let headings = dom.find_all(root, |d, id| {
-        d.element(id)
-            .is_some_and(|el| is_heading_tag(el.tag()))
+        d.element(id).is_some_and(|el| is_heading_tag(el.tag()))
     });
     for heading in headings {
         let mut ancestor = dom.node(heading).parent;
@@ -406,8 +405,7 @@ fn content_root(dom: &Dom) -> NodeId {
 
 fn count_headings(dom: &Dom, id: NodeId) -> usize {
     dom.find_all(id, |d, child| {
-        d.element(child)
-            .is_some_and(|el| is_heading_tag(el.tag()))
+        d.element(child).is_some_and(|el| is_heading_tag(el.tag()))
     })
     .len()
 }

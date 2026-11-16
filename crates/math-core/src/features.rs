@@ -198,11 +198,7 @@ impl Lexicon {
                 let end = scan_number(norm, start);
                 let number = norm[start..end].iter().collect::<String>();
                 let mut q = skip_ws(norm, end);
-                if norm[..start]
-                    .iter()
-                    .rev()
-                    .find(|c| !c.is_whitespace())
-                    == Some(&'(')
+                if norm[..start].iter().rev().find(|c| !c.is_whitespace()) == Some(&'(')
                     && norm.get(q) == Some(&')')
                 {
                     q = skip_ws(norm, q + 1);
@@ -441,7 +437,9 @@ mod tests {
 
     #[test]
     fn number_first_textbook_labels() {
-        let hit = features("1.2 Theorem. Let $G$ be a finite group.").lead.unwrap();
+        let hit = features("1.2 Theorem. Let $G$ be a finite group.")
+            .lead
+            .unwrap();
         assert_eq!(hit.kind, BlockType::Theorem);
         assert_eq!(hit.number.as_deref(), Some("1.2"));
         assert!(hit.labelled && !hit.reference && !hit.body_empty);
@@ -454,7 +452,9 @@ mod tests {
         assert_eq!(hit.name.as_deref(), Some("Zorn"));
         assert!(hit.labelled);
 
-        let hit = features("(2.1) Corollary. Hence $f$ is bounded.").lead.unwrap();
+        let hit = features("(2.1) Corollary. Hence $f$ is bounded.")
+            .lead
+            .unwrap();
         assert_eq!(hit.kind, BlockType::Corollary);
         assert_eq!(hit.number.as_deref(), Some("2.1"));
         assert!(hit.labelled);

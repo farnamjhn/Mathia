@@ -163,8 +163,14 @@ async fn clear_recent(app: AppHandle, state: State<'_, Shared>) -> Result<(), St
 /// The Markdown or HTML files given on the command line (`mathia-app notes.md`), if any.
 #[tauri::command]
 async fn startup_file(app: AppHandle, state: State<'_, Shared>) -> Result<Vec<String>, String> {
-    let args: Vec<std::path::PathBuf> = std::env::args_os().skip(1).map(std::path::PathBuf::from).collect();
-    let supported: Vec<_> = args.into_iter().filter(|p| session::is_supported(p)).collect();
+    let args: Vec<std::path::PathBuf> = std::env::args_os()
+        .skip(1)
+        .map(std::path::PathBuf::from)
+        .collect();
+    let supported: Vec<_> = args
+        .into_iter()
+        .filter(|p| session::is_supported(p))
+        .collect();
     if supported.is_empty() {
         return Ok(Vec::new());
     }
@@ -326,7 +332,9 @@ async fn export_pdf(
             Source::Path(p) => p.file_stem().map(|s| s.to_string_lossy().into_owned()),
             Source::MultiPath(paths) => {
                 if paths.len() == 1 {
-                    paths[0].file_stem().map(|s| s.to_string_lossy().into_owned())
+                    paths[0]
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
                 } else {
                     Some("Combined Document".into())
                 }

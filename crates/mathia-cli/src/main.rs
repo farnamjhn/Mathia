@@ -323,11 +323,9 @@ fn is_markdown(path: &Path) -> bool {
 }
 
 fn is_html(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        ["html", "htm"]
-            .iter()
-            .any(|m| e.eq_ignore_ascii_case(m))
-    })
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| ["html", "htm"].iter().any(|m| e.eq_ignore_ascii_case(m)))
 }
 
 fn is_supported(path: &Path) -> bool {

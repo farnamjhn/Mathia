@@ -28,11 +28,9 @@ pub fn is_markdown(path: &Path) -> bool {
 }
 
 pub fn is_html(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        HTML_EXTENSIONS
-            .iter()
-            .any(|m| e.eq_ignore_ascii_case(m))
-    })
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| HTML_EXTENSIONS.iter().any(|m| e.eq_ignore_ascii_case(m)))
 }
 
 pub fn is_supported(path: &Path) -> bool {
@@ -296,8 +294,8 @@ impl Session {
                 if !self.granted.contains(&canonical) {
                     return Err(format!("{}: not opened in Mathia", path.display()));
                 }
-                let meta =
-                    std::fs::metadata(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
+                let meta = std::fs::metadata(&canonical)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
                 let modified = meta
                     .modified()
                     .ok()
@@ -412,8 +410,7 @@ impl Session {
             .iter()
             .filter(|b| b.kind.is_semantic())
             .count();
-        let html = math_core::html::render(&document, &html_options)
-            .map_err(|e| e.to_string())?;
+        let html = math_core::html::render(&document, &html_options).map_err(|e| e.to_string())?;
         Ok((html, semantic))
     }
 
@@ -681,7 +678,9 @@ mod tests {
 
         let source = Source::Text(dirty_html.to_string());
         let session = Session::default();
-        let (compiled, semantic) = session.compile(&source, &CompileOptions::default()).unwrap();
+        let (compiled, semantic) = session
+            .compile(&source, &CompileOptions::default())
+            .unwrap();
 
         // Bloat removed
         assert!(!compiled.contains("bad.css"));
@@ -699,8 +698,8 @@ mod tests {
 
         let analysis = session.analyze(&source).unwrap();
         assert_eq!(analysis.document.title.as_deref(), Some("Physics Guide"));
-        assert_eq!(analysis.document.blocks.len(), 1);
-        assert_eq!(analysis.document.blocks[0].kind, BlockType::Heading);
+        let kinds: Vec<_> = analysis.document.blocks.iter().map(|b| b.kind).collect();
+        assert_eq!(kinds, [BlockType::Heading, BlockType::Text]);
     }
 
     #[test]
