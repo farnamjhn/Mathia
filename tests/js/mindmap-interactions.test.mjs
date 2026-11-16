@@ -52,20 +52,24 @@ function setup(customTree) {
     scrollIntoView() { this.scrolls = (this.scrolls || 0) + 1; }
   }
   const body = new Element("body"), main = new Element("main"), data = new Element("div");
-  const tree = customTree || {
+  const payload = customTree || {
     id: "root", label: "Root", node_type: "root", children: [
       { id: "section", label: "Section", node_type: "heading", children: [
         { id: "definition", label: "Definition", node_type: "definition", children: [] },
       ] },
     ],
   };
+  const rootNode = payload.root || payload;
   const targets = new Map([ ["mx-main", main], ["mx-mindmap-data", data] ]);
   function addTargets(node) {
     targets.set(node.id, new Element("section"));
+    if (node.proof_id) {
+      targets.set(node.proof_id, new Element("section"));
+    }
     node.children.forEach(addTargets);
   }
-  addTargets(tree);
-  data.textContent = JSON.stringify(tree);
+  addTargets(rootNode);
+  data.textContent = JSON.stringify(payload);
   const document = {
     body, documentElement: { dir: "ltr" }, readyState: "complete",
     createElement: (tag) => new Element(tag),
@@ -196,4 +200,71 @@ test("initial layout separates columns and groups unequal section subtrees", () 
   s.click(s.node("long").querySelector(".mx-map-fold"));
   s.click(s.node("long").querySelector(".mx-map-fold"));
   assert.deepEqual(s.position("four"), initial, "expanding a section restores the composed layout");
+});
+
+test("mind map data container with proof_id, key_terms, and dependency edges", () => {
+  const data = {
+    root: {
+      id: "root", label: "Document", node_type: "root", level: 0, children: [
+        {
+          id: "sec-1", label: "Section 1", node_type: "heading", level: 1,
+          key_terms: ["vector space", "basis"],
+          children: [
+            {
+              id: "def-1", label: "Definition 1", node_type: "definition", level: 2,
+              children: []
+            },
+            {
+              id: "thm-1", label: "Theorem 1", node_type: "theorem", level: 2,
+              proof_id: "proof-1",
+              children: []
+            }
+          ]
+        }
+      ]
+    },
+    edges: [
+      { from: "thm-1", to: "def-1", label: "Definition 1" }
+    ]
+  };
+
+  const s = setup(data);
+  // Verify key_terms rendered
+  const secNode = s.node("sec-1");
+  const terms = secNode.querySelectorAll(".mx-map-term");
+  assert.equal(terms.length, 2);
+  assert.equal(terms[0].textContent, "vector space");
+  assert.equal(terms[1].textContent, "basis");
+
+  // Verify proof_id mini-pill rendered
+  const thmNode = s.node("thm-1");
+  const proofPill = thmNode.querySelector(".mx-map-proof");
+  assert.ok(proofPill, "proof pill should be rendered on theorem with proof_id");
+  assert.equal(proofPill.textContent, "Proof ↗");
+
+  // Clicking proof pill navigates to proof target without triggering card navigation
+  const targetProof = s.targets.get("proof-1");
+  assert.equal(targetProof.scrolls || 0, 0);
+  s.fire(proofPill, "click");
+  assert.equal(targetProof.scrolls, 1, "proof pill scrolls to proof anchor");
+
+  // Verify Show Dependencies toggle
+  const depControl = s.control("Show Dependencies");
+  assert.ok(depControl, "Show Dependencies toolbar button should exist");
+  assert.equal(depControl.attributes["aria-pressed"], "false");
+
+  // Toggle dependencies ON
+  s.fire(depControl, "click");
+  assert.equal(depControl.attributes["aria-pressed"], "true");
+  const depEdges = s.body.querySelectorAll(".mx-map-dep-edge");
+  assert.equal(depEdges.length, 1);
+  assert.equal(depEdges[0].dataset.depFrom, "thm-1");
+  assert.equal(depEdges[0].dataset.depTo, "def-1");
+  assert.equal(depEdges[0].attributes["stroke-dasharray"], "6,4");
+
+  // Toggle dependencies OFF
+  s.fire(depControl, "click");
+  assert.equal(depControl.attributes["aria-pressed"], "false");
+  const depEdgesOff = s.body.querySelectorAll(".mx-map-dep-edge");
+  assert.equal(depEdgesOff.length, 0);
 });

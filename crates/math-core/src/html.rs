@@ -653,10 +653,10 @@ mod tests {
         let data = (0..dom.len())
             .find(|&id| dom.attr(id, "id") == Some("mx-mindmap-data"))
             .unwrap();
-        let tree: crate::mindmap::MindMapNode =
+        let map_data: crate::mindmap::MindMapData =
             serde_json::from_str(&dom.text_content(data)).unwrap();
-        assert_eq!(tree.label, "notes<&>.md");
-        assert_eq!(tree.children[0].id, doc.blocks[0].id);
+        assert_eq!(map_data.root.label, "notes<&>.md");
+        assert_eq!(map_data.root.children[0].id, doc.blocks[0].id);
         assert!(!html.contains("notes<&>.md"));
         assert!(
             dom.children(data)

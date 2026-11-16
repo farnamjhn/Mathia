@@ -26,6 +26,12 @@
 .mx-map-title { display:block; font-weight:650; }
 .mx-map-subtitle { display:block; margin-top:6px; font-size:12px; }
 .mx-map-fold { flex:0 0 30px; border:0; border-inline-start:1px solid var(--mx-border); color:var(--mx-text); background:var(--mx-bg-secondary); cursor:pointer; font-size:18px; }
+.mx-map-proof { display:inline-block; margin-top:6px; padding:2px 8px; font-size:11px; font-weight:600; border-radius:12px; background:var(--mx-bg-secondary); border:1px solid var(--mx-border); color:#3b82f6; cursor:pointer; text-decoration:none; vertical-align:middle; transition:all .15s ease; }
+.mx-map-proof:hover { background:#3b82f620; border-color:#3b82f6; }
+.mx-map-key-terms { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
+.mx-map-term { display:inline-flex; align-items:center; padding:1px 6px; font-size:11px; border-radius:4px; background:var(--mx-bg-secondary); color:var(--mx-gray-700); border:1px solid var(--mx-border); max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+.mx-map-dep-edge { fill:none; stroke:#f59e0b; stroke-width:1.8; stroke-dasharray:6,4; opacity:0.85; }
+.mx-map-toolbar button.mx-map-btn-active, .mx-map-toolbar button[aria-pressed="true"] { background:var(--mx-text); color:var(--mx-bg); }
 .mx-map-dragging { z-index:2; transition:none; }
 .mx-map-drag-active, .mx-map-drag-active .mx-map-label { cursor:grabbing; user-select:none; -webkit-user-select:none; }
 .mx-map-label:hover { background:var(--mx-gray-100); }
