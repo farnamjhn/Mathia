@@ -298,13 +298,17 @@ pub fn render_with_raw_content(
         .or(doc.title.as_deref())
         .unwrap_or(if rtl { "جزوه" } else { "Study guide" });
 
-    let runtime_js = format!("{}\n{}", RUNTIME_JS, include_str!("../assets/mindmap.js"))
-        .replace("</script", "<\\/script");
+    let runtime_js = normalize_newlines(&format!(
+        "{}\n{}",
+        RUNTIME_JS,
+        include_str!("../assets/mindmap.js")
+    ))
+    .replace("</script", "<\\/script");
     let katex = match &options.math {
         MathAssets::Inline(katex) => Some(KatexAssets {
             // Keep embedded sources from closing their own element.
             css: katex.css.replace("</style", "<\\/style"),
-            js: katex.js.replace("</script", "<\\/script"),
+            js: normalize_newlines(&katex.js).replace("</script", "<\\/script"),
         }),
         _ => None,
     };
@@ -314,7 +318,7 @@ pub fn render_with_raw_content(
         .collect();
     let has_ai = !options.ai.is_empty();
     let ai_js = if has_ai {
-        Some(AI_JS.replace("</script", "<\\/script"))
+        Some(normalize_newlines(AI_JS).replace("</script", "<\\/script"))
     } else {
         None
     };
@@ -465,6 +469,17 @@ fn math_head(math: &MathAssets, inline: Option<&KatexAssets>) -> String {
         }
         _ => String::new(),
     }
+}
+
+/// HTML parsers normalize CRLF and lone CR to LF in script text before CSP
+/// hashes are checked, so inline scripts must be hashed and embedded with LF
+/// line endings. A Windows checkout (`core.autocrlf`) otherwise produces
+/// scripts whose hashes never match and whose CSP therefore blocks them.
+fn normalize_newlines(text: &str) -> String {
+    if !text.contains('\r') {
+        return text.to_string();
+    }
+    text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 const KATEX_CDN: &str = "https://cdn.jsdelivr.net";
@@ -714,6 +729,43 @@ mod tests {
         assert!(inline.contains(".katex{font:x}"));
         assert!(inline.contains(r"var s='<\/script>';"));
         assert!(!inline.contains("cdn.jsdelivr.net"));
+    }
+
+    #[test]
+    fn inline_script_hashes_use_normalized_line_endings() {
+        let doc = analyze("# آنالیز\n\n$f(x) = x^2$", &ScoringConfig::default());
+        let html = render(
+            &doc,
+            &HtmlOptions {
+                math: MathAssets::Inline(KatexAssets {
+                    css: ".katex{font:x}".into(),
+                    js: "var katex = {};\r\nvar more = 1;\r\n".into(),
+                }),
+                ai: AiOptions {
+                    providers: vec![AiProvider::OpenAi],
+                    custom_providers: Vec::new(),
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let csp_start = html.find("Content-Security-Policy").unwrap();
+        let csp_end = csp_start + html[csp_start..].find('>').unwrap();
+        let csp = &html[csp_start..csp_end];
+
+        for id in ["mx-runtime", "mx-katex-js", "mx-ai"] {
+            let open = format!("<script id=\"{id}\">");
+            let start = html.find(&open).unwrap() + open.len();
+            let end = start + html[start..].find("</script>").unwrap();
+            let script = &html[start..end];
+            assert!(!script.contains('\r'), "{id} still has CRLF line endings");
+            let hash = base64(&sha256(script.as_bytes()));
+            assert!(
+                csp.contains(&format!("'sha256-{hash}'")),
+                "CSP does not allow the {id} script"
+            );
+        }
     }
 
     #[test]
@@ -1008,6 +1060,12 @@ mod tests {
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn newlines_are_normalized_to_lf() {
+        assert_eq!(normalize_newlines("a\r\nb\rc\nd"), "a\nb\nc\nd");
+        assert_eq!(normalize_newlines("no newlines"), "no newlines");
     }
 
     #[test]

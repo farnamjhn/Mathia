@@ -1,3 +1,7 @@
+# Keep text files LF on every platform. Windows checkouts otherwise get CRLF,
+# which changes the bytes of inlined scripts and breaks their CSP hashes.
+* text=auto eol=lf
+
 # Sample inputs for the importer and classifier, not project source. Keeping
 # them out of GitHub's language statistics stops the two large HTML fixtures
 # from making the repository look like an HTML project.
