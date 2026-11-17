@@ -270,7 +270,7 @@ impl HeuristicClassifier {
         }
         let can_open = matches!(
             node.kind,
-            NodeKind::Paragraph | NodeKind::Heading(_) | NodeKind::Quote
+            NodeKind::Paragraph | NodeKind::ListItem | NodeKind::Heading(_) | NodeKind::Quote
         );
         NodeScore {
             opens: can_open && best.1 >= self.config.threshold,
@@ -543,7 +543,9 @@ impl HeuristicClassifier {
         i: usize,
         limit: usize,
     ) -> Option<f32> {
-        if !previous?.kind.is_statement() || nodes[i].kind != NodeKind::Paragraph {
+        if !previous?.kind.is_statement()
+            || !matches!(nodes[i].kind, NodeKind::Paragraph | NodeKind::ListItem)
+        {
             return None;
         }
         let w = &self.config.weights;
@@ -593,7 +595,11 @@ impl HeuristicClassifier {
         let mut end = start + 1;
         while end < cap {
             let take = match nodes[end].kind {
-                NodeKind::DisplayMath | NodeKind::List | NodeKind::Quote | NodeKind::Table => true,
+                NodeKind::DisplayMath
+                | NodeKind::List
+                | NodeKind::ListItem
+                | NodeKind::Quote
+                | NodeKind::Table => true,
                 NodeKind::Paragraph => {
                     needs_body
                         || scores[end].features.continuation
@@ -809,7 +815,36 @@ impl<'a> Builder<'a> {
                 escape_html(name)
             ));
         }
-        for node in nodes {
+        let mut at = 0;
+        while at < nodes.len() {
+            let node = &nodes[at];
+            if node.kind == NodeKind::ListItem {
+                let ordered = node.list.is_some_and(|list| list.ordered);
+                let mut end = at + 1;
+                while end < nodes.len()
+                    && nodes[end].kind == NodeKind::ListItem
+                    && nodes[end].list.is_some_and(|list| list.ordered) == ordered
+                {
+                    end += 1;
+                }
+                if kind == BlockType::Text {
+                    html.push_str(if ordered { "<ol>\n" } else { "<ul>\n" });
+                    for item in &nodes[at..end] {
+                        html.push_str("<li>");
+                        html.push_str(&item.html);
+                        html.push_str("</li>\n");
+                    }
+                    html.push_str(if ordered { "</ol>\n" } else { "</ul>\n" });
+                } else {
+                    // Inside a semantic block the item is the block's body,
+                    // not an entry of a surrounding list.
+                    for item in &nodes[at..end] {
+                        html.push_str(&item.html);
+                    }
+                }
+                at = end;
+                continue;
+            }
             match node.kind {
                 // A heading that opened a semantic block becomes its title line.
                 NodeKind::Heading(_) if kind != BlockType::Heading => {
@@ -817,6 +852,7 @@ impl<'a> Builder<'a> {
                 }
                 _ => html.push_str(&node.html),
             }
+            at += 1;
         }
 
         self.blocks.push(SemanticBlock {
@@ -911,6 +947,25 @@ mod tests {
             let s = best(md);
             assert!(!s.opens, "should stay text: {md} (score {:?})", s.best);
         }
+    }
+
+    #[test]
+    fn bulleted_labels_open_blocks() {
+        let blocks = classify(
+            "- **قضیه ۵.۳.** اگر $W$ زیرفضا باشد آنگاه حکم برقرار است.\n\n\
+             - **تعریف ۲.۱.** مجموعهٔ $V$ را برداری گوییم.\n\n\
+             1. **Proof.** Suppose not.",
+        );
+        assert_eq!(
+            kinds(&blocks),
+            [BlockType::Theorem, BlockType::Definition, BlockType::Proof]
+        );
+    }
+
+    #[test]
+    fn plain_bullet_list_stays_text() {
+        let blocks = classify("- یک\n- دو\n\n1. اول\n2. دوم");
+        assert_eq!(kinds(&blocks), [BlockType::Text]);
     }
 
     #[test]

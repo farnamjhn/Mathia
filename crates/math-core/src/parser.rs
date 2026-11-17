@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd, html};
 
-use crate::model::{BlockType, EnvSpan, MathSpan, Node, NodeKind};
+use crate::model::{BlockType, EnvSpan, ListInfo, MathSpan, Node, NodeKind};
 use crate::normalize::{Zone, begin_at, zones};
 
 fn options() -> Options {
@@ -116,12 +116,58 @@ fn parse_chunk(src: &str, chunk: Range<usize>, nodes: &mut Vec<Node>) {
     let mut buf: Vec<Event> = Vec::new();
     let mut depth = 0usize;
     let mut start = 0usize;
+    let mut list: Option<ListState> = None;
     let base = chunk.start;
 
     for (event, range) in Parser::new_ext(&src[chunk], options()).into_offset_iter() {
         let range = base + range.start..base + range.end;
         let event = sanitize(event);
+
+        // A top-level list becomes one node per item, so that a bulleted
+        // "**Theorem 1.** …" can open a block like any other paragraph.
+        if let Some(state) = list.as_mut() {
+            match &event {
+                Event::Start(Tag::Item) if depth == 1 => {
+                    state.item.clear();
+                    state.item_start = range.start;
+                    depth = 2;
+                }
+                Event::End(TagEnd::Item) if depth == 2 => {
+                    let item = std::mem::take(&mut state.item);
+                    let mut node = build(item, state.item_start..range.end);
+                    node.kind = NodeKind::ListItem;
+                    node.list = Some(ListInfo {
+                        ordered: state.ordered,
+                    });
+                    nodes.push(node);
+                    depth = 1;
+                }
+                Event::End(TagEnd::List(_)) if depth == 1 => {
+                    list = None;
+                    depth = 0;
+                }
+                Event::Start(_) => {
+                    state.item.push(event);
+                    depth += 1;
+                }
+                Event::End(_) => {
+                    depth = depth.saturating_sub(1);
+                    state.item.push(event);
+                }
+                _ => state.item.push(event),
+            }
+            continue;
+        }
+
         match event {
+            Event::Start(Tag::List(ordered)) if depth == 0 => {
+                list = Some(ListState {
+                    ordered: ordered.is_some(),
+                    item: Vec::new(),
+                    item_start: range.start,
+                });
+                depth = 1;
+            }
             Event::Start(_) => {
                 if depth == 0 {
                     start = range.start;
@@ -140,6 +186,12 @@ fn parse_chunk(src: &str, chunk: Range<usize>, nodes: &mut Vec<Node>) {
             _ => buf.push(event),
         }
     }
+}
+
+struct ListState<'a> {
+    ordered: bool,
+    item: Vec<Event<'a>>,
+    item_start: usize,
 }
 
 /// Raw HTML becomes visible text, and link / image targets are limited to
@@ -216,7 +268,12 @@ fn build(events: Vec<Event>, source: Range<usize>) -> Node {
     // "**Theorem 1.** …" — possibly inside a block quote.
     let leading_emphasis = events
         .iter()
-        .find(|e| !matches!(e, Event::Start(Tag::Paragraph | Tag::BlockQuote(_))))
+        .find(|e| {
+            !matches!(
+                e,
+                Event::Start(Tag::Paragraph | Tag::BlockQuote(_) | Tag::List(_) | Tag::Item)
+            )
+        })
         .is_some_and(|e| matches!(e, Event::Start(Tag::Strong | Tag::Emphasis)));
 
     let (mut text, mut flat, mut math) = (String::new(), String::new(), Vec::new());
@@ -266,6 +323,7 @@ fn build(events: Vec<Event>, source: Range<usize>) -> Node {
         html: out,
         source,
         env: None,
+        list: None,
     }
 }
 
@@ -285,7 +343,8 @@ mod tests {
                 NodeKind::Heading(1),
                 NodeKind::Paragraph,
                 NodeKind::DisplayMath,
-                NodeKind::List
+                NodeKind::ListItem,
+                NodeKind::ListItem
             ]
         );
 

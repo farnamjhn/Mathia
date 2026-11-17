@@ -202,7 +202,7 @@ fn extract_key_terms(doc: &Document, node_range: std::ops::Range<usize>) -> Vec<
 
     for (node_idx, node) in doc.nodes[start..end].iter().enumerate() {
         let abs_idx = start + node_idx;
-        if node.kind != NodeKind::Paragraph {
+        if !matches!(node.kind, NodeKind::Paragraph | NodeKind::ListItem) {
             continue;
         }
 

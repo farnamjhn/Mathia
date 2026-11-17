@@ -218,11 +218,20 @@ pub enum NodeKind {
     /// A paragraph that holds nothing but `$$ … $$`.
     DisplayMath,
     List,
+    /// One item of a top-level list. Its HTML is the item's inner HTML.
+    ListItem,
     Quote,
     Code,
     Table,
     Rule,
     Other,
+}
+
+/// The list a [`NodeKind::ListItem`] belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListInfo {
+    /// `true` for `1.` lists, `false` for `-` / `*` / `+` lists.
+    pub ordered: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -298,6 +307,9 @@ pub struct Node {
     pub source: Range<usize>,
     /// Set on the first node of a LaTeX theorem-like environment.
     pub env: Option<EnvSpan>,
+    /// Set on a [`NodeKind::ListItem`].
+    #[serde(default)]
+    pub list: Option<ListInfo>,
 }
 
 /// A classified, addressable unit of the compiled document.

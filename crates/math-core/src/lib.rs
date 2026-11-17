@@ -35,7 +35,8 @@ pub use html::{
     AiOptions, AiProvider, CustomProvider, EmbeddedFont, HtmlOptions, KatexAssets, MathAssets,
 };
 pub use model::{
-    BlockType, Direction, Document, EndReason, EnvSpan, Node, NodeKind, SemanticBlock, TocEntry,
+    BlockType, Direction, Document, EndReason, EnvSpan, ListInfo, Node, NodeKind, SemanticBlock,
+    TocEntry,
 };
 pub use normalize::normalize_markdown;
 pub use repair::{Repair, repair_markdown, wrap_bare_math};
