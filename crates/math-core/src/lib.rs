@@ -86,14 +86,20 @@ impl Analysis {
                 .filter(|(_, s)| *s > 0.0)
                 .map(|(kind, s)| format!(", then {} {s:.2}", kind.slug()))
                 .unwrap_or_default();
-            let preview: String = self.document.nodes[index]
-                .flat
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .chars()
-                .take(48)
-                .collect();
+            let preview: String = self
+                .document
+                .nodes
+                .get(index)
+                .map(|node| {
+                    node.flat
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .chars()
+                        .take(48)
+                        .collect()
+                })
+                .unwrap_or_default();
             let best = if score.best.1 > 0.0 {
                 format!("{} {:.2}", score.best.0.slug(), score.best.1)
             } else {
