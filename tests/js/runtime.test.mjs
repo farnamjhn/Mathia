@@ -783,6 +783,8 @@ describe("highlights", () => {
     const { page } = s;
     await page.waitForSelector("#block-definition-1 .katex");
     const before = await page.locator("#mx-main").innerHTML();
+    const formula = page.locator("#block-definition-1 .katex").first();
+    const mathBefore = await formula.evaluate((el) => el.outerHTML);
 
     const forward = await select(page, "تابع", "را");
     assert.equal(forward.backward, false);
@@ -808,7 +810,8 @@ describe("highlights", () => {
 
     assert.equal(await page.evaluate(() => Mathia.highlights.count()), 1);
     assert.equal(await page.evaluate(() => window.getSelection().isCollapsed), true);
-    assert.equal(await page.locator("#mx-main").innerHTML(), before, "highlighting leaves the lesson DOM alone");
+    await page.waitForSelector("#block-definition-1 [data-mx-highlight-painted]");
+    assert.equal(await formula.evaluate((el) => el.outerHTML), mathBefore, "highlighting leaves KaTeX markup alone");
     const first = await ranges(page);
     assert.equal(first.length, 1);
     assert.match(first[0], /تابع/);
@@ -819,6 +822,37 @@ describe("highlights", () => {
     await page.keyboard.press("Control+Shift+H");
     assert.equal(await page.evaluate(() => Mathia.highlights.count()), 2);
     assert.equal((await ranges(page)).length, 2);
+    await page.evaluate(() => Mathia.highlights.clear());
+    assert.equal(await page.locator("#mx-main").innerHTML(), before, "clearing removes the painting styles");
+    await finish(s);
+  });
+
+  test("uses the tallest line for every highlight band in a paragraph", async () => {
+    const s = await open(pages.fa);
+    const { page } = s;
+    await page.evaluate(() => {
+      const math = document.querySelector(".math-inline .mfrac").closest(".math-inline").cloneNode(true);
+      math.style.fontSize = "2em";
+      const p = document.createElement("p");
+      p.id = "uniform-highlight";
+      p.append("آغاز کوتاه", document.createElement("br"), "فرمول ", math, " در میان متن",
+        document.createElement("br"), "پایان کوتاه بدون انتخاب");
+      document.getElementById("mx-main").prepend(p);
+    });
+    const paragraph = page.locator("#uniform-highlight");
+    await paragraph.evaluate((el) => {
+      window.getSelection().setBaseAndExtent(el.firstChild, 0, el.lastChild, "پایان کوتاه".length);
+    });
+    await page.keyboard.press("Control+Shift+H");
+    await page.waitForSelector("#uniform-highlight[data-mx-highlight-painted]");
+    const { heights, lineHeight, mathHeight } = await paragraph.evaluate((el) => ({
+      heights: getComputedStyle(el, "::before").backgroundSize.split(", ").map((size) => parseFloat(size.split(" ")[1])),
+      lineHeight: parseFloat(getComputedStyle(el).lineHeight),
+      mathHeight: el.querySelector(".math-inline").getBoundingClientRect().height,
+    }));
+    assert.equal(heights.length, 3, "one continuous band per line, including across the inline formula");
+    assert.ok(heights.every((height) => height === heights[0]), "all bands use the same height");
+    assert.ok(heights[0] > lineHeight && heights[0] >= mathHeight - 0.001, "the tallest formula sets the height");
     await finish(s);
   });
 

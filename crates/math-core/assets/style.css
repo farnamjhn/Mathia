@@ -68,9 +68,22 @@ mark.mx-hit { padding:0 1px; border-radius:2px; background:#fde68a; color:#000; 
 mark.mx-hit-current { background:#f59e0b; outline:2px solid var(--mx-text); }
 .mx-hit-math { background:#fde68a; color:#000; } .mx-hit-math.mx-hit-current { background:#f59e0b; outline:2px solid var(--mx-text); }
 
-/* Reader highlights: painted by the CSS Custom Highlight API, so the lesson
-   HTML and KaTeX markup are never modified. */
+/* Reader highlights share a background height within each prose block.
+   Keep native painting inside code, display math, and active search marks. */
 ::highlight(mathia-highlight) { background-color:var(--mx-highlight-bg); color:var(--mx-highlight-fg); }
+[data-mx-highlight-painted] { position:relative; isolation:isolate; }
+[data-mx-highlight-painted]::before {
+  content:"";
+  position:absolute;
+  inset:var(--mx-highlight-inset) 0;
+  pointer-events:none;
+  z-index:-1;
+  background:var(--mx-highlight-bands);
+}
+[data-mx-highlight-painted]::highlight(mathia-highlight),
+[data-mx-highlight-painted] ::highlight(mathia-highlight) { background-color:transparent; }
+[data-mx-highlight-painted] :is(code, pre, .math-display, mark.mx-hit, .mx-hit-math)::highlight(mathia-highlight),
+[data-mx-highlight-painted] :is(code, pre, .math-display, mark.mx-hit, .mx-hit-math) ::highlight(mathia-highlight) { background-color:var(--mx-highlight-bg); }
 .mx-highlight-toolbar { position:fixed; z-index:4; display:flex; gap:.35rem; padding:4px; border:1px solid var(--mx-border); border-radius:6px; background:var(--mx-bg); box-shadow:0 4px 16px rgb(0 0 0 / .12); }
 .mx-highlight-toolbar[hidden] { display:none; }
 .mx-highlight-toolbar button { padding:4px 10px; border:1px solid var(--mx-border); border-radius:4px; background:var(--mx-bg-secondary); color:var(--mx-text); font:500 12px var(--mx-font-sans); cursor:pointer; white-space:nowrap; }

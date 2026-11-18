@@ -522,13 +522,171 @@
     if (window.Mathia) window.Mathia.search = function (q) { input.value = q; run(q); return hits.length; };
   }
 
-  /* Reader highlights. The browser's Selection and Range APIs decide what the
-     selected text is, including bidi selection order and ranges that wrap
-     lines or span elements. CSS Custom Highlight API paints those ranges
-     without touching the lesson DOM or KaTeX's markup. Only text the browser
-     can select is highlighted: prose, code, and KaTeX's visible HTML layer.
-     KaTeX's hidden MathML copy is not painted, and SVG figures have no
-     selectable text ranges. */
+  /* Keep native ranges for bidi selection and foreground color. Paint prose
+     backgrounds by visual line so that inline math and text share a height. */
+  function highlightBackgrounds(main) {
+    var prose = "p, li, dt, dd, td, th, blockquote, h1, h2, h3, h4, h5, h6, .mx-block-title, .mx-block-body";
+    var native = "code, pre, .math-display, mark.mx-hit, .mx-hit-math";
+    var skip = ".katex-mathml, script, style, svg, button, .mx-actions";
+    var painted = new Set();
+
+    function eachText(root, range, visit) {
+      if (root.nodeType === 3) { visit(root); return; }
+      var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+        acceptNode: function (node) {
+          if (range && !range.intersectsNode(node)) return NodeFilter.FILTER_REJECT;
+          if (node.nodeType === 3) return NodeFilter.FILTER_ACCEPT;
+          return node.matches(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
+        },
+      });
+      for (var node = walker.nextNode(); node; node = walker.nextNode()) visit(node);
+    }
+
+    function paint(block, selections) {
+      var measure = document.createRange();
+      var fragments = [];
+      var selected = [];
+      var mathRects = new Map();
+      var seenMath = new Set();
+
+      function textRects(node, start, end) {
+        measure.setStart(node, start);
+        measure.setEnd(node, end);
+        return Array.from(measure.getClientRects()).filter(function (r) { return r.width > 0 && r.height > 0; });
+      }
+
+      eachText(block, null, function (node) {
+        var el = node.parentElement;
+        if (el.closest(prose) !== block || el.closest(".math-display, pre")) return;
+        var length = node.length;
+        var math = el.closest(".math-inline");
+        var mathRect = null;
+        if (math) {
+          if (!mathRects.has(math)) {
+            var rect = math.getBoundingClientRect();
+            mathRects.set(math, rect);
+            if (rect.width && rect.height) fragments.push(rect);
+          }
+          mathRect = mathRects.get(math);
+        } else {
+          fragments.push.apply(fragments, textRects(node, 0, length));
+        }
+        if (el.closest(native)) return;
+        selections.forEach(function (range) {
+          if (!range.intersectsNode(node)) return;
+          if (math && range.comparePoint(math, 0) === 0 &&
+              range.comparePoint(math, math.childNodes.length) === 0) {
+            if (!seenMath.has(math)) selected.push({ rect: mathRect, anchor: mathRect });
+            seenMath.add(math);
+            return;
+          }
+          var start = range.startContainer === node ? range.startOffset : 0;
+          var end = range.endContainer === node ? range.endOffset : length;
+          textRects(node, start, end).forEach(function (rect) {
+            selected.push({ rect: rect, anchor: mathRect || rect });
+          });
+        });
+      });
+      if (!selected.length) return null;
+
+      var lines = [];
+      function center(rect) { return (rect.top + rect.bottom) / 2; }
+      function nearest(rect) {
+        var match = null;
+        var distance = Infinity;
+        lines.forEach(function (line) {
+          var delta = Math.abs(line.center - center(rect));
+          if (delta < distance) { distance = delta; match = line; }
+        });
+        return match;
+      }
+      // Start with the shorter fragments so tall formulas can extend a line
+      // without shifting the reference used to assign the other fragments.
+      fragments.sort(function (a, b) { return a.height - b.height; }).forEach(function (rect) {
+        var line = nearest(rect);
+        if (!line || Math.abs(line.center - center(rect)) >= Math.max(line.height, rect.height) / 2) {
+          lines.push({ center: center(rect), height: rect.height, top: rect.top, bottom: rect.bottom, spans: [] });
+        } else {
+          line.top = Math.min(line.top, rect.top);
+          line.bottom = Math.max(line.bottom, rect.bottom);
+        }
+      });
+      if (!lines.length) return null;
+
+      var style = window.getComputedStyle(block);
+      var height = parseFloat(style.lineHeight) || 0;
+      lines.forEach(function (line) { height = Math.max(height, line.bottom - line.top); });
+      selected.forEach(function (part) {
+        if (part.rect.width) nearest(part.anchor).spans.push(part.rect);
+      });
+      var origin = block.getBoundingClientRect();
+      var leftEdge = origin.left + parseFloat(style.borderLeftWidth);
+      var topEdge = origin.top + parseFloat(style.borderTopWidth) - height;
+      var bands = [];
+      function px(n) { return n.toFixed(3) + "px"; }
+      lines.forEach(function (line) {
+        var top = (line.top + line.bottom - height) / 2 - topEdge;
+        var left, right;
+        function addLayer() {
+          bands.push("linear-gradient(var(--mx-highlight-bg), var(--mx-highlight-bg)) " +
+            px(left - leftEdge) + " " + px(top) + " / " + px(right - left) + " " + px(height) + " no-repeat");
+        }
+        line.spans.sort(function (a, b) { return a.left - b.left; }).forEach(function (span) {
+          if (right !== undefined && span.left <= right + 0.5) {
+            right = Math.max(right, span.right);
+          } else {
+            if (right !== undefined) addLayer();
+            left = span.left;
+            right = span.right;
+          }
+        });
+        if (right !== undefined) addLayer();
+      });
+      return bands.length ? { background: bands.join(", "), inset: px(-height) } : null;
+    }
+
+    function clear() {
+      painted.forEach(function (block) {
+        block.removeAttribute("data-mx-highlight-painted");
+        block.style.removeProperty("--mx-highlight-bands");
+        block.style.removeProperty("--mx-highlight-inset");
+        if (block.getAttribute("style") === "") block.removeAttribute("style");
+      });
+      painted.clear();
+    }
+
+    return {
+      clear: clear,
+      update: function (ranges) {
+        var blocks = new Map();
+        ranges.forEach(function (range) {
+          var touched = new Set();
+          eachText(range.commonAncestorContainer, range, function (node) {
+            var el = node.parentElement;
+            var block = el.closest(prose);
+            if (block && main.contains(block) && !el.closest(native + ", " + skip)) touched.add(block);
+          });
+          touched.forEach(function (block) {
+            if (!blocks.has(block)) blocks.set(block, []);
+            blocks.get(block).push(range);
+          });
+        });
+        var bands = new Map();
+        blocks.forEach(function (selections, block) {
+          var result = paint(block, selections);
+          if (result) bands.set(block, result);
+        });
+        clear();
+        bands.forEach(function (result, block) {
+          block.style.setProperty("--mx-highlight-bands", result.background);
+          block.style.setProperty("--mx-highlight-inset", result.inset);
+          block.setAttribute("data-mx-highlight-painted", "");
+          painted.add(block);
+        });
+      },
+    };
+  }
+
   function setupHighlights() {
     var main = document.getElementById("mx-main");
     var supported = !!(window.CSS && window.CSS.highlights && typeof window.Highlight === "function");
@@ -540,6 +698,23 @@
     var toolbar = null;
     var button = null;
     var held = false;
+    var backgrounds = main && supported ? highlightBackgrounds(main) : null;
+    var resizeObserver = null;
+    var mutationObserver = null;
+    var frame = 0;
+
+    function repaintSoon() {
+      if (!ranges.length || frame) return;
+      frame = window.requestAnimationFrame(function () {
+        frame = 0;
+        backgrounds.update(ranges);
+      });
+    }
+
+    function onResize() {
+      hide();
+      repaintSoon();
+    }
 
     function hide() {
       if (toolbar) toolbar.hidden = true;
@@ -551,6 +726,9 @@
       }
       registered = false;
       ranges = [];
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = 0;
+      if (backgrounds) backgrounds.clear();
       if (supported) highlight = new window.Highlight();
       pending = null;
       hide();
@@ -562,7 +740,10 @@
         document.removeEventListener("selectionchange", onSelectionChange);
         document.removeEventListener("keydown", onKeyDown, true);
         window.removeEventListener("scroll", hide, true);
-        window.removeEventListener("resize", hide);
+        window.removeEventListener("resize", onResize);
+        if (resizeObserver) resizeObserver.disconnect();
+        if (mutationObserver) mutationObserver.disconnect();
+        if (document.fonts) document.fonts.removeEventListener("loadingdone", repaintSoon);
         window.removeEventListener("pagehide", onPageHide);
         window.removeEventListener("beforeunload", destroy);
         if (toolbar.parentNode) toolbar.parentNode.removeChild(toolbar);
@@ -634,7 +815,6 @@
     }
 
     function show(range) {
-      /* The browser paints the highlight; this rect only places the toolbar. */
       var rect = range.getBoundingClientRect();
       if (!rect) { hide(); return; }
       toolbar.hidden = false;
@@ -666,6 +846,7 @@
       } catch (err) {
         return false;
       }
+      repaintSoon();
       pending = null;
       if (sel) sel.removeAllRanges();
       hide();
@@ -720,7 +901,16 @@
     document.addEventListener("selectionchange", onSelectionChange);
     document.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("scroll", hide, true);
-    window.addEventListener("resize", hide);
+    window.addEventListener("resize", onResize);
+    if ("ResizeObserver" in window) {
+      resizeObserver = new ResizeObserver(repaintSoon);
+      resizeObserver.observe(main);
+    }
+    if ("MutationObserver" in window) {
+      mutationObserver = new MutationObserver(repaintSoon);
+      mutationObserver.observe(main, { subtree: true, childList: true, characterData: true });
+    }
+    if (document.fonts) document.fonts.addEventListener("loadingdone", repaintSoon);
     window.addEventListener("pagehide", onPageHide);
     window.addEventListener("beforeunload", destroy);
   }

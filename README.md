@@ -244,10 +244,10 @@ The server must send CORS headers that allow the page's origin (`file://` pages 
 
 Select text in a compiled lesson and choose **Highlight selection** (or press
 `Ctrl/Cmd+Shift+H`). The action appears next to the selection and works with mouse, touch,
-and keyboard. Highlights are painted with the CSS Custom Highlight API, so the lesson HTML
-and KaTeX markup are never modified, and the browser keeps handling RTL/LTR layout and
-selection direction. Highlights live in memory for the open lesson and disappear when the
-lesson is reloaded.
+and keyboard. The browser keeps handling RTL/LTR selection. Within a paragraph, the
+highlight background uses the tallest line's height so prose and inline formulas share
+an even band. Highlights live in memory for the open lesson and disappear when the lesson
+is reloaded.
 
 Prose, code, and KaTeX's visible HTML layer can be highlighted, including selections that
 span RTL and LTR runs, inline formulas, block boundaries, and wrapped lines. KaTeX's hidden
