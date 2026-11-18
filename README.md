@@ -240,6 +240,21 @@ optional for local servers. The page then allows connections to any `http(s)` ho
 The server must send CORS headers that allow the page's origin (`file://` pages send
 `Origin: null`).
 
+### Text Highlighting
+
+Select text in a compiled lesson and choose **Highlight selection** (or press
+`Ctrl/Cmd+Shift+H`). The action appears next to the selection and works with mouse, touch,
+and keyboard. Highlights are painted with the CSS Custom Highlight API, so the lesson HTML
+and KaTeX markup are never modified, and the browser keeps handling RTL/LTR layout and
+selection direction. Highlights live in memory for the open lesson and disappear when the
+lesson is reloaded.
+
+Prose, code, and KaTeX's visible HTML layer can be highlighted, including selections that
+span RTL and LTR runs, inline formulas, block boundaries, and wrapped lines. KaTeX's hidden
+MathML copy is not painted, and SVG figures (AI illustrations or imported SVG) have no
+selectable text ranges, so they cannot be highlighted. Browsers without `CSS.highlights`
+simply do not show the action.
+
 ### Desktop App
 
 Open a Markdown file (or drop one on the window, or pass it as an argument) to see the

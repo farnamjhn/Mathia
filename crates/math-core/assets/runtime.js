@@ -522,6 +522,209 @@
     if (window.Mathia) window.Mathia.search = function (q) { input.value = q; run(q); return hits.length; };
   }
 
+  /* Reader highlights. The browser's Selection and Range APIs decide what the
+     selected text is, including bidi selection order and ranges that wrap
+     lines or span elements. CSS Custom Highlight API paints those ranges
+     without touching the lesson DOM or KaTeX's markup. Only text the browser
+     can select is highlighted: prose, code, and KaTeX's visible HTML layer.
+     KaTeX's hidden MathML copy is not painted, and SVG figures have no
+     selectable text ranges. */
+  function setupHighlights() {
+    var main = document.getElementById("mx-main");
+    var supported = !!(window.CSS && window.CSS.highlights && typeof window.Highlight === "function");
+    var NAME = "mathia-highlight";
+    var ranges = [];
+    var highlight = supported ? new window.Highlight() : null;
+    var registered = false;
+    var pending = null;
+    var toolbar = null;
+    var button = null;
+    var held = false;
+
+    function hide() {
+      if (toolbar) toolbar.hidden = true;
+    }
+
+    function clear() {
+      if (registered && window.CSS && window.CSS.highlights) {
+        try { window.CSS.highlights.delete(NAME); } catch (err) { /* already gone */ }
+      }
+      registered = false;
+      ranges = [];
+      if (supported) highlight = new window.Highlight();
+      pending = null;
+      hide();
+    }
+
+    function destroy() {
+      clear();
+      if (toolbar) {
+        document.removeEventListener("selectionchange", onSelectionChange);
+        document.removeEventListener("keydown", onKeyDown, true);
+        window.removeEventListener("scroll", hide, true);
+        window.removeEventListener("resize", hide);
+        window.removeEventListener("pagehide", onPageHide);
+        window.removeEventListener("beforeunload", destroy);
+        if (toolbar.parentNode) toolbar.parentNode.removeChild(toolbar);
+        toolbar = null;
+        button = null;
+      }
+    }
+
+    function onPageHide(e) {
+      if (e.persisted) return;
+      destroy();
+    }
+
+    var api = {
+      supported: supported,
+      count: function () { return ranges.length; },
+      clear: clear,
+      destroy: destroy,
+    };
+    if (window.Mathia) window.Mathia.highlights = api;
+    if (!main || !supported) return;
+
+    var LANG_FA = document.documentElement.lang === "fa";
+    var label = LANG_FA ? "برجسته‌سازی انتخاب" : "Highlight selection";
+    var hint = LANG_FA ? "متن انتخاب‌شده را برجسته نگه می‌دارد" : "Keep the selected text highlighted";
+
+    toolbar = document.createElement("div");
+    toolbar.id = "mx-highlight-toolbar";
+    toolbar.className = "mx-highlight-toolbar";
+    toolbar.setAttribute("role", "toolbar");
+    toolbar.setAttribute("aria-label", label);
+    toolbar.hidden = true;
+
+    button = document.createElement("button");
+    button.type = "button";
+    button.id = "mx-highlight-button";
+    button.textContent = label;
+    button.title = hint;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-keyshortcuts", "Control+Shift+H");
+    toolbar.appendChild(button);
+    document.body.appendChild(toolbar);
+
+    function elementOf(node) {
+      return node && node.nodeType === 1 ? node : node && node.parentElement;
+    }
+
+    function isUi(node) {
+      var el = elementOf(node);
+      return !!(el && el.closest && el.closest(
+        "button, input, textarea, select, dialog, .mx-actions, .mx-math-copy, " +
+        ".mx-ai-panel, script, style, svg"
+      ));
+    }
+
+    function inside(node) {
+      return !!node && (node === main || main.contains(node));
+    }
+
+    function usable(range) {
+      if (!range || range.collapsed) return false;
+      if (!inside(range.startContainer) || !inside(range.endContainer)) return false;
+      if (!range.startContainer.isConnected || !range.endContainer.isConnected) return false;
+      if (isUi(range.startContainer) || isUi(range.endContainer)) return false;
+      var text = range.toString();
+      if (!text || !text.trim()) return false;
+      var rect = range.getBoundingClientRect();
+      return !!rect && (rect.width > 0 || rect.height > 0);
+    }
+
+    function show(range) {
+      /* The browser paints the highlight; this rect only places the toolbar. */
+      var rect = range.getBoundingClientRect();
+      if (!rect) { hide(); return; }
+      toolbar.hidden = false;
+      var width = toolbar.offsetWidth || 160;
+      var height = toolbar.offsetHeight || 32;
+      var left = rect.left + (rect.width - width) / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+      var top = rect.top - height - 8;
+      if (top < 8) top = rect.bottom + 8;
+      top = Math.max(8, Math.min(top, window.innerHeight - height - 8));
+      toolbar.style.left = left + "px";
+      toolbar.style.top = top + "px";
+    }
+
+    function apply() {
+      var range = pending;
+      var sel = window.getSelection();
+      if (!range && sel && sel.rangeCount && !sel.isCollapsed) {
+        range = sel.getRangeAt(0).cloneRange();
+      }
+      if (!usable(range)) { hide(); return false; }
+      try {
+        highlight.add(range);
+        if (!registered) {
+          window.CSS.highlights.set(NAME, highlight);
+          registered = true;
+        }
+        ranges.push(range);
+      } catch (err) {
+        return false;
+      }
+      pending = null;
+      if (sel) sel.removeAllRanges();
+      hide();
+      return true;
+    }
+
+    function onSelectionChange() {
+      if (held) return;
+      var sel = window.getSelection();
+      if (!sel || !sel.rangeCount || sel.isCollapsed) { pending = null; hide(); return; }
+      var range = sel.getRangeAt(0);
+      if (!usable(range)) { pending = null; hide(); return; }
+      pending = range.cloneRange();
+      show(pending);
+    }
+
+    function onKeyDown(e) {
+      if (e.repeat) return;
+      if (!(e.code === "KeyH" || (e.key && e.key.toLowerCase() === "h"))) return;
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
+      var sel = window.getSelection();
+      if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+      var range = sel.getRangeAt(0);
+      if (!usable(range)) return;
+      e.preventDefault();
+      pending = range.cloneRange();
+      apply();
+    }
+
+    function releaseSoon(delay) {
+      window.setTimeout(function () { held = false; }, delay);
+    }
+
+    /* Capture the range before a toolbar interaction can clear the native
+       selection. mousedown.preventDefault keeps the selection for mouse
+       users; touch users rely on the range captured on selectionchange. */
+    button.addEventListener("mousedown", function (e) {
+      held = true;
+      e.preventDefault();
+    });
+    button.addEventListener("touchstart", function () { held = true; }, { passive: true });
+    button.addEventListener("pointerdown", function () { held = true; });
+    button.addEventListener("pointerup", function (e) {
+      if (e.pointerType !== "touch") releaseSoon(0);
+    });
+    button.addEventListener("touchend", function () { releaseSoon(400); });
+    button.addEventListener("click", function (e) {
+      e.preventDefault();
+      apply();
+    });
+
+    document.addEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("resize", hide);
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("beforeunload", destroy);
+  }
+
   function setupScrollSpy() {
     if (!("IntersectionObserver" in window)) return;
     var links = {};
@@ -636,6 +839,7 @@
     setupSidebar();
     setupTocFolding();
     setupSearch();
+    setupHighlights();
     setupScrollSpy();
   }
   if (document.readyState === "loading") {

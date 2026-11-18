@@ -49,8 +49,8 @@ export async function teardown() {
 }
 
 /** A fresh browser context (own storage) with one page on `url`. */
-export async function open(url) {
-  const context = await browser.newContext();
+export async function open(url, options = {}) {
+  const context = await browser.newContext(options);
   const leaked = [];
   await context.route(/^(?!file:)/, (route) => {
     leaked.push(route.request().url());

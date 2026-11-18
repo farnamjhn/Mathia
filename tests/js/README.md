@@ -52,3 +52,7 @@ node --test mindmap-interactions.test.mjs
 It runs the actual mind map script with a minimal element/event fixture, checking
 zoom-adjusted movement, drag versus click, cancellation, keyboard movement, and
 position retention through folding and view changes. It does not verify painting.
+
+The highlight tests cover RTL prose with inline LTR math, forward and backward
+selections, wrapped and multi-element selections, multiple ranges, rejection of
+selections outside the lesson, and mouse, touch, and keyboard activation.

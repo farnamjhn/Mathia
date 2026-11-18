@@ -721,6 +721,206 @@ describe("copy", () => {
   });
 });
 
+describe("highlights", () => {
+  async function select(page, from, to, { backward = false } = {}) {
+    return page.evaluate(({ from, to, backward }) => {
+      const main = document.getElementById("mx-main");
+      const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+      let startNode = null;
+      let startOffset = 0;
+      let endNode = null;
+      let endOffset = 0;
+      let node;
+      while ((node = walker.nextNode())) {
+        const text = node.nodeValue || "";
+        if (!startNode) {
+          const at = text.indexOf(from);
+          if (at === -1) continue;
+          startNode = node;
+          startOffset = at;
+          const after = text.indexOf(to, at + from.length);
+          if (after !== -1) {
+            endNode = node;
+            endOffset = after + to.length;
+            break;
+          }
+        } else {
+          const at = text.indexOf(to);
+          if (at !== -1) {
+            endNode = node;
+            endOffset = at + to.length;
+            break;
+          }
+        }
+      }
+      if (!startNode || !endNode) throw new Error(`selection text not found: ${from} / ${to}`);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      if (backward) sel.setBaseAndExtent(endNode, endOffset, startNode, startOffset);
+      else sel.setBaseAndExtent(startNode, startOffset, endNode, endOffset);
+      const range = sel.getRangeAt(0);
+      return {
+        text: range.toString(),
+        rects: range.getClientRects().length,
+        backward: sel.anchorNode === endNode,
+      };
+    }, { from, to, backward });
+  }
+
+  async function ranges(page) {
+    return page.evaluate(() => {
+      const highlight = CSS.highlights.get("mathia-highlight");
+      return highlight ? Array.from(highlight).map((range) => range.toString()) : [];
+    });
+  }
+
+  async function waitForToolbar(page) {
+    await page.waitForSelector("#mx-highlight-toolbar:not([hidden])");
+  }
+
+  test("highlights an RTL lesson with inline LTR math in both directions", async () => {
+    const s = await open(pages.fa);
+    const { page } = s;
+    await page.waitForSelector("#block-definition-1 .katex");
+    const before = await page.locator("#mx-main").innerHTML();
+
+    const forward = await select(page, "تابع", "را");
+    assert.equal(forward.backward, false);
+    assert.match(forward.text, /تابع/);
+    assert.match(forward.text, /را/);
+    assert.ok(
+      await page.evaluate(() => Boolean(document.querySelector("#block-definition-1 .math-inline .katex"))),
+      "inline math uses KaTeX's HTML/MathML renderer",
+    );
+    assert.ok(
+      await page.evaluate(() => Array.from(document.styleSheets).some((sheet) => {
+        try {
+          return Array.from(sheet.cssRules).some((rule) => rule.selectorText === "::highlight(mathia-highlight)");
+        } catch (err) {
+          return false;
+        }
+      })),
+      "the highlight pseudo-element is styled",
+    );
+    await waitForToolbar(page);
+    assert.equal(await page.locator("#mx-highlight-button").textContent(), "برجسته‌سازی انتخاب");
+    await page.locator("#mx-highlight-button").click();
+
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 1);
+    assert.equal(await page.evaluate(() => window.getSelection().isCollapsed), true);
+    assert.equal(await page.locator("#mx-main").innerHTML(), before, "highlighting leaves the lesson DOM alone");
+    const first = await ranges(page);
+    assert.equal(first.length, 1);
+    assert.match(first[0], /تابع/);
+    assert.match(first[0], /را/);
+
+    const backward = await select(page, "نتیجه", "است", { backward: true });
+    assert.equal(backward.backward, true);
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 2);
+    assert.equal((await ranges(page)).length, 2);
+    await finish(s);
+  });
+
+  test("supports multi-element and wrapped selections, and rejects outside the lesson", async () => {
+    const s = await open(pages.fa);
+    const { page } = s;
+    await page.setViewportSize({ width: 420, height: 800 });
+    await page.waitForTimeout(100);
+
+    const wrapped = await select(page, "فرض", "می‌شوند");
+    assert.ok(wrapped.rects > 1, `selection wraps lines (${wrapped.rects} rects)`);
+    await waitForToolbar(page);
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 1);
+
+    const across = await select(page, "تابع", "هست");
+    assert.match(across.text, /تابع/);
+    assert.match(across.text, /هست/);
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 2);
+
+    await page.evaluate(() => {
+      const link = document.querySelector("#mx-toc a");
+      const text = document.createTreeWalker(link, NodeFilter.SHOW_TEXT).nextNode();
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.setBaseAndExtent(text, 0, text, Math.min(4, text.nodeValue.length));
+    });
+    await page.waitForTimeout(50);
+    assert.equal(await page.locator("#mx-highlight-toolbar").isHidden(), true);
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 2, "outside selection is ignored");
+
+    await page.evaluate(() => {
+      const link = document.querySelector("#mx-toc a");
+      const tocText = document.createTreeWalker(link, NodeFilter.SHOW_TEXT).nextNode();
+      const mainText = document.createTreeWalker(document.getElementById("mx-main"), NodeFilter.SHOW_TEXT).nextNode();
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.setBaseAndExtent(tocText, 0, mainText, Math.min(3, mainText.nodeValue.length));
+    });
+    await page.waitForTimeout(50);
+    assert.equal(await page.locator("#mx-highlight-toolbar").isHidden(), true);
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 2, "cross-boundary selection is ignored");
+    await finish(s);
+  });
+
+  test("activates with touch and keyboard without losing the captured selection", async () => {
+    const s = await open(pages.fa, { hasTouch: true });
+    const { page } = s;
+    await select(page, "تابع", "را");
+    await waitForToolbar(page);
+    const box = await page.locator("#mx-highlight-button").boundingBox();
+    assert.ok(box);
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 1);
+    assert.equal(await page.evaluate(() => window.getSelection().isCollapsed), true);
+
+    await select(page, "نتیجه", "است");
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 2);
+    await finish(s);
+  });
+
+  test("hides the action when CSS Custom Highlight API is unavailable", async () => {
+    const s = await open(pages.plain);
+    const { page } = s;
+    await page.addInitScript(() => {
+      Object.defineProperty(CSS, "highlights", { value: undefined, configurable: true });
+    });
+    await page.reload();
+    assert.equal(await page.evaluate(() => Mathia.highlights.supported), false);
+    assert.equal(await page.locator("#mx-highlight-toolbar").count(), 0);
+    await select(page, "group", "operation");
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 0);
+    await finish(s);
+  });
+
+  test("cleans up registrations and listeners on destroy", async () => {
+    const s = await open(pages.fa);
+    const { page } = s;
+    await select(page, "تابع", "را");
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 1);
+    assert.equal(await page.evaluate(() => Boolean(CSS.highlights.get("mathia-highlight"))), true);
+
+    await page.evaluate(() => Mathia.highlights.destroy());
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 0);
+    assert.equal(await page.evaluate(() => Boolean(CSS.highlights.get("mathia-highlight"))), false);
+    assert.equal(await page.locator("#mx-highlight-toolbar").count(), 0);
+
+    await select(page, "نتیجه", "است");
+    await page.waitForTimeout(50);
+    assert.equal(await page.locator("#mx-highlight-toolbar").count(), 0);
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 0);
+    await finish(s);
+  });
+});
+
 describe("host frame", () => {
   test("a click on a block tells the embedding app which block it was", async () => {
     // The desktop app shows the document in a frame and listens for this.
