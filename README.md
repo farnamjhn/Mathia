@@ -263,6 +263,8 @@ Preview follows edits made in another editor. Click a block in the preview or th
 inspect it, then correct it by hand — change its type, make it shorter or longer, or
 Mark it as not a block; corrections can be saved as JSON for mathia --overrides The list
 flags the blocks that are detected with low confidence as 'unsure' so they can be checked first.
+The **Type** menu narrows the list to one kind of block — every theorem, every lemma, every
+proof — and shows how many of each the document has.
 
 **Export → Export as Markdown…** writes the compiled document back out as Markdown: the same
 text, with every block labelled the way the inspector shows it (`**Theorem 1.** …`), LaTeX

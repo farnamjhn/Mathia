@@ -28,6 +28,7 @@
     orderEmpty: $("order-empty"), orderTitleInput: $("order-title-input"),
     orderCancel: $("order-cancel"), orderCompile: $("order-compile"),
     filter: $("filter"), views: $("views"), blocksEmpty: $("blocks-empty"),
+    typeFilter: $("block-type"),
     countAll: $("count-all"), countUnsure: $("count-unsure"), countChanged: $("count-changed"),
     optionsButton: $("options-button"), optionsMenu: $("options-menu"),
     exportMore: $("export-more"), exportMenu: $("export-menu"),
@@ -79,6 +80,11 @@
     proof: "Proof", example: "Ex", remark: "Rem", exercise: "Exer", solution: "Sol",
     claim: "Claim", notation: "Not", heading: "§", text: "¶",
   };
+  /** The order the Type menu lists block types in. */
+  const SEMANTIC_ORDER = [
+    "theorem", "lemma", "proposition", "corollary", "definition", "proof",
+    "example", "remark", "exercise", "solution", "claim", "notation",
+  ];
   /** A detected block scoring less than this above the threshold is listed
    *  as "unsure": the ones worth a second look. */
   const UNSURE_MARGIN = 0.1;
@@ -105,6 +111,10 @@
   let editing = null;
   /** Which blocks the list shows: "all", "unsure" or "changed". */
   let view = "all";
+  /** Which block type the list shows: "all", or a block kind such as "theorem". */
+  let typeFilter = "all";
+  /** The Type menu built last, so it is only rebuilt when the counts change. */
+  let typeFilterKey = "";
   /** Whether the user wants the preview pane (it only shows with a document). */
   let previewOpen = true;
   let initialPromptText = el.promptText ? el.promptText.value : "";
@@ -234,6 +244,8 @@
     stamp = null;
     overrides = emptyOverrides();
     view = "all";
+    typeFilter = "all";
+    typeFilterKey = "";
     el.filter.value = "";
     try {
       await invoke("set_overrides", { overrides });
@@ -257,6 +269,8 @@
     stamp = null;
     overrides = emptyOverrides();
     view = "all";
+    typeFilter = "all";
+    typeFilterKey = "";
     el.filter.value = "";
     try {
       await invoke("set_overrides", { overrides });
@@ -420,6 +434,7 @@
 
   function listed(block, query) {
     if (!matches(block, query)) return false;
+    if (typeFilter !== "all" && block.kind !== typeFilter) return false;
     if (view === "unsure") return unsure(block);
     if (view === "changed") return corrected(block.span.start);
     if (block.kind === "heading") return !query;
@@ -428,10 +443,40 @@
     return true;
   }
 
+  // The Type menu lists the block types this document has, with their counts,
+  // so "every theorem" is one click away. It is rebuilt only when the counts
+  // change, so an open menu is not closed by a keystroke in the filter.
+  function renderTypeFilter(blocks) {
+    const counts = new Map();
+    let total = 0;
+    for (const block of blocks) {
+      if (!isSemantic(block)) continue;
+      counts.set(block.kind, (counts.get(block.kind) || 0) + 1);
+      total += 1;
+    }
+    const kinds = SEMANTIC_ORDER.filter((kind) => counts.has(kind));
+    for (const kind of counts.keys()) {
+      if (!kinds.includes(kind)) kinds.push(kind);
+    }
+    // A type that is gone (retyped, merged away) falls back to every type.
+    if (typeFilter !== "all" && !counts.has(typeFilter)) typeFilter = "all";
+    const key = kinds.map((kind) => kind + ":" + counts.get(kind)).join(",");
+    if (key !== typeFilterKey) {
+      typeFilterKey = key;
+      const options = [new Option("All types (" + total + ")", "all")];
+      for (const kind of kinds) {
+        options.push(new Option(kindLabel(kind) + " (" + counts.get(kind) + ")", kind));
+      }
+      el.typeFilter.replaceChildren(...options);
+    }
+    el.typeFilter.value = typeFilter;
+  }
+
   function renderBlocks() {
     el.blocks.replaceChildren();
     if (!analysis) return;
     const blocks = analysis.document.blocks;
+    renderTypeFilter(blocks);
     const query = el.filter.value.trim().toLowerCase();
     let shown = 0;
     for (const block of blocks) {
@@ -463,6 +508,7 @@
     el.blocksEmpty.textContent = query ? "No block matches “" + el.filter.value.trim() + "”."
       : view === "unsure" ? "Nothing here. Mathia is confident about every block it found."
       : view === "changed" ? "You have not changed any block."
+      : typeFilter !== "all" ? "No " + kindLabel(typeFilter).toLowerCase() + " blocks here."
       : "Mathia found no blocks in this file. Show plain paragraphs to mark some yourself.";
 
     const current = blocks.find((b) => b.id === selected) ||
@@ -1261,6 +1307,10 @@
   el.openMultiWelcome.addEventListener("click", combineMarkdowns);
   el.detailClose.addEventListener("click", deselect);
   el.filter.addEventListener("input", renderBlocks);
+  el.typeFilter.addEventListener("change", () => {
+    typeFilter = el.typeFilter.value;
+    renderBlocks();
+  });
   el.views.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-view]");
     if (!button) return;
