@@ -273,14 +273,38 @@ impl Session {
     /// Classifies with the session's configuration and corrections.
     fn classify(&self, source: &Source) -> Result<math_core::Analysis, String> {
         let content = self.read(source)?;
-        if self.is_html_source(source) || math_core::is_html(&content) {
-            return Ok(math_core::clean_html::analyze_html_detailed(&content));
+        self.classify_content(source, &content)
+    }
+
+    fn classify_content(
+        &self,
+        source: &Source,
+        content: &str,
+    ) -> Result<math_core::Analysis, String> {
+        if self.is_html_source(source) || math_core::is_html(content) {
+            return Ok(math_core::clean_html::analyze_html_detailed(content));
         }
-        let analysis = math_core::analyze_with_overrides(&content, &self.config, &self.overrides);
+        let analysis = math_core::analyze_with_overrides(content, &self.config, &self.overrides);
         self.overrides
             .validate(analysis.document.nodes.len())
             .map_err(|e| format!("the corrections no longer fit this file ({e}); reset them"))?;
         Ok(analysis)
+    }
+
+    /// The open document as Markdown, with every block labelled the way
+    /// Mathia detected it. HTML sources are converted; Markdown sources keep
+    /// their own text.
+    pub fn markdown(&self, source: &Source) -> Result<String, String> {
+        let content = self.read(source)?;
+        let analysis = self.classify_content(source, &content)?;
+        if analysis.document.nodes.is_empty() {
+            return Ok(math_core::markdown::render(&analysis.document, None));
+        }
+        let normalized = math_core::normalize_markdown(&content);
+        Ok(math_core::markdown::render(
+            &analysis.document,
+            Some(&normalized),
+        ))
     }
 
     /// Modification time and size of opened file(s), as an opaque string
@@ -550,6 +574,40 @@ mod tests {
         };
         let third = session.compile_preview(&text(), &titled).unwrap();
         assert_eq!((third.revision, third.changed), (2, true));
+    }
+
+    #[test]
+    fn markdown_export_keeps_the_text_and_labels_every_block() {
+        let session = Session::default();
+        let exported = session.markdown(&text()).unwrap();
+        assert!(exported.contains("**Theorem 1.** Every group of prime order is cyclic."));
+        assert!(exported.contains("$g \\neq e$"));
+        // The corrections shown in the inspector reach the export.
+        let mut corrected = Session::default();
+        let mut overrides = ScopeOverrides::default();
+        overrides.retype.insert(1, BlockType::Lemma);
+        corrected.set_overrides(overrides);
+        assert!(
+            corrected
+                .markdown(&text())
+                .unwrap()
+                .contains("**Lemma 1.**")
+        );
+    }
+
+    #[test]
+    fn markdown_export_converts_an_html_source() {
+        let html = "<html><body><h1>Groups</h1>\
+            <section class=\"mx-block mx-theorem\"><p><strong>Theorem 1.</strong> \
+            Every group of prime order is cyclic.</p></section></body></html>";
+        let exported = Session::default()
+            .markdown(&Source::Text(html.to_string()))
+            .unwrap();
+        assert!(exported.contains("# Groups"), "{exported}");
+        assert!(
+            exported.contains("**Theorem 1.** Every group of prime order is cyclic."),
+            "{exported}"
+        );
     }
 
     #[test]

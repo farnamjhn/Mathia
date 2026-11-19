@@ -115,6 +115,10 @@
         <svg class="caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5"/></svg>
       </button>
       <div id="export-menu" class="menu menu-end" hidden>
+        <button id="export-markdown" class="menu-item" type="button">
+          Export as Markdown…
+          <span class="option-hint">The compiled document as Markdown, with every block labelled.</span>
+        </button>
         <button id="export-folder" class="menu-item" type="button">
           Export every file in a folder…
           <span class="option-hint">Each Markdown file becomes its own HTML file.</span>
@@ -216,7 +220,7 @@
         </li>
         <li>
           <h2>Check the blocks, then export</h2>
-          <p>Mathia finds the theorems, definitions and proofs. Fix any it got wrong and export a single HTML file.</p>
+          <p>Mathia finds the theorems, definitions and proofs. Fix any it got wrong and export a single HTML file, a PDF, or Markdown.</p>
         </li>
       </ol>
     </div>

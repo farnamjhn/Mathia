@@ -44,6 +44,7 @@
     promptContinuation: $("prompt-continuation"),
     copyPrompt: $("copy-prompt"), copyPromptEmpty: $("copy-prompt-empty"),
     exportFolder: $("export-folder"),
+    exportMarkdown: $("export-markdown"),
     fixMarkdown: $("fix-markdown"),
     exportPdf: $("export-pdf"),
     recent: $("recent"), recentList: $("recent-list"), recentClear: $("recent-clear"),
@@ -149,6 +150,7 @@
     el.previewToggle.disabled = !has;
     updateDecisionRun();
     el.reload.disabled = el.export.disabled = el.exportPdf.disabled = !has;
+    el.exportMarkdown.disabled = !has;
     const isHtml = Boolean(
       (source && source.path && HTML_EXT.test(source.path)) ||
       (source && source.multi_path && source.multi_path.some((p) => HTML_EXT.test(p)))
@@ -380,6 +382,18 @@
     try {
       await invoke("export_pdf", { source, options: options() });
       setStatus("Opened the print dialog: choose “Save as PDF”.");
+    } catch (error) {
+      setStatus(String(error), true);
+    }
+  }
+
+  // The compiled document as Markdown: the same text, with every block
+  // labelled the way the inspector shows it.
+  async function exportMarkdown() {
+    if (!source) return;
+    try {
+      const dest = await invoke("export_markdown", { source });
+      if (dest) setStatus("Exported Markdown to " + dest);
     } catch (error) {
       setStatus(String(error), true);
     }
@@ -1283,6 +1297,7 @@
   el.correctionsLoad.addEventListener("click", loadCorrections);
   el.correctionsClear.addEventListener("click", clearCorrections);
   el.exportFolder.addEventListener("click", exportFolder);
+  el.exportMarkdown.addEventListener("click", exportMarkdown);
   el.exportPdf.addEventListener("click", exportPdf);
   el.fixMarkdown.addEventListener("click", fixMarkdown);
 

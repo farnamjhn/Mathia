@@ -88,6 +88,30 @@ fn display(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// The file name (without extension) a save dialog proposes for `source`.
+fn default_stem(source: &Source, title: Option<&str>) -> String {
+    if let Some(title) = title {
+        return title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+    }
+    match source {
+        Source::Path(path) => path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "document".into()),
+        Source::MultiPath(paths) => {
+            if paths.len() == 1 {
+                paths[0]
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "document".into())
+            } else {
+                "combined".into()
+            }
+        }
+        Source::Text(_) => "document".into(),
+    }
+}
+
 /// Opens the file dialog. Returns the chosen paths (canonical) in order,
 /// or an empty list if the dialog was cancelled.
 #[tauri::command]
@@ -211,27 +235,7 @@ async fn export(
 ) -> Result<Option<String>, String> {
     let (html, _) = lock(&state).compile(&source, &options)?;
     let mut dialog = app.dialog().file().add_filter("HTML", &["html"]);
-    let default_name = if let Some(ref title) = options.title {
-        title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
-    } else {
-        match &source {
-            Source::Path(p) => p
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "document".into()),
-            Source::MultiPath(paths) => {
-                if paths.len() == 1 {
-                    paths[0]
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "document".into())
-                } else {
-                    "combined".into()
-                }
-            }
-            Source::Text(_) => "document".into(),
-        }
-    };
+    let default_name = default_stem(&source, options.title.as_deref());
     dialog = dialog.set_file_name(format!("{default_name}.html"));
     if let Some(dir) = source.path().and_then(Path::parent) {
         dialog = dialog.set_directory(dir);
@@ -241,6 +245,31 @@ async fn export(
     };
     let dest = dest.into_path().map_err(|e| e.to_string())?;
     std::fs::write(&dest, html).map_err(|e| format!("{}: {e}", dest.display()))?;
+    Ok(Some(display(&dest)))
+}
+
+/// Writes the compiled document as Markdown where the user says. Returns the
+/// destination, or `None` if the dialog was cancelled.
+#[tauri::command]
+async fn export_markdown(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    source: Source,
+) -> Result<Option<String>, String> {
+    let markdown = lock(&state).markdown(&source)?;
+    let mut dialog = app
+        .dialog()
+        .file()
+        .add_filter("Markdown", &["md"])
+        .set_file_name(format!("{}.md", default_stem(&source, None)));
+    if let Some(dir) = source.path().and_then(Path::parent) {
+        dialog = dialog.set_directory(dir);
+    }
+    let Some(dest) = dialog.blocking_save_file() else {
+        return Ok(None);
+    };
+    let dest = dest.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(&dest, markdown).map_err(|e| format!("{}: {e}", dest.display()))?;
     Ok(Some(display(&dest)))
 }
 
@@ -762,6 +791,7 @@ fn main() {
             analyze,
             compile,
             export,
+            export_markdown,
             export_mindmap,
             export_pdf,
             fix_markdown,

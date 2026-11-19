@@ -264,6 +264,11 @@ inspect it, then correct it by hand — change its type, make it shorter or long
 Mark it as not a block; corrections can be saved as JSON for mathia --overrides The list
 flags the blocks that are detected with low confidence as 'unsure' so they can be checked first.
 
+**Export → Export as Markdown…** writes the compiled document back out as Markdown: the same
+text, with every block labelled the way the inspector shows it (`**Theorem 1.** …`), LaTeX
+environments kept as environments, and the corrections applied. It is also how an HTML page
+becomes Markdown — open the HTML file and export.
+
 **Options → Detection settings…** edits the thresholds, weights, keywords and scorer, and
 loads or saves configuration files. The **Transcription prompt** button (also shown on the
 start screen) holds a ready-made prompt to paste into your OCR / vision LLM, so the Markdown
