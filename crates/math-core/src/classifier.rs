@@ -357,6 +357,17 @@ impl HeuristicClassifier {
             } else {
                 EndReason::Heading
             };
+            // A thematic break separates content. A new top-level item
+            // also separates a bulleted block, whose nested steps are
+            // already part of its opener.
+            let bulleted = nodes[i].kind == NodeKind::ListItem;
+            let (scope_limit, at_scope_limit) = if let Some(separator) = (i + 1..limit).find(|&j| {
+                nodes[j].kind == NodeKind::Rule || (bulleted && nodes[j].kind == NodeKind::ListItem)
+            }) {
+                (separator, EndReason::NoContinuation)
+            } else {
+                (limit, at_limit)
+            };
             let adjust = |natural: usize, reason: EndReason| {
                 let end = match overrides.end.get(&i) {
                     Some(&end) => end.clamp(i + 1, limit),
@@ -394,14 +405,16 @@ impl HeuristicClassifier {
                     None => scores[i].best,
                 };
                 let (natural, reason) = match kind {
-                    BlockType::Proof => self.argument_end(&scores, i, limit, at_limit),
+                    BlockType::Proof => self.argument_end(&scores, i, scope_limit, at_scope_limit),
                     // Solutions rarely end in a QED mark; without one they are
                     // scoped like a statement instead of running to the cap.
-                    BlockType::Solution => match self.argument_end(&scores, i, limit, at_limit) {
-                        (end, EndReason::Qed) => (end, EndReason::Qed),
-                        _ => self.statement_end(nodes, &scores, i, limit, at_limit),
-                    },
-                    _ => self.statement_end(nodes, &scores, i, limit, at_limit),
+                    BlockType::Solution => {
+                        match self.argument_end(&scores, i, scope_limit, at_scope_limit) {
+                            (end, EndReason::Qed) => (end, EndReason::Qed),
+                            _ => self.statement_end(nodes, &scores, i, scope_limit, at_scope_limit),
+                        }
+                    }
+                    _ => self.statement_end(nodes, &scores, i, scope_limit, at_scope_limit),
                 };
                 let (end, reason) = adjust(natural, reason);
                 let opener = Opener {
@@ -423,9 +436,9 @@ impl HeuristicClassifier {
             } else if !overrides.suppressed.contains(&i)
                 && !absorbed[i]
                 && let Some(score) =
-                    self.implicit_proof_score(nodes, &scores, builder.blocks.last(), i, limit)
+                    self.implicit_proof_score(nodes, &scores, builder.blocks.last(), i, scope_limit)
             {
-                let (natural, reason) = self.argument_end(&scores, i, limit, at_limit);
+                let (natural, reason) = self.argument_end(&scores, i, scope_limit, at_scope_limit);
                 let (end, reason) = adjust(natural, reason);
                 let opener = Opener {
                     score,

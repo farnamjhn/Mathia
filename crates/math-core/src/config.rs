@@ -146,7 +146,19 @@ impl Default for ScoringConfig {
                     BlockType::Definition,
                     &["تعریف", "definition", "defn", "def"],
                 ),
-                rule(BlockType::Proof, &["برهان", "اثبات", "proof"]),
+                rule(
+                    BlockType::Proof,
+                    &[
+                        "برهان",
+                        "اثبات",
+                        "ایده اثبات",
+                        "ایده‌ی اثبات",
+                        "proof",
+                        "proof sketch",
+                        "proof idea",
+                        "sketch of proof",
+                    ],
+                ),
                 rule(BlockType::Example, &["مثال", "example"]),
                 rule(
                     BlockType::Remark,

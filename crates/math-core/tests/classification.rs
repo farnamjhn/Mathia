@@ -234,3 +234,46 @@ fn proofs_are_linked_to_statements() {
             .all(|b| b.proves.is_none())
     );
 }
+
+#[test]
+fn bulleted_proof_sketch_keeps_its_nested_steps_and_stops_at_the_next_bullet() {
+    let doc = analyze(
+        concat!(
+            "- **قضیه ۲.** هر درخت مسیری یکتا بین هر دو رأس دارد.\n",
+            "- **ایده اثبات:** دو مسیر متفاوت یک دور می‌سازند.\n",
+            "  - این با تعریف درخت ناسازگار است.\n",
+            "- برای جلسهٔ بعد، فصل بعد را بخوانید.\n",
+        ),
+        &ScoringConfig::default(),
+    );
+    let theorem = doc.blocks_of(BlockType::Theorem).next().unwrap();
+    let proof = doc.blocks_of(BlockType::Proof).next().unwrap();
+    assert_eq!(theorem.span, 0..1);
+    assert_eq!(proof.span, 1..2);
+    assert_eq!(proof.proves.as_deref(), Some(theorem.id.as_str()));
+    assert!(proof.html.contains("ناسازگار است"));
+    assert!(plain_text(&doc).contains("فصل بعد را بخوانید"));
+}
+
+#[test]
+fn a_bulleted_statement_keeps_its_equation_but_not_the_next_bullet() {
+    assert_eq!(
+        semantic(
+            "- **Definition 1.** A leaf has degree one:\n\n$$d(v)=1$$\n\n- Read chapter two.\n"
+        ),
+        expect(&[("block-definition-1", BlockType::Definition, 2)])
+    );
+}
+
+#[test]
+fn a_sentence_about_a_proof_sketch_stays_text() {
+    assert!(semantic("Proof sketch is the term we use for an outline.").is_empty());
+}
+
+#[test]
+fn a_thematic_break_ends_a_proof_without_a_qed_marker() {
+    assert_eq!(
+        semantic("**Proof sketch:** Use induction.\n\n---\n\nRead chapter two.\n"),
+        expect(&[("block-proof-1", BlockType::Proof, 1)])
+    );
+}

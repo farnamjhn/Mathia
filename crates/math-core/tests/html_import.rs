@@ -7,13 +7,32 @@
 
 use std::path::PathBuf;
 
-use math_core::{HtmlOptions, analyze_html, clean_html};
+use math_core::{BlockType, HtmlOptions, analyze_html, clean_html};
 
 fn sample(name: &str) -> Option<String> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../sample-data")
         .join(name);
     std::fs::read_to_string(path).ok()
+}
+
+#[test]
+fn proof_sketch_labels_in_imported_html_become_proof_blocks() {
+    let doc = analyze_html(
+        "<main><ul><li><strong>ایده اثبات:</strong> دلیل اول.\
+         <ul><li>گام دوم.</li></ul></li><li>مرور جلسهٔ بعد.</li></ul>\
+         <p><strong>Proof sketch:</strong> Use induction.</p>\
+         <p>Proof sketches are useful in lectures.</p></main>",
+    );
+    let proofs: Vec<_> = doc.blocks_of(BlockType::Proof).collect();
+    assert_eq!(proofs.len(), 2);
+    assert!(proofs[0].html.contains("گام دوم"));
+    assert!(!proofs[0].html.contains("مرور جلسه"));
+    assert!(proofs[1].html.contains("Use induction."));
+    assert!(
+        doc.blocks_of(BlockType::Text)
+            .any(|b| b.html.contains("Proof sketches are useful"))
+    );
 }
 
 #[test]
