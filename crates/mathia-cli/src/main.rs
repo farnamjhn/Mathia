@@ -458,11 +458,16 @@ fn compile_file(input: &Path, output: &Path, settings: &Settings) -> Result<(), 
         std::fs::read_to_string(input).map_err(|e| format!("{}: {e}", input.display()))?;
 
     if is_html(input) || math_core::is_html(&content) {
-        let analysis = math_core::clean_html::analyze_html_detailed(&content);
+        let mut analysis = math_core::clean_html::analyze_html_detailed(&content);
+        if let Some(overrides) = &settings.overrides {
+            math_core::clean_html::apply_overrides(&mut analysis.document, overrides);
+            math_core::clean_html::reindex(&mut analysis);
+        }
         if settings.explain {
             print!("{}", analysis.explain(settings.config.threshold));
         }
-        let html = math_core::clean_html(&content, &html_options).map_err(|e| e.to_string())?;
+        let html = math_core::html::render(&analysis.document, &html_options)
+            .map_err(|e| e.to_string())?;
         std::fs::write(output, html).map_err(|e| format!("{}: {e}", output.display()))?;
         let semantic = analysis
             .document

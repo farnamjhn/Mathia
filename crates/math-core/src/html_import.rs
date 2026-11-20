@@ -637,12 +637,26 @@ impl BlockBuilder {
         if run.is_empty() {
             return;
         }
-        let tag = if ordered { "ol" } else { "ul" };
-        let mut html = format!("<{tag}>");
-        for id in run.drain(..) {
-            html.push_str(&dom.serialize(id, &SERIALIZE));
+        // Only wrap a run in `<ul>` / `<ol>` when every item is a list item;
+        // block content that merely sits inside the list (for example a
+        // `div.math-block` between items) is emitted on its own.
+        let all_items = run.iter().all(|id| match dom.element(*id) {
+            Some(el) => el.tag().eq_ignore_ascii_case("li"),
+            None => dom.text_content(*id).trim().is_empty(),
+        });
+        let mut html = String::new();
+        if all_items {
+            let tag = if ordered { "ol" } else { "ul" };
+            html.push_str(&format!("<{tag}>"));
+            for id in run.drain(..) {
+                html.push_str(&dom.serialize(id, &SERIALIZE));
+            }
+            html.push_str(&format!("</{tag}>"));
+        } else {
+            for id in run.drain(..) {
+                html.push_str(&dom.serialize(id, &SERIALIZE));
+            }
         }
-        html.push_str(&format!("</{tag}>"));
         self.push_text(html);
     }
 

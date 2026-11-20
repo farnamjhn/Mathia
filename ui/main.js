@@ -16,6 +16,7 @@
   const $ = (id) => document.getElementById(id);
   const el = {
     open: $("open"), reload: $("reload"), export: $("export"),
+    undo: $("undo"), redo: $("redo"),
     ai: $("ai"), math: $("render-math"), showText: $("show-text"),
     status: $("status"), blocks: $("blocks"), panes: $("panes"),
     preview: $("preview"), previewToggle: $("preview-toggle"),
@@ -107,6 +108,10 @@
   let stamp = null;
   /** Hand corrections (math_core::ScopeOverrides), keyed by opener node. */
   let overrides = emptyOverrides();
+  /** Every change that can be undone, oldest first: corrections before and
+   *  after, and highlights the frame can replay. */
+  let undoStack = [];
+  let redoStack = [];
   /** The configuration shown in the detection settings dialog. */
   let editing = null;
   /** Which blocks the list shows: "all", "unsure" or "changed". */
@@ -123,6 +128,78 @@
 
   function emptyOverrides() {
     return { delta: {}, suppressed: [], retype: {}, end: {} };
+  }
+
+  function cloneOverrides(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function sameOverrides(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  function updateHistory() {
+    if (!el.undo || !el.redo) return;
+    el.undo.disabled = undoStack.length === 0;
+    el.redo.disabled = redoStack.length === 0;
+  }
+
+  function pushHistory(entry) {
+    undoStack.push(entry);
+    if (undoStack.length > 100) undoStack.shift();
+    redoStack = [];
+    updateHistory();
+  }
+
+  /** A recompile reloads the frame, which drops its highlights: their history
+   *  entries would no longer mean anything. */
+  function forgetHighlights() {
+    undoStack = undoStack.filter((entry) => entry.kind !== "highlight");
+    redoStack = redoStack.filter((entry) => entry.kind !== "highlight");
+    updateHistory();
+  }
+
+  function resetHistory() {
+    undoStack = [];
+    redoStack = [];
+    updateHistory();
+  }
+
+  function postToFrame(kind) {
+    const frame = el.frame.contentWindow;
+    if (frame) frame.postMessage({ mathia: kind }, "*");
+  }
+
+  async function replayHistory(entry, backwards) {
+    if (entry.kind === "highlight") {
+      postToFrame(backwards ? "highlight-undo" : "highlight-redo");
+      return;
+    }
+    overrides = cloneOverrides(backwards ? entry.before : entry.after);
+    try {
+      await invoke("set_overrides", { overrides });
+      await refresh(true);
+      renderBlocks();
+      setStatus(backwards ? "Undone" : "Redone");
+    } catch (error) {
+      setStatus(String(error), true);
+    }
+  }
+
+  async function undoChange() {
+    const entry = undoStack.pop();
+    if (!entry) return;
+    redoStack.push(entry);
+    updateHistory();
+    await replayHistory(entry, true);
+  }
+
+  async function redoChange() {
+    const entry = redoStack.pop();
+    if (!entry) return;
+    undoStack.push(entry);
+    updateHistory();
+    await replayHistory(entry, false);
   }
 
   function setStatus(text, isError) {
@@ -159,6 +236,7 @@
     el.panes.classList.toggle("preview-closed", has && !previewOpen);
     el.previewToggle.disabled = !has;
     updateDecisionRun();
+    updateHistory();
     el.reload.disabled = el.export.disabled = el.exportPdf.disabled = !has;
     el.exportMarkdown.disabled = !has;
     const isHtml = Boolean(
@@ -200,6 +278,7 @@
         analysis = await invoke("analyze", { source });
         renderBlocks();
         el.frame.src = previewUrl(selected);
+        forgetHighlights();
       }
       layout();
       let name = "Mathia";
@@ -243,6 +322,7 @@
     analysis = null;
     stamp = null;
     overrides = emptyOverrides();
+    resetHistory();
     view = "all";
     typeFilter = "all";
     typeFilterKey = "";
@@ -268,6 +348,7 @@
     analysis = null;
     stamp = null;
     overrides = emptyOverrides();
+    resetHistory();
     view = "all";
     typeFilter = "all";
     typeFilterKey = "";
@@ -613,7 +694,7 @@
     el.fixLength.textContent = parts === 1 ? "1 part" : parts + " parts";
     el.fixShorter.disabled = !semantic || block.end === "environment" || block.span.end - start < 2;
     el.fixLonger.disabled = !semantic || block.end === "environment" ||
-      block.span.end >= analysis.document.nodes.length;
+      block.span.end >= scopeUnits();
     el.fixReject.disabled = !semantic;
     el.fixReset.disabled = !corrected(start);
   }
@@ -629,8 +710,11 @@
   async function correct(change, message) {
     const block = analysis && analysis.document.blocks.find((b) => b.id === selected);
     if (!block) return;
+    const before = cloneOverrides(overrides);
     change(block, block.span.start);
+    if (sameOverrides(before, overrides)) return;
     selectedStart = block.span.start;
+    pushHistory({ kind: "overrides", before, after: cloneOverrides(overrides) });
     await pushOverrides(message);
   }
 
@@ -657,11 +741,68 @@
 
   function moveEnd(by) {
     return correct((block, start) => {
-      const nodes = analysis.document.nodes.length;
-      const end = Math.min(nodes, Math.max(start + 1, block.span.end + by));
+      const end = Math.min(scopeUnits(), Math.max(start + 1, block.span.end + by));
       delete overrides.delta[String(start)];
       overrides.end[String(start)] = end;
     }, by < 0 ? "Block made shorter" : "Block made longer");
+  }
+
+  /** How far a block's scope may reach: source nodes for Markdown, the
+   *  highest block span for HTML, which has no source nodes. */
+  function scopeUnits() {
+    const doc = analysis && analysis.document;
+    if (!doc) return 0;
+    const nodes = doc.nodes ? doc.nodes.length : 0;
+    const spans = doc.blocks.reduce((max, b) => Math.max(max, b.span.end), 0);
+    return Math.max(nodes, spans);
+  }
+
+  /** The source node whose prose matches the text the drag ended in. The
+   *  runtime sends that prose and the block it sits in, which narrows the
+   *  search to one block's nodes. */
+  function nodeIndexFor(text, from) {
+    const nodes = analysis && analysis.document.nodes;
+    const target = String(text || "").replace(/\s+/g, " ").trim();
+    if (!nodes || !target) return -1;
+    let loose = -1;
+    for (let i = Math.max(0, from); i < nodes.length; i += 1) {
+      const candidate = nodes[i].text.replace(/\s+/g, " ").trim();
+      if (!candidate) continue;
+      if (candidate === target) return i;
+      if (loose < 0 && (candidate.startsWith(target) || target.startsWith(candidate))) loose = i;
+    }
+    return loose;
+  }
+
+  /** Grows the last block of a drag over the text it covers. */
+  async function expandBlock(id, endId, text) {
+    const block = analysis && analysis.document.blocks.find((b) => b.id === id);
+    if (!block) return;
+    if (block.end === "environment") {
+      setStatus("A LaTeX environment cannot be expanded.", true);
+      return;
+    }
+    const owner = analysis.document.blocks.find((b) => b.id === endId);
+    let index = nodeIndexFor(text, owner ? owner.span.start : block.span.start);
+    if (index < 0) index = nodeIndexFor(text, block.span.start);
+    // A node of nothing but a formula has no prose to match; its block still
+    // tells us where the drag ended.
+    if (index < 0 && owner) index = owner.span.end - 1;
+    if (index < 0) {
+      setStatus("Could not find where the selection ends.", true);
+      return;
+    }
+    if (index + 1 <= block.span.end) {
+      setStatus("The block already covers this text.");
+      return;
+    }
+    const before = cloneOverrides(overrides);
+    delete overrides.delta[String(block.span.start)];
+    overrides.end[String(block.span.start)] = index + 1;
+    pushHistory({ kind: "overrides", before, after: cloneOverrides(overrides) });
+    selected = block.id;
+    selectedStart = block.span.start;
+    await pushOverrides("Block expanded");
   }
 
   function reject() {
@@ -688,7 +829,11 @@
     try {
       const loaded = await invoke("load_overrides");
       if (!loaded) return;
+      const before = cloneOverrides(overrides);
       overrides = Object.assign(emptyOverrides(), loaded);
+      if (!sameOverrides(before, overrides)) {
+        pushHistory({ kind: "overrides", before, after: cloneOverrides(overrides) });
+      }
       await pushOverrides("Corrections loaded");
     } catch (error) {
       setStatus(String(error), true);
@@ -696,7 +841,10 @@
   }
 
   function clearCorrections() {
+    const before = cloneOverrides(overrides);
     overrides = emptyOverrides();
+    if (sameOverrides(before, overrides)) return Promise.resolve();
+    pushHistory({ kind: "overrides", before, after: cloneOverrides(overrides) });
     return pushOverrides("All corrections undone");
   }
 
@@ -732,6 +880,22 @@
     const data = event.data;
     if (data && data.mathia === "print") {
       exportPdf();
+      return;
+    }
+    if (data && data.mathia === "expand" && typeof data.id === "string") {
+      expandBlock(data.id, data.endId, data.text);
+      return;
+    }
+    if (data && data.mathia === "highlight-applied") {
+      pushHistory({ kind: "highlight" });
+      return;
+    }
+    if (data && data.mathia === "undo") {
+      undoChange();
+      return;
+    }
+    if (data && data.mathia === "redo") {
+      redoChange();
       return;
     }
     if (data && data.mathia === "mindmap-export" && ["svg", "png"].includes(data.extension)
@@ -989,7 +1153,11 @@
     setStatus("Asking the decision model…");
     try {
       const run = await invoke("run_decision_model", { source });
+      const before = cloneOverrides(overrides);
       overrides = Object.assign(emptyOverrides(), run.overrides);
+      if (!sameOverrides(before, overrides)) {
+        pushHistory({ kind: "overrides", before, after: cloneOverrides(overrides) });
+      }
       await pushOverrides();
       setStatus(
         "Decision model reviewed " + run.reviewed + " blocks and changed " + run.changed +
@@ -1329,6 +1497,8 @@
     select(next.dataset.id);
   });
   el.reload.addEventListener("click", () => refresh());
+  el.undo.addEventListener("click", () => undoChange());
+  el.redo.addEventListener("click", () => redoChange());
   el.export.addEventListener("click", exportHtml);
   el.previewToggle.addEventListener("click", () => setPreviewOpen(!previewOpen));
   el.ai.addEventListener("change", () => refresh());
@@ -1356,7 +1526,14 @@
     if (event.key === "Escape") closeMenus();
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
     const key = event.key.toLowerCase();
-    if (key === "o") open();
+    // Text fields keep their own undo while the user is typing in them.
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName || "") ||
+      event.target.isContentEditable;
+    if (key === "z" && !typing) {
+      if (event.shiftKey) redoChange();
+      else undoChange();
+    } else if (key === "y" && !typing) redoChange();
+    else if (key === "o") open();
     else if (key === "f" && analysis) el.filter.focus();
     else if (key === "e") exportHtml();
     else if (key === "p") exportPdf();

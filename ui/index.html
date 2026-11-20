@@ -42,6 +42,23 @@
 
   <span class="bar-separator" role="separator" aria-orientation="vertical"></span>
 
+  <div class="bar-group" role="group" aria-label="History">
+    <button id="undo" class="icon-btn" type="button" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M9 14 4 9l5-5"/>
+        <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>
+      </svg>
+    </button>
+    <button id="redo" class="icon-btn" type="button" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Y)" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="m15 14 5-5-5-5"/>
+        <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>
+      </svg>
+    </button>
+  </div>
+
+  <span class="bar-separator" role="separator" aria-orientation="vertical"></span>
+
   <div class="bar-group" role="group" aria-label="Tools and options">
     <button id="guide" class="btn" type="button" title="The prompt that makes a vision model transcribe pages the way Mathia reads them">Transcription prompt</button>
 

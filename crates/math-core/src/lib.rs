@@ -135,7 +135,10 @@ pub fn analyze_with_overrides(
     overrides: &ScopeOverrides,
 ) -> Analysis {
     if is_html(markdown) {
-        return clean_html::analyze_html_detailed(markdown);
+        let mut analysis = clean_html::analyze_html_detailed(markdown);
+        clean_html::apply_overrides(&mut analysis.document, overrides);
+        clean_html::reindex(&mut analysis);
+        return analysis;
     }
     let nodes = parser::parse_markdown(&normalize_markdown(markdown));
     let Classification {

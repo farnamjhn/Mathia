@@ -7,10 +7,10 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::Analysis;
-use crate::classifier::NodeScore;
+use crate::classifier::{NodeScore, ScopeOverrides};
 use crate::error::Result;
 use crate::html::{self, HtmlOptions};
-use crate::model::Document;
+use crate::model::{BlockType, Document, EndReason};
 
 /// Checks if a file path has an HTML extension.
 pub fn is_html_file(path: impl AsRef<Path>) -> bool {
@@ -443,24 +443,135 @@ pub fn analyze_html(input: &str) -> Document {
 /// Detailed analysis of an existing HTML document with score mappings for the desktop app.
 pub fn analyze_html_detailed(input: &str) -> Analysis {
     let document = crate::html_import::extract_and_clean_html(input).document;
-    let mut scores = Vec::with_capacity(document.blocks.len());
-    let mut block_of = Vec::with_capacity(document.blocks.len());
+    let mut analysis = Analysis {
+        document,
+        scores: Vec::new(),
+        block_of: Vec::new(),
+    };
+    reindex(&mut analysis);
+    analysis
+}
 
+/// Rebuilds the per-block score tables of an HTML analysis. HTML has no source
+/// nodes, so these tables mirror the block list; call this again after
+/// [`apply_overrides`] merged blocks.
+pub fn reindex(analysis: &mut Analysis) {
+    let document = &analysis.document;
+    let len = document
+        .blocks
+        .iter()
+        .map(|block| block.span.end)
+        .max()
+        .unwrap_or(0);
+    let mut scores = Vec::with_capacity(len);
+    let mut block_of = vec![0usize; len];
     for (index, block) in document.blocks.iter().enumerate() {
-        scores.push(NodeScore {
+        let score = NodeScore {
             features: crate::features::Features::default(),
             best: (block.kind, block.score),
             opens: block.kind.is_semantic(),
             scores: vec![(block.kind, block.score)],
-        });
-        block_of.push(index);
+        };
+        for slot in block.span.clone() {
+            while scores.len() < slot {
+                scores.push(score.clone());
+            }
+            if scores.len() == slot {
+                scores.push(score.clone());
+            } else {
+                scores[slot] = score.clone();
+            }
+            if slot < block_of.len() {
+                block_of[slot] = index;
+            }
+        }
     }
 
-    Analysis {
-        document,
-        scores,
-        block_of,
+    analysis.scores = scores;
+    analysis.block_of = block_of;
+}
+
+/// Applies hand corrections to a document parsed from HTML.
+///
+/// HTML blocks come from the markup rather than from scored source nodes: each
+/// block is one element, and `span` is its position in document order. An
+/// explicit `end` (or a positive `delta`) therefore merges the blocks that
+/// follow the opener into it, the way the same correction widens a Markdown
+/// block's scope. Headings are never absorbed, matching the Markdown rule that
+/// a heading ends a block.
+pub fn apply_overrides(document: &mut Document, overrides: &ScopeOverrides) {
+    if overrides.is_empty() {
+        return;
     }
+
+    let blocks = std::mem::take(&mut document.blocks);
+    let mut merged = Vec::with_capacity(blocks.len());
+    let mut i = 0;
+    while i < blocks.len() {
+        let mut block = blocks[i].clone();
+        let start = block.span.start;
+        let mut next = i + 1;
+        if block.kind != BlockType::Heading {
+            let wanted = overrides.end.get(&start).copied().or_else(|| {
+                overrides
+                    .delta
+                    .get(&start)
+                    .map(|delta| (block.span.end as isize + delta).max(start as isize + 1) as usize)
+            });
+            if let Some(end) = wanted {
+                while next < blocks.len() && blocks[next].span.start < end {
+                    if blocks[next].kind == BlockType::Heading {
+                        break;
+                    }
+                    // Keep each absorbed block as its own block-level chunk so
+                    // inline bodies (e.g. a keyword-labelled paragraph) do not
+                    // run into the opener's text.
+                    block.html.push_str("<div class=\"mx-block-extension\">");
+                    block.html.push_str(&blocks[next].html);
+                    block.html.push_str("</div>");
+                    block.span.end = blocks[next].span.end;
+                    next += 1;
+                }
+                if next > i + 1 {
+                    block.end = EndReason::Override;
+                }
+            }
+        }
+
+        if overrides.suppressed.contains(&start) {
+            block.kind = BlockType::Text;
+            block.title = "Content".to_string();
+            block.heading_level = None;
+            block.number = None;
+            block.name = None;
+            block.proves = None;
+            block.score = 0.0;
+            block.end = EndReason::Structural;
+        } else if let Some(kind) = overrides
+            .retype
+            .get(&start)
+            .copied()
+            .filter(|kind| kind.is_semantic())
+        {
+            block.kind = kind;
+            block.title = kind.label(block.direction).to_string();
+        }
+
+        merged.push(block);
+        i = next;
+    }
+
+    // Recompute the table of contents and title from the merged blocks while
+    // keeping the direction the markup declared.
+    let direction = document.direction;
+    let title = document.title.clone();
+    let nodes = std::mem::take(&mut document.nodes);
+    let mut fresh = Document::new(nodes, merged);
+    fresh.direction = direction;
+    if title.is_some() {
+        fresh.title = title;
+    }
+    *document = fresh;
 }
 
 #[cfg(test)]
@@ -670,5 +781,101 @@ mod tests {
         // Protected blocks left unmodified
         assert!(cleaned.contains("<code>$not_math$</code>"));
         assert!(cleaned.contains("<pre>$also_not_math$</pre>"));
+    }
+
+    fn corrections() -> ScopeOverrides {
+        ScopeOverrides::default()
+    }
+
+    fn sample() -> String {
+        r#"<html><body><main>
+<h1>Notes</h1>
+<ul>
+<li><strong>Theorem 1.</strong> First statement.</li>
+<li>Plain continuation text.</li>
+</ul>
+<h2>Next</h2>
+<p>After the heading.</p>
+</main></body></html>"#
+            .to_string()
+    }
+
+    #[test]
+    fn html_end_override_merges_following_blocks() {
+        let mut analysis = analyze_html_detailed(&sample());
+        assert_eq!(analysis.document.blocks[1].kind, BlockType::Theorem);
+
+        let mut overrides = corrections();
+        overrides.end.insert(1, 3);
+        apply_overrides(&mut analysis.document, &overrides);
+        reindex(&mut analysis);
+
+        let theorem = &analysis.document.blocks[1];
+        assert_eq!(theorem.span, 1..3);
+        assert_eq!(theorem.end, EndReason::Override);
+        assert!(theorem.html.contains("Plain continuation text."));
+        // The absorbed block is gone and no longer a separate entry.
+        assert!(
+            !analysis
+                .document
+                .blocks
+                .iter()
+                .any(|b| b.span.start == 2 && b.kind == BlockType::Text)
+        );
+    }
+
+    #[test]
+    fn html_end_override_stops_at_headings() {
+        let mut analysis = analyze_html_detailed(&sample());
+        let mut overrides = corrections();
+        // Ask to swallow everything, including the `h2` that follows.
+        overrides.end.insert(1, 5);
+        apply_overrides(&mut analysis.document, &overrides);
+
+        let theorem = &analysis.document.blocks[1];
+        assert_eq!(theorem.span, 1..3);
+        let heading = analysis
+            .document
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockType::Heading && b.title == "Next")
+            .expect("heading survives");
+        assert_eq!(heading.span, 3..4);
+    }
+
+    #[test]
+    fn html_suppressed_block_becomes_text() {
+        let mut analysis = analyze_html_detailed(&sample());
+        let mut overrides = corrections();
+        overrides.suppressed.insert(1);
+        apply_overrides(&mut analysis.document, &overrides);
+
+        let block = &analysis.document.blocks[1];
+        assert_eq!(block.kind, BlockType::Text);
+        assert_eq!(block.title, "Content");
+    }
+
+    #[test]
+    fn html_retype_changes_the_block_kind() {
+        let mut analysis = analyze_html_detailed(&sample());
+        let mut overrides = corrections();
+        overrides.retype.insert(2, BlockType::Definition);
+        apply_overrides(&mut analysis.document, &overrides);
+
+        let block = &analysis.document.blocks[2];
+        assert_eq!(block.kind, BlockType::Definition);
+        assert_eq!(block.title, "Definition");
+    }
+
+    #[test]
+    fn html_merged_analysis_explains_without_panicking() {
+        let mut analysis = analyze_html_detailed(&sample());
+        let mut overrides = corrections();
+        overrides.end.insert(1, 3);
+        apply_overrides(&mut analysis.document, &overrides);
+        reindex(&mut analysis);
+
+        let text = analysis.explain(0.5);
+        assert!(text.contains("ended by override"));
     }
 }

@@ -933,6 +933,42 @@ describe("highlights", () => {
     await finish(s);
   });
 
+  test("undoes and redoes highlights from the buttons and the keyboard", async () => {
+    const s = await open(pages.fa);
+    const { page } = s;
+    const count = () => page.evaluate(() => Mathia.highlights.count());
+    const undo = page.locator("#mx-highlight-undo");
+    const redo = page.locator("#mx-highlight-redo");
+
+    await select(page, "تابع", "را");
+    await page.keyboard.press("Control+Shift+H");
+    await select(page, "نتیجه", "است");
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await count(), 2);
+    assert.equal(await undo.isDisabled(), false);
+    assert.equal(await redo.isDisabled(), true);
+
+    await undo.click();
+    assert.equal(await count(), 1);
+    assert.equal(await redo.isDisabled(), false);
+
+    await page.keyboard.press("Control+Z");
+    assert.equal(await count(), 0);
+    await page.keyboard.press("Control+Shift+Z");
+    assert.equal(await count(), 1);
+    await redo.click();
+    assert.equal(await count(), 2);
+
+    // A new highlight is a new branch: the redo stack is gone.
+    await undo.click();
+    assert.equal(await count(), 1);
+    await select(page, "فرض", "می‌شوند");
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await count(), 2);
+    assert.equal(await redo.isDisabled(), true);
+    await finish(s);
+  });
+
   test("cleans up registrations and listeners on destroy", async () => {
     const s = await open(pages.fa);
     const { page } = s;
@@ -989,6 +1025,56 @@ describe("host frame", () => {
       return new Promise((done) => setTimeout(() => done(count), 100));
     });
     assert.equal(posted, 0);
+    await finish(alone);
+  });
+
+  test("a drag offers Expand block, naming the block and the node it ends in", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mathia-expand-"));
+    const host = join(dir, "host.html");
+    writeFileSync(
+      host,
+      `<!doctype html><script>window.got = [];
+       addEventListener("message", (e) => window.got.push(e.data));</script>
+       <iframe id="f" src="${pages.plain}" style="width:900px;height:700px"></iframe>`,
+    );
+    const s = await open(pathToFileURL(host).href);
+    const frame = s.page.frames().find((f) => f !== s.page.mainFrame());
+    await frame.waitForSelector("section.mx-proof .mx-block-body p");
+
+    // The app frame owns undo and the correction buttons; a page on its own does not.
+    assert.equal(await frame.locator("#mx-expand-button").count(), 1);
+    assert.equal(await frame.locator("#mx-highlight-history").count(), 0);
+
+    const expected = await frame.evaluate(() => {
+      const proof = document.querySelector("section.mx-proof");
+      const first = proof.querySelector(".mx-block-body p");
+      const after = Array.from(document.querySelectorAll("#mx-main .mx-block-body p"))
+        .find((p) => p.textContent.startsWith("By Theorem 1.3"));
+      if (!after) throw new Error("the plain paragraph after the proof was not found");
+      const range = document.createRange();
+      range.setStart(first.firstChild, 0);
+      range.setEnd(after.lastChild, after.lastChild.nodeValue.length);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return {
+        proof: proof.dataset.blockId,
+        owner: after.closest("[data-block-id]").dataset.blockId,
+        text: after.textContent.replace(/\s+/g, " ").trim(),
+      };
+    });
+    await frame.waitForSelector("#mx-highlight-toolbar:not([hidden])");
+    await frame.locator("#mx-expand-button").click();
+    await s.page.waitForFunction(() => window.got.length > 0);
+    assert.deepEqual(await s.page.evaluate(() => window.got), [
+      { mathia: "expand", id: expected.proof, endId: expected.owner, text: expected.text },
+    ]);
+    await finish(s);
+    rmSync(dir, { recursive: true, force: true });
+
+    // Opened on its own there is nothing to correct, so only the highlight is offered.
+    const alone = await open(pages.plain);
+    assert.equal(await alone.page.locator("#mx-expand-button").count(), 0);
     await finish(alone);
   });
 });

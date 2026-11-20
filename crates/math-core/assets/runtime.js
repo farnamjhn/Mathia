@@ -697,7 +697,17 @@
     var pending = null;
     var toolbar = null;
     var button = null;
+    var expandButton = null;
+    var undoBar = null;
+    var undoButton = null;
+    var redoButton = null;
+    /* Highlight states for undo/redo, oldest first. */
+    var history = [];
+    var future = [];
     var held = false;
+    /* Inside the desktop app the host owns the undo order, so the frame only
+       replays what it is told to. */
+    var framed = window.parent !== window;
     var backgrounds = main && supported ? highlightBackgrounds(main) : null;
     var resizeObserver = null;
     var mutationObserver = null;
@@ -720,7 +730,7 @@
       if (toolbar) toolbar.hidden = true;
     }
 
-    function clear() {
+    function reset() {
       if (registered && window.CSS && window.CSS.highlights) {
         try { window.CSS.highlights.delete(NAME); } catch (err) { /* already gone */ }
       }
@@ -734,8 +744,57 @@
       hide();
     }
 
+    function snapshot() {
+      return ranges.slice();
+    }
+
+    function clear() {
+      if (ranges.length) {
+        history.push(snapshot());
+        future = [];
+      }
+      reset();
+      updateUndo();
+    }
+
+    function restore(list) {
+      reset();
+      list.forEach(function (range) {
+        try {
+          highlight.add(range);
+          ranges.push(range);
+        } catch (err) { /* the range no longer fits the document */ }
+      });
+      if (ranges.length && supported) {
+        window.CSS.highlights.set(NAME, highlight);
+        registered = true;
+      }
+      repaintSoon();
+      updateUndo();
+    }
+
+    function undo() {
+      if (!history.length) return;
+      future.push(snapshot());
+      restore(history.pop());
+    }
+
+    function redo() {
+      if (!future.length) return;
+      history.push(snapshot());
+      restore(future.pop());
+    }
+
+    function updateUndo() {
+      if (!undoBar) return;
+      undoBar.hidden = !history.length && !future.length && !ranges.length;
+      undoButton.disabled = !history.length;
+      redoButton.disabled = !future.length;
+    }
+
     function destroy() {
       clear();
+      if (framed) window.removeEventListener("message", onHostMessage);
       if (toolbar) {
         document.removeEventListener("selectionchange", onSelectionChange);
         document.removeEventListener("keydown", onKeyDown, true);
@@ -749,6 +808,15 @@
         if (toolbar.parentNode) toolbar.parentNode.removeChild(toolbar);
         toolbar = null;
         button = null;
+        expandButton = null;
+      }
+      if (undoBar) {
+        undoButton.removeEventListener("click", undo);
+        redoButton.removeEventListener("click", redo);
+        if (undoBar.parentNode) undoBar.parentNode.removeChild(undoBar);
+        undoBar = null;
+        undoButton = null;
+        redoButton = null;
       }
     }
 
@@ -761,6 +829,8 @@
       supported: supported,
       count: function () { return ranges.length; },
       clear: clear,
+      undo: undo,
+      redo: redo,
       destroy: destroy,
     };
     if (window.Mathia) window.Mathia.highlights = api;
@@ -769,6 +839,10 @@
     var LANG_FA = document.documentElement.lang === "fa";
     var label = LANG_FA ? "برجسته‌سازی انتخاب" : "Highlight selection";
     var hint = LANG_FA ? "متن انتخاب‌شده را برجسته نگه می‌دارد" : "Keep the selected text highlighted";
+    var expandLabel = LANG_FA ? "گسترش بلوک" : "Expand block";
+    var expandHint = LANG_FA
+      ? "بلوک آخر در انتخاب را تا این متن بزرگ می‌کند"
+      : "Grow the last block in the selection to cover this text";
 
     toolbar = document.createElement("div");
     toolbar.id = "mx-highlight-toolbar";
@@ -777,15 +851,59 @@
     toolbar.setAttribute("aria-label", label);
     toolbar.hidden = true;
 
-    button = document.createElement("button");
-    button.type = "button";
-    button.id = "mx-highlight-button";
-    button.textContent = label;
-    button.title = hint;
-    button.setAttribute("aria-label", label);
-    button.setAttribute("aria-keyshortcuts", "Control+Shift+H");
-    toolbar.appendChild(button);
+    function addTool(action, text, title, shortcut) {
+      var el = document.createElement("button");
+      el.type = "button";
+      el.id = "mx-" + action + "-button";
+      el.dataset.mxAction = action;
+      el.textContent = text;
+      el.title = title;
+      el.setAttribute("aria-label", text);
+      if (shortcut) el.setAttribute("aria-keyshortcuts", shortcut);
+      toolbar.appendChild(el);
+      return el;
+    }
+
+    button = addTool("highlight", label, hint, "Control+Shift+H");
+    /* Growing a block is a correction of the source, which only the Mathia
+       app can apply; a standalone page offers the highlight alone. */
+    if (framed) {
+      expandButton = addTool("expand", expandLabel, expandHint);
+    }
     document.body.appendChild(toolbar);
+
+    /* A page opened on its own, as on a phone, has no toolbar of its own, so
+       the highlight history gets floating buttons. */
+    if (!framed) {
+      undoBar = document.createElement("div");
+      undoBar.id = "mx-highlight-history";
+      undoBar.className = "mx-highlight-history";
+      undoBar.setAttribute("role", "group");
+      undoBar.setAttribute("aria-label", LANG_FA ? "واگرد برجسته‌سازی" : "Highlight history");
+      undoBar.hidden = true;
+
+      undoButton = document.createElement("button");
+      undoButton.type = "button";
+      undoButton.id = "mx-highlight-undo";
+      undoButton.textContent = "↶";
+      undoButton.title = LANG_FA ? "واگرد برجسته‌سازی (Ctrl+Z)" : "Undo highlight (Ctrl+Z)";
+      undoButton.setAttribute("aria-label", LANG_FA ? "واگرد" : "Undo");
+      undoButton.disabled = true;
+
+      redoButton = document.createElement("button");
+      redoButton.type = "button";
+      redoButton.id = "mx-highlight-redo";
+      redoButton.textContent = "↷";
+      redoButton.title = LANG_FA ? "ازنو (Ctrl+Shift+Z)" : "Redo highlight (Ctrl+Shift+Z)";
+      redoButton.setAttribute("aria-label", LANG_FA ? "ازنو" : "Redo");
+      redoButton.disabled = true;
+
+      undoBar.appendChild(undoButton);
+      undoBar.appendChild(redoButton);
+      document.body.appendChild(undoBar);
+      undoButton.addEventListener("click", undo);
+      redoButton.addEventListener("click", redo);
+    }
 
     function elementOf(node) {
       return node && node.nodeType === 1 ? node : node && node.parentElement;
@@ -836,6 +954,7 @@
         range = sel.getRangeAt(0).cloneRange();
       }
       if (!usable(range)) { hide(); return false; }
+      var before = snapshot();
       try {
         highlight.add(range);
         if (!registered) {
@@ -846,11 +965,77 @@
       } catch (err) {
         return false;
       }
+      history.push(before);
+      future = [];
       repaintSoon();
       pending = null;
       if (sel) sel.removeAllRanges();
       hide();
+      updateUndo();
+      if (framed) window.parent.postMessage({ mathia: "highlight-applied" }, "*");
       return true;
+    }
+
+    /* The last block the selection touches. A selection often runs past the
+       end of a block into plain text; the block to grow is the one before it. */
+    function lastBlock(node) {
+      var el = elementOf(node);
+      var block = el && el.closest ? el.closest("[data-block-id]") : null;
+      var all = document.querySelectorAll("[data-block-id]");
+      while (block) {
+        var type = block.dataset.blockType;
+        if (type && type !== "text" && type !== "heading") return block;
+        var index = Array.prototype.indexOf.call(all, block);
+        block = index > 0 ? all[index - 1] : null;
+      }
+      return null;
+    }
+
+    /* The element the compiled document made for one node of the source: a
+       paragraph, a list item, a heading, a block quote. */
+    function endElement(node) {
+      var el = elementOf(node);
+      while (el && el.parentElement) {
+        if (el.tagName === "LI") return el;
+        var parent = el.parentElement;
+        if (parent.id === "mx-main" ||
+            (parent.classList && parent.classList.contains("mx-block-body"))) return el;
+        el = parent;
+      }
+      return null;
+    }
+
+    /* The node's prose without the rendered formulas, so the host can match it
+       against the source nodes. */
+    function proseOf(el) {
+      if (!el) return "";
+      var clone = el.cloneNode(true);
+      clone.querySelectorAll(".mx-block-head, .mx-math-copy, .mx-actions, .math").forEach(function (n) {
+        n.remove();
+      });
+      return clone.textContent.replace(/\s+/g, " ").trim();
+    }
+
+    /* Asks the host app to grow the last block of the selection. */
+    function expand() {
+      var range = pending;
+      var sel = window.getSelection();
+      if (!range && sel && sel.rangeCount && !sel.isCollapsed) {
+        range = sel.getRangeAt(0).cloneRange();
+      }
+      if (!range) { hide(); return; }
+      var block = lastBlock(range.endContainer) || lastBlock(range.startContainer);
+      var last = endElement(range.endContainer);
+      var owner = last && last.closest ? last.closest("[data-block-id]") : null;
+      var text = proseOf(last);
+      pending = null;
+      if (sel) sel.removeAllRanges();
+      hide();
+      if (!block) return;
+      window.parent.postMessage(
+        { mathia: "expand", id: block.dataset.blockId, endId: owner ? owner.dataset.blockId : null, text: text },
+        "*"
+      );
     }
 
     function onSelectionChange() {
@@ -863,9 +1048,28 @@
       show(pending);
     }
 
+    /* The desktop app decides what undo means across corrections and
+       highlights, then asks the frame to replay its part. */
+    function onHostMessage(e) {
+      if (e.source !== window.parent || !e.data) return;
+      if (e.data.mathia === "highlight-undo") undo();
+      else if (e.data.mathia === "highlight-redo") redo();
+    }
+
     function onKeyDown(e) {
       if (e.repeat) return;
-      if (!(e.code === "KeyH" || (e.key && e.key.toLowerCase() === "h"))) return;
+      var typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || "") ||
+        (e.target && e.target.isContentEditable);
+      var key = e.key ? e.key.toLowerCase() : "";
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (key === "z" || key === "y") && !typing) {
+        e.preventDefault();
+        var action = key === "y" || e.shiftKey ? "redo" : "undo";
+        if (framed) window.parent.postMessage({ mathia: action }, "*");
+        else if (action === "redo") redo();
+        else undo();
+        return;
+      }
+      if (!(e.code === "KeyH" || key === "h")) return;
       if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
       var sel = window.getSelection();
       if (!sel || !sel.rangeCount || sel.isCollapsed) return;
@@ -883,23 +1087,27 @@
     /* Capture the range before a toolbar interaction can clear the native
        selection. mousedown.preventDefault keeps the selection for mouse
        users; touch users rely on the range captured on selectionchange. */
-    button.addEventListener("mousedown", function (e) {
+    toolbar.addEventListener("mousedown", function (e) {
       held = true;
       e.preventDefault();
     });
-    button.addEventListener("touchstart", function () { held = true; }, { passive: true });
-    button.addEventListener("pointerdown", function () { held = true; });
-    button.addEventListener("pointerup", function (e) {
+    toolbar.addEventListener("touchstart", function () { held = true; }, { passive: true });
+    toolbar.addEventListener("pointerdown", function () { held = true; });
+    toolbar.addEventListener("pointerup", function (e) {
       if (e.pointerType !== "touch") releaseSoon(0);
     });
-    button.addEventListener("touchend", function () { releaseSoon(400); });
-    button.addEventListener("click", function (e) {
+    toolbar.addEventListener("touchend", function () { releaseSoon(400); });
+    toolbar.addEventListener("click", function (e) {
+      var target = e.target && e.target.closest ? e.target.closest("button[data-mx-action]") : null;
+      if (!target) return;
       e.preventDefault();
-      apply();
+      if (target.dataset.mxAction === "expand") expand();
+      else apply();
     });
 
     document.addEventListener("selectionchange", onSelectionChange);
     document.addEventListener("keydown", onKeyDown, true);
+    if (framed) window.addEventListener("message", onHostMessage);
     window.addEventListener("scroll", hide, true);
     window.addEventListener("resize", onResize);
     if ("ResizeObserver" in window) {

@@ -282,7 +282,10 @@ impl Session {
         content: &str,
     ) -> Result<math_core::Analysis, String> {
         if self.is_html_source(source) || math_core::is_html(content) {
-            return Ok(math_core::clean_html::analyze_html_detailed(content));
+            let mut analysis = math_core::clean_html::analyze_html_detailed(content);
+            math_core::clean_html::apply_overrides(&mut analysis.document, &self.overrides);
+            math_core::clean_html::reindex(&mut analysis);
+            return Ok(analysis);
         }
         let analysis = math_core::analyze_with_overrides(content, &self.config, &self.overrides);
         self.overrides
@@ -428,14 +431,16 @@ impl Session {
             _ => None,
         };
         if self.is_html_source(source) || math_core::is_html(&content) {
-            let analysis = math_core::clean_html::analyze_html_detailed(&content);
+            let mut analysis = math_core::clean_html::analyze_html_detailed(&content);
+            math_core::clean_html::apply_overrides(&mut analysis.document, &self.overrides);
             let semantic = analysis
                 .document
                 .blocks
                 .iter()
                 .filter(|b| b.kind.is_semantic())
                 .count();
-            let html = math_core::clean_html(&content, &html_options).map_err(|e| e.to_string())?;
+            let html = math_core::html::render(&analysis.document, &html_options)
+                .map_err(|e| e.to_string())?;
             return Ok((html, semantic));
         }
         let document = self.classify(source)?.document;
@@ -675,6 +680,46 @@ mod tests {
         let parsed: ScopeOverrides =
             serde_json::from_str(r#"{"retype": {"1": "lemma"}, "end": {"1": 3}}"#).unwrap();
         assert_eq!(parsed.end.get(&1), Some(&3));
+    }
+
+    #[test]
+    fn html_corrections_apply_to_analysis_and_preview() {
+        let html = "<html><body><main>\
+            <h1>Groups</h1>\
+            <p><strong>Theorem 1.</strong> Every group of prime order is cyclic.</p>\
+            <p>This proof follows from Lagrange's theorem.</p>\
+            </main></body></html>";
+        let source = Source::Text(html.to_string());
+        let mut session = Session::default();
+
+        let before = session.analyze(&source).unwrap();
+        let theorem = before
+            .document
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockType::Theorem)
+            .expect("theorem detected");
+        assert_eq!(theorem.span.end - theorem.span.start, 1);
+        let start = theorem.span.start;
+
+        let mut overrides = ScopeOverrides::default();
+        overrides.end.insert(start, start + 2);
+        session.set_overrides(overrides);
+
+        let after = session.analyze(&source).unwrap();
+        let theorem = after
+            .document
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockType::Theorem)
+            .expect("theorem survives");
+        assert_eq!(theorem.span.end - theorem.span.start, 2);
+        assert!(theorem.html.contains("This proof follows"));
+
+        let (compiled, _) = session
+            .compile(&source, &CompileOptions::default())
+            .unwrap();
+        assert!(compiled.contains("This proof follows"));
     }
 
     #[test]

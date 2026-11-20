@@ -249,11 +249,18 @@ highlight background uses the tallest line's height so prose and inline formulas
 an even band. Highlights live in memory for the open lesson and disappear when the lesson
 is reloaded.
 
+Undo and redo work from the keyboard (`Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`, `Ctrl+Y`) and, on a
+page opened on its own — as on a phone — from the two floating buttons in the bottom corner.
+
 Prose, code, and KaTeX's visible HTML layer can be highlighted, including selections that
 span RTL and LTR runs, inline formulas, block boundaries, and wrapped lines. KaTeX's hidden
 MathML copy is not painted, and SVG figures (AI illustrations or imported SVG) have no
 selectable text ranges, so they cannot be highlighted. Browsers without `CSS.highlights`
 simply do not show the action.
+
+In the desktop app the same drag also offers **Expand block**, which grows the last block of
+the selection over the text it covers — the usual fix when a proof or a remark continued as
+plain paragraphs. See [Desktop App](#desktop-app).
 
 ### Desktop App
 
@@ -265,6 +272,14 @@ Mark it as not a block; corrections can be saved as JSON for mathia --overrides 
 flags the blocks that are detected with low confidence as 'unsure' so they can be checked first.
 The **Type** menu narrows the list to one kind of block — every theorem, every lemma, every
 proof — and shows how many of each the document has.
+
+Drag over text in the preview and choose **Expand block** to grow the last block of the
+selection over the text it covers; the block list and the inspector update at once.
+Corrections and **Expand block** work on imported HTML pages as well as Markdown.
+
+**Undo and redo** are the two arrows in the toolbar and the usual shortcuts: `⌘Z` / `Ctrl+Z`
+to undo, `⇧⌘Z` / `Ctrl+Shift+Z` or `Ctrl+Y` to redo. They cover both corrections and text
+highlights, in the order they were made.
 
 **Export → Export as Markdown…** writes the compiled document back out as Markdown: the same
 text, with every block labelled the way the inspector shows it (`**Theorem 1.** …`), LaTeX
