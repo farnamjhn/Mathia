@@ -1093,7 +1093,7 @@ describe("deterministic mind map", () => {
         total: nodes.length,
       };
     });
-    assert.equal(initial.title, "Group Theory Notes");
+    assert.equal(initial.title, "algebra_en.md");
     assert.deepEqual(initial.missing, []);
     assert.equal(initial.proof, false);
     await s.page.getByRole("button", { name: "Split view", exact: true }).click();
@@ -1177,7 +1177,7 @@ describe("deterministic mind map", () => {
     const s = await open(pages.plain);
     await s.page.getByRole("button", { name: "Mind map", exact: true }).click();
     await s.page.getByRole("button", { name: "Zoom in", exact: true }).click();
-    const node = s.page.locator('[data-map-id="block-definition-1"]');
+    const node = s.page.locator('[data-map-id="sec-1"]');
     const state = () => node.evaluate((el) => ({ x: parseFloat(el.style.left), y: parseFloat(el.style.top),
       scale: new DOMMatrix(getComputedStyle(document.querySelector(".mx-map-world")).transform).a,
       camera: document.querySelector(".mx-map-world").style.transform }));
@@ -1207,7 +1207,7 @@ describe("deterministic mind map", () => {
     const s = await open(pages.plain);
     await s.page.getByRole("button", { name: "Mind map", exact: true }).click();
     // Move the root beyond the original origin; exports must include it.
-    await s.page.locator('[data-map-id="sec-1"] .mx-map-label').press("Alt+ArrowLeft");
+    await s.page.locator('[data-map-id="mx-main"] .mx-map-label').press("Alt+ArrowLeft");
     for (const format of ["SVG", "PNG"]) {
       const pending = s.page.waitForEvent("download", { timeout: 30_000 });
       await s.page.getByRole("button", { name: `Export mind map as ${format}`, exact: true }).click();
