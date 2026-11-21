@@ -61,27 +61,231 @@ pub struct Classification {
     pub block_of: Vec<usize>,
 }
 
+/// Content-based anchor for a node: `(hash(normalized_first_64_chars), occurrence_index)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ContentAnchor {
+    pub hash: u64,
+    pub occurrence: usize,
+}
+
+/// Normalizes text and computes a 64-bit deterministic hash of the first 64 characters.
+pub fn compute_text_anchor_hash(text: &str) -> u64 {
+    let normalized = crate::text::normalize(text);
+    let trimmed = normalized.trim();
+    let first_64: String = trimmed.chars().take(64).collect();
+    let digest = crate::sha256::sha256(first_64.as_bytes());
+    u64::from_be_bytes(digest[..8].try_into().unwrap())
+}
+
+/// Computes content anchors for all nodes in `nodes`.
+pub fn compute_node_anchors(nodes: &[Node]) -> Vec<ContentAnchor> {
+    let mut counts: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    nodes
+        .iter()
+        .map(|node| {
+            let hash = compute_text_anchor_hash(&node.flat);
+            let count = counts.entry(hash).or_insert(0);
+            let occurrence = *count;
+            *count += 1;
+            ContentAnchor { hash, occurrence }
+        })
+        .collect()
+}
+
+/// Computes the content anchor for the node at `index` in `nodes`.
+pub fn compute_node_anchor(nodes: &[Node], index: usize) -> ContentAnchor {
+    let target_hash = compute_text_anchor_hash(&nodes[index].flat);
+    let occurrence = nodes[..index]
+        .iter()
+        .filter(|n| compute_text_anchor_hash(&n.flat) == target_hash)
+        .count();
+    ContentAnchor {
+        hash: target_hash,
+        occurrence,
+    }
+}
+
+/// Key identifying a block opener node in [`ScopeOverrides`].
+///
+/// Can identify a node by a content-based anchor (stable across edits above the
+/// block), by a fallback node index, or both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OverrideKey {
+    pub anchor: Option<ContentAnchor>,
+    pub fallback: Option<usize>,
+}
+
+impl OverrideKey {
+    pub fn index(index: usize) -> Self {
+        OverrideKey {
+            anchor: None,
+            fallback: Some(index),
+        }
+    }
+
+    pub fn anchor(hash: u64, occurrence: usize) -> Self {
+        OverrideKey {
+            anchor: Some(ContentAnchor { hash, occurrence }),
+            fallback: None,
+        }
+    }
+
+    pub fn anchored(hash: u64, occurrence: usize, fallback: usize) -> Self {
+        OverrideKey {
+            anchor: Some(ContentAnchor { hash, occurrence }),
+            fallback: Some(fallback),
+        }
+    }
+
+    pub fn for_node(nodes: &[Node], index: usize) -> Self {
+        if index >= nodes.len() {
+            return Self::index(index);
+        }
+        let anchor = compute_node_anchor(nodes, index);
+        OverrideKey {
+            anchor: Some(anchor),
+            fallback: Some(index),
+        }
+    }
+}
+
+impl From<usize> for OverrideKey {
+    fn from(index: usize) -> Self {
+        OverrideKey::index(index)
+    }
+}
+
+impl std::fmt::Display for OverrideKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.anchor, self.fallback) {
+            (Some(a), Some(fb)) => write!(f, "{:016x}:{}:{}", a.hash, a.occurrence, fb),
+            (Some(a), None) => write!(f, "{:016x}:{}", a.hash, a.occurrence),
+            (None, Some(fb)) => write!(f, "{}", fb),
+            (None, None) => write!(f, "0"),
+        }
+    }
+}
+
+impl std::str::FromStr for OverrideKey {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(':').collect();
+        match parts.len() {
+            1 => {
+                if let Ok(idx) = parts[0].parse::<usize>() {
+                    Ok(OverrideKey::index(idx))
+                } else if let Ok(hash) = u64::from_str_radix(parts[0], 16) {
+                    Ok(OverrideKey::anchor(hash, 0))
+                } else {
+                    Ok(OverrideKey::index(0))
+                }
+            }
+            2 => {
+                let hash = u64::from_str_radix(parts[0], 16)
+                    .or_else(|_| parts[0].parse::<u64>())
+                    .unwrap_or(0);
+                let occ = parts[1].parse::<usize>().unwrap_or(0);
+                Ok(OverrideKey::anchor(hash, occ))
+            }
+            _ => {
+                let hash = u64::from_str_radix(parts[0], 16)
+                    .or_else(|_| parts[0].parse::<u64>())
+                    .unwrap_or(0);
+                let occ = parts[1].parse::<usize>().unwrap_or(0);
+                let fb = parts[2].parse::<usize>().ok();
+                Ok(OverrideKey {
+                    anchor: Some(ContentAnchor {
+                        hash,
+                        occurrence: occ,
+                    }),
+                    fallback: fb,
+                })
+            }
+        }
+    }
+}
+
+impl Serialize for OverrideKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for OverrideKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct OverrideKeyVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for OverrideKeyVisitor {
+            type Value = OverrideKey;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a node index integer or anchor string")
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(OverrideKey::index(v as usize))
+            }
+
+            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(OverrideKey::index(v.max(0) as usize))
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                use std::str::FromStr;
+                Ok(OverrideKey::from_str(v).unwrap())
+            }
+        }
+
+        deserializer.deserialize_any(OverrideKeyVisitor)
+    }
+}
+
+/// Node-index-resolved view of [`ScopeOverrides`] against a specific slice of [`Node`]s.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedOverrides {
+    pub delta: BTreeMap<usize, isize>,
+    pub suppressed: BTreeSet<usize>,
+    pub retype: BTreeMap<usize, BlockType>,
+    pub end: BTreeMap<usize, usize>,
+}
+
 /// Externally requested corrections to the default classification, keyed by
-/// the node index of a block's opener. An empty value reproduces
-/// [`HeuristicClassifier::classify`]. Serialisable, so a set of corrections
-/// (made by hand or by a [`BlockJudge`]) can be stored and replayed.
+/// content-based anchor (or fallback node index) of a block's opener. An empty
+/// value reproduces [`HeuristicClassifier::classify`]. Serialisable, so a set of
+/// corrections (made by hand or by a [`BlockJudge`]) can be stored and replayed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ScopeOverrides {
     /// Nodes to add to (positive) or drop from (negative) the block's end.
     /// Ignored for LaTeX environments, whose extent is explicit, and for
     /// blocks with an explicit [`Self::end`].
-    pub delta: BTreeMap<usize, isize>,
+    pub delta: BTreeMap<OverrideKey, isize>,
     /// Opener nodes to treat as ordinary content instead.
-    pub suppressed: BTreeSet<usize>,
+    pub suppressed: BTreeSet<OverrideKey>,
     /// The block opened at this node has this type instead of its best
     /// score. A node that does not open a block on its own opens one of this
     /// type. Must be a semantic type.
-    pub retype: BTreeMap<usize, BlockType>,
+    pub retype: BTreeMap<OverrideKey, BlockType>,
     /// Exclusive end node of the block opened here. Unlike `delta`, it may
     /// run through later openers (they become part of the block); headings
     /// and LaTeX environments still stop it.
-    pub end: BTreeMap<usize, usize>,
+    pub end: BTreeMap<OverrideKey, usize>,
 }
 
 impl ScopeOverrides {
@@ -92,35 +296,98 @@ impl ScopeOverrides {
             && self.end.is_empty()
     }
 
+    /// Resolves content-based anchors and fallback node indices against `nodes`.
+    pub fn resolve(&self, nodes: &[Node]) -> ResolvedOverrides {
+        let anchors = if nodes.is_empty() {
+            Vec::new()
+        } else {
+            compute_node_anchors(nodes)
+        };
+        let resolve_key = |key: &OverrideKey| -> Option<usize> {
+            if !nodes.is_empty()
+                && let Some(anchor) = key.anchor
+                && let Some(pos) = anchors.iter().position(|a| *a == anchor)
+            {
+                return Some(pos);
+            }
+            if let Some(fb) = key.fallback
+                && (nodes.is_empty() || fb < nodes.len())
+            {
+                return Some(fb);
+            }
+            None
+        };
+        let mut resolved = ResolvedOverrides::default();
+        for (key, &val) in &self.delta {
+            if let Some(idx) = resolve_key(key) {
+                resolved.delta.insert(idx, val);
+            }
+        }
+        for key in &self.suppressed {
+            if let Some(idx) = resolve_key(key) {
+                resolved.suppressed.insert(idx);
+            }
+        }
+        for (key, &val) in &self.retype {
+            if let Some(idx) = resolve_key(key) {
+                resolved.retype.insert(idx, val);
+            }
+        }
+        for (key, &val) in &self.end {
+            if let Some(idx) = resolve_key(key) {
+                resolved.end.insert(idx, val);
+            }
+        }
+        resolved
+    }
+
     /// Drops every correction for the block opened at `opener`.
     pub fn clear(&mut self, opener: usize) {
-        self.delta.remove(&opener);
-        self.suppressed.remove(&opener);
-        self.retype.remove(&opener);
-        self.end.remove(&opener);
+        self.clear_key(&OverrideKey::from(opener));
+    }
+
+    /// Drops every correction matching `key`.
+    pub fn clear_key(&mut self, key: &OverrideKey) {
+        let matches = |k: &OverrideKey| {
+            k == key
+                || (k.anchor.is_some() && k.anchor == key.anchor)
+                || (k.fallback.is_some() && k.fallback == key.fallback)
+        };
+        self.delta.retain(|k, _| !matches(k));
+        self.suppressed.retain(|k| !matches(k));
+        self.retype.retain(|k, _| !matches(k));
+        self.end.retain(|k, _| !matches(k));
     }
 
     /// Checks the corrections against a document of `nodes` nodes.
     pub fn validate(&self, nodes: usize) -> std::result::Result<(), String> {
-        let check = |i: usize, what: &str| {
-            if i < nodes {
-                Ok(())
-            } else {
-                Err(format!("{what}: node {i} is past the end ({nodes} nodes)"))
+        let check = |key: &OverrideKey, what: &str| {
+            if let Some(i) = key.fallback
+                && i >= nodes
+                && key.anchor.is_none()
+            {
+                return Err(format!("{what}: node {i} is past the end ({nodes} nodes)"));
             }
+            Ok(())
         };
-        for &i in self.delta.keys().chain(&self.suppressed) {
-            check(i, "override")?;
+        for key in self.delta.keys() {
+            check(key, "override")?;
         }
-        for (&i, kind) in &self.retype {
-            check(i, "retype")?;
+        for key in &self.suppressed {
+            check(key, "override")?;
+        }
+        for (key, kind) in &self.retype {
+            check(key, "retype")?;
             if !kind.is_semantic() {
                 return Err(format!("retype: `{}` is not a block type", kind.slug()));
             }
         }
-        for (&i, &end) in &self.end {
-            check(i, "end")?;
-            if end <= i || end > nodes {
+        for (key, &end) in &self.end {
+            check(key, "end")?;
+            if let Some(i) = key.fallback
+                && (end <= i || end > nodes)
+                && key.anchor.is_none()
+            {
                 return Err(format!("end: block at node {i} cannot end at {end}"));
             }
         }
@@ -297,6 +564,7 @@ impl HeuristicClassifier {
     pub fn classify_detailed(&self, nodes: &[Node], overrides: &ScopeOverrides) -> Classification {
         let n = nodes.len();
         let scores: Vec<NodeScore> = nodes.iter().map(|node| self.score_node(node)).collect();
+        let resolved = overrides.resolve(nodes);
 
         // LaTeX environments: `env_first` opens, `covered` belongs to one.
         let mut env_first = vec![false; n];
@@ -304,7 +572,7 @@ impl HeuristicClassifier {
         let mut i = 0;
         while i < n {
             match &nodes[i].env {
-                Some(env) if !overrides.suppressed.contains(&i) => {
+                Some(env) if !resolved.suppressed.contains(&i) => {
                     let end = (i + env.len.max(1)).min(n);
                     env_first[i] = true;
                     covered[i + 1..end].fill(true);
@@ -315,7 +583,7 @@ impl HeuristicClassifier {
         }
 
         let retype = |i: usize| {
-            overrides
+            resolved
                 .retype
                 .get(&i)
                 .copied()
@@ -324,14 +592,14 @@ impl HeuristicClassifier {
         let base_opens = |i: usize| {
             !covered[i]
                 && (env_first[i]
-                    || (!overrides.suppressed.contains(&i)
+                    || (!resolved.suppressed.contains(&i)
                         && (scores[i].opens || retype(i).is_some())))
         };
         let is_heading = |i: usize| matches!(nodes[i].kind, NodeKind::Heading(_)) && !covered[i];
         // An explicit end swallows the openers before it, up to a heading or
         // an environment.
         let mut absorbed = vec![false; n];
-        for (&i, &end) in &overrides.end {
+        for (&i, &end) in &resolved.end {
             if i >= n || absorbed[i] || env_first[i] || !base_opens(i) {
                 continue;
             }
@@ -369,10 +637,10 @@ impl HeuristicClassifier {
                 (limit, at_limit)
             };
             let adjust = |natural: usize, reason: EndReason| {
-                let end = match overrides.end.get(&i) {
+                let end = match resolved.end.get(&i) {
                     Some(&end) => end.clamp(i + 1, limit),
                     None => {
-                        let delta = overrides.delta.get(&i).copied().unwrap_or(0);
+                        let delta = resolved.delta.get(&i).copied().unwrap_or(0);
                         (natural as isize + delta).clamp(i as isize + 1, limit as isize) as usize
                     }
                 };
@@ -433,7 +701,7 @@ impl HeuristicClassifier {
                     EndReason::Structural,
                 );
                 i += 1;
-            } else if !overrides.suppressed.contains(&i)
+            } else if !resolved.suppressed.contains(&i)
                 && !absorbed[i]
                 && let Some(score) =
                     self.implicit_proof_score(nodes, &scores, builder.blocks.last(), i, scope_limit)
@@ -643,15 +911,38 @@ fn apply_verdict(
     verdict: Verdict,
     nodes: &[Node],
 ) -> bool {
-    let opener = block.span.start;
+    let opener_idx = block.span.start;
+    let opener = OverrideKey::for_node(nodes, opener_idx);
     let environment = block.end == EndReason::Environment;
-    let mut nudge = |by: isize| match overrides.end.get_mut(&opener) {
-        Some(end) => {
-            *end = end.saturating_add_signed(by).max(opener + 1);
+    let mut nudge = |by: isize| {
+        let existing_end = overrides
+            .end
+            .iter()
+            .find(|(k, _)| {
+                **k == opener
+                    || (k.anchor.is_some() && k.anchor == opener.anchor)
+                    || (k.fallback.is_some() && k.fallback == opener.fallback)
+            })
+            .map(|(k, _)| *k);
+        if let Some(k) = existing_end {
+            let end = overrides.end.get_mut(&k).unwrap();
+            *end = end.saturating_add_signed(by).max(opener_idx + 1);
             true
-        }
-        None => {
-            *overrides.delta.entry(opener).or_insert(0) += by;
+        } else {
+            let existing_delta = overrides
+                .delta
+                .iter()
+                .find(|(k, _)| {
+                    **k == opener
+                        || (k.anchor.is_some() && k.anchor == opener.anchor)
+                        || (k.fallback.is_some() && k.fallback == opener.fallback)
+                })
+                .map(|(k, _)| *k);
+            if let Some(k) = existing_delta {
+                *overrides.delta.get_mut(&k).unwrap() += by;
+            } else {
+                overrides.delta.insert(opener, by);
+            }
             true
         }
     };
@@ -661,7 +952,7 @@ fn apply_verdict(
         Verdict::Incomplete => nudge(1),
         Verdict::Overreach => nudge(-1),
         Verdict::Reject => {
-            overrides.clear(opener);
+            overrides.clear_key(&opener);
             overrides.suppressed.insert(opener);
             true
         }
@@ -672,20 +963,21 @@ fn apply_verdict(
             true
         }
         Verdict::Retype(_) => false,
-        Verdict::EndAt(end) if !environment && end > opener && end <= nodes.len() => {
+        Verdict::EndAt(end) if !environment && end > opener_idx && end <= nodes.len() => {
             overrides.delta.remove(&opener);
             overrides.end.insert(opener, end);
             true
         }
         Verdict::EndAt(_) => false,
-        Verdict::StartAt(start) if start == opener => true,
+        Verdict::StartAt(start) if start == opener_idx => true,
         Verdict::StartAt(start) if !environment && start < block.span.end => {
             let end = block.span.end;
-            overrides.clear(opener);
+            let start_key = OverrideKey::for_node(nodes, start);
+            overrides.clear_key(&opener);
             overrides.suppressed.insert(opener);
-            overrides.clear(start);
-            overrides.retype.insert(start, block.kind);
-            overrides.end.insert(start, end);
+            overrides.clear_key(&start_key);
+            overrides.retype.insert(start_key, block.kind);
+            overrides.end.insert(start_key, end);
             true
         }
         Verdict::StartAt(_) => false,
@@ -1195,9 +1487,9 @@ mod tests {
         let c = HeuristicClassifier::default();
         let nodes = parse_markdown(md);
         let mut overrides = ScopeOverrides::default();
-        overrides.delta.insert(0, -1);
+        overrides.delta.insert(0.into(), -1);
         assert_eq!(c.classify_with_overrides(&nodes, &overrides)[0].span, 0..3);
-        overrides.suppressed.insert(0);
+        overrides.suppressed.insert(0.into());
         let kinds_now = kinds(&c.classify_with_overrides(&nodes, &overrides));
         assert_eq!(kinds_now[0], BlockType::Text);
     }
@@ -1237,7 +1529,7 @@ mod tests {
         );
 
         let mut overrides = ScopeOverrides::default();
-        overrides.delta.insert(0, 1);
+        overrides.delta.insert(0.into(), 1);
         assert_eq!(
             c.classify_with_overrides(&nodes, &overrides)[0].end,
             EndReason::Override
@@ -1364,8 +1656,8 @@ mod tests {
         let c = HeuristicClassifier::default();
         let nodes = parse_markdown("Theorem 1. A.\n\nPlain prose here.\n\nMore prose.");
         let mut overrides = ScopeOverrides::default();
-        overrides.retype.insert(0, BlockType::Lemma);
-        overrides.retype.insert(1, BlockType::Remark);
+        overrides.retype.insert(0.into(), BlockType::Lemma);
+        overrides.retype.insert(1.into(), BlockType::Remark);
         let blocks = c.classify_with_overrides(&nodes, &overrides);
         assert_eq!(
             kinds(&blocks),
@@ -1374,7 +1666,7 @@ mod tests {
         assert_eq!(blocks[0].id, "block-lemma-1");
         assert_eq!(blocks[0].title, "Lemma 1");
         assert!(overrides.validate(nodes.len()).is_ok());
-        overrides.retype.insert(2, BlockType::Text);
+        overrides.retype.insert(2.into(), BlockType::Text);
         assert!(overrides.validate(nodes.len()).is_err());
     }
 
@@ -1384,7 +1676,7 @@ mod tests {
         let nodes =
             parse_markdown("Theorem 1. A.\n\nLemma 2. B.\n\nText.\n\n## Next\n\nRemark. C.");
         let mut overrides = ScopeOverrides::default();
-        overrides.end.insert(0, 3);
+        overrides.end.insert(0.into(), 3);
         let blocks = c.classify_with_overrides(&nodes, &overrides);
         assert_eq!(
             kinds(&blocks),
@@ -1395,7 +1687,7 @@ mod tests {
             (0..3, EndReason::Override)
         );
 
-        overrides.end.insert(0, 5);
+        overrides.end.insert(0.into(), 5);
         assert_eq!(c.classify_with_overrides(&nodes, &overrides)[0].span, 0..3);
 
         // Serialisable for the desktop app and for replay logs.
@@ -1516,5 +1808,79 @@ mod tests {
         assert_eq!(blocks[2].title, "Theorem 1.3 (Lagrange)");
         assert_eq!(blocks[3].proves.as_deref(), Some("block-theorem-1"));
         assert_eq!(blocks[4].title, "قضیه ۳.۲");
+    }
+
+    #[test]
+    fn stable_anchors_survive_editing_above_block() {
+        let c = HeuristicClassifier::default();
+
+        // Original document: Theorem 1 is at node index 1 (after the heading)
+        let doc_v1 = "# Introduction\n\n**Theorem 1.** Every finite field has prime power order.\n\nProof. Follows from algebra.";
+        let nodes_v1 = parse_markdown(doc_v1);
+        assert_eq!(nodes_v1[1].kind, NodeKind::Paragraph);
+
+        // User overrides Theorem 1 (node 1) to be a Proposition using a content anchor
+        let mut overrides = ScopeOverrides::default();
+        let key = OverrideKey::for_node(&nodes_v1, 1);
+        overrides.retype.insert(key, BlockType::Proposition);
+
+        // Verify v1 classification: node 1 is retyped as Proposition
+        let blocks_v1 = c.classify_with_overrides(&nodes_v1, &overrides);
+        assert_eq!(blocks_v1[1].kind, BlockType::Proposition);
+
+        // Now user edits text ABOVE the theorem, inserting 2 new paragraphs
+        let doc_v2 = "# Introduction\n\nFirst newly inserted paragraph.\n\nSecond newly inserted paragraph.\n\n**Theorem 1.** Every finite field has prime power order.\n\nProof. Follows from algebra.";
+        let nodes_v2 = parse_markdown(doc_v2);
+        // In v2, Theorem 1 has moved from index 1 to index 3!
+        assert_eq!(nodes_v2[3].kind, NodeKind::Paragraph);
+        assert!(nodes_v2[3].flat.contains("Theorem 1"));
+
+        // With content-based anchors, the override STILL finds Theorem 1 at node 3!
+        let blocks_v2 = c.classify_with_overrides(&nodes_v2, &overrides);
+        // Newly inserted paragraphs remain ordinary text
+        assert_eq!(blocks_v2[1].kind, BlockType::Text);
+        // The theorem (now at node 3) is correctly retyped to Proposition!
+        let prop = blocks_v2
+            .iter()
+            .find(|b| b.kind == BlockType::Proposition)
+            .expect("proposition found");
+        assert_eq!(prop.span.start, 3);
+    }
+
+    #[test]
+    fn fallback_to_node_index_when_anchor_does_not_match() {
+        let c = HeuristicClassifier::default();
+        let doc = "# Title\n\n**Theorem 1.** Some statement.\n\nMore text.";
+        let nodes = parse_markdown(doc);
+
+        // Key with an unmatched anchor hash, but a valid fallback index of 1
+        let key = OverrideKey {
+            anchor: Some(ContentAnchor {
+                hash: 0xdeadbeef,
+                occurrence: 0,
+            }),
+            fallback: Some(1),
+        };
+        let mut overrides = ScopeOverrides::default();
+        overrides.retype.insert(key, BlockType::Lemma);
+
+        let blocks = c.classify_with_overrides(&nodes, &overrides);
+        assert_eq!(blocks[1].kind, BlockType::Lemma);
+    }
+
+    #[test]
+    fn override_key_round_trips_json() {
+        let key_anchor = OverrideKey::anchored(0x1234abcd, 0, 5);
+        let key_index = OverrideKey::index(3);
+
+        let mut overrides = ScopeOverrides::default();
+        overrides.retype.insert(key_anchor, BlockType::Lemma);
+        overrides.delta.insert(key_index, 2);
+        overrides.suppressed.insert(key_anchor);
+        overrides.end.insert(key_anchor, 7);
+
+        let json = serde_json::to_string(&overrides).unwrap();
+        let parsed: ScopeOverrides = serde_json::from_str(&json).unwrap();
+        assert_eq!(overrides, parsed);
     }
 }

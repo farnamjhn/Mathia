@@ -590,7 +590,7 @@ mod tests {
         // The corrections shown in the inspector reach the export.
         let mut corrected = Session::default();
         let mut overrides = ScopeOverrides::default();
-        overrides.retype.insert(1, BlockType::Lemma);
+        overrides.retype.insert(1.into(), BlockType::Lemma);
         corrected.set_overrides(overrides);
         assert!(
             corrected
@@ -662,7 +662,7 @@ mod tests {
     fn corrections_apply_to_analysis_and_preview() {
         let mut session = Session::default();
         let mut overrides = ScopeOverrides::default();
-        overrides.retype.insert(1, BlockType::Lemma);
+        overrides.retype.insert(1.into(), BlockType::Lemma);
         session.set_overrides(overrides);
         let view = session.analyze(&text()).unwrap();
         assert_eq!(view.document.blocks[1].kind, BlockType::Lemma);
@@ -673,13 +673,13 @@ mod tests {
 
         // Overrides that point past the document are reported, not ignored.
         let mut stale = ScopeOverrides::default();
-        stale.suppressed.insert(99);
+        stale.suppressed.insert(99.into());
         session.set_overrides(stale);
         assert!(session.analyze(&text()).unwrap_err().contains("reset them"));
         // The frontend sends them as JSON.
         let parsed: ScopeOverrides =
             serde_json::from_str(r#"{"retype": {"1": "lemma"}, "end": {"1": 3}}"#).unwrap();
-        assert_eq!(parsed.end.get(&1), Some(&3));
+        assert_eq!(parsed.end.get(&1.into()), Some(&3));
     }
 
     #[test]
@@ -703,7 +703,7 @@ mod tests {
         let start = theorem.span.start;
 
         let mut overrides = ScopeOverrides::default();
-        overrides.end.insert(start, start + 2);
+        overrides.end.insert(start.into(), start + 2);
         session.set_overrides(overrides);
 
         let after = session.analyze(&source).unwrap();

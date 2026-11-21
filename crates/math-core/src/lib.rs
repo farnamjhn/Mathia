@@ -26,8 +26,8 @@ pub mod text;
 pub mod tree;
 
 pub use classifier::{
-    AppliedVerdict, BlockJudge, Classification, HeuristicClassifier, JudgedClassification,
-    NodeScore, ScopeOverrides, Verdict,
+    AppliedVerdict, BlockJudge, Classification, ContentAnchor, HeuristicClassifier,
+    JudgedClassification, NodeScore, OverrideKey, ResolvedOverrides, ScopeOverrides, Verdict,
 };
 pub use clean_html::{analyze_html, analyze_html_detailed, clean_html, is_html, is_html_file};
 pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, Scorer, ScoringConfig};

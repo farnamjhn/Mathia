@@ -504,6 +504,7 @@ pub fn apply_overrides(document: &mut Document, overrides: &ScopeOverrides) {
         return;
     }
 
+    let resolved = overrides.resolve(&document.nodes);
     let blocks = std::mem::take(&mut document.blocks);
     let mut merged = Vec::with_capacity(blocks.len());
     let mut i = 0;
@@ -512,8 +513,8 @@ pub fn apply_overrides(document: &mut Document, overrides: &ScopeOverrides) {
         let start = block.span.start;
         let mut next = i + 1;
         if block.kind != BlockType::Heading {
-            let wanted = overrides.end.get(&start).copied().or_else(|| {
-                overrides
+            let wanted = resolved.end.get(&start).copied().or_else(|| {
+                resolved
                     .delta
                     .get(&start)
                     .map(|delta| (block.span.end as isize + delta).max(start as isize + 1) as usize)
@@ -538,7 +539,7 @@ pub fn apply_overrides(document: &mut Document, overrides: &ScopeOverrides) {
             }
         }
 
-        if overrides.suppressed.contains(&start) {
+        if resolved.suppressed.contains(&start) {
             block.kind = BlockType::Text;
             block.title = "Content".to_string();
             block.heading_level = None;
@@ -547,7 +548,7 @@ pub fn apply_overrides(document: &mut Document, overrides: &ScopeOverrides) {
             block.proves = None;
             block.score = 0.0;
             block.end = EndReason::Structural;
-        } else if let Some(kind) = overrides
+        } else if let Some(kind) = resolved
             .retype
             .get(&start)
             .copied()
@@ -806,7 +807,7 @@ mod tests {
         assert_eq!(analysis.document.blocks[1].kind, BlockType::Theorem);
 
         let mut overrides = corrections();
-        overrides.end.insert(1, 3);
+        overrides.end.insert(1.into(), 3);
         apply_overrides(&mut analysis.document, &overrides);
         reindex(&mut analysis);
 
@@ -829,7 +830,7 @@ mod tests {
         let mut analysis = analyze_html_detailed(&sample());
         let mut overrides = corrections();
         // Ask to swallow everything, including the `h2` that follows.
-        overrides.end.insert(1, 5);
+        overrides.end.insert(1.into(), 5);
         apply_overrides(&mut analysis.document, &overrides);
 
         let theorem = &analysis.document.blocks[1];
@@ -847,7 +848,7 @@ mod tests {
     fn html_suppressed_block_becomes_text() {
         let mut analysis = analyze_html_detailed(&sample());
         let mut overrides = corrections();
-        overrides.suppressed.insert(1);
+        overrides.suppressed.insert(1.into());
         apply_overrides(&mut analysis.document, &overrides);
 
         let block = &analysis.document.blocks[1];
@@ -859,7 +860,7 @@ mod tests {
     fn html_retype_changes_the_block_kind() {
         let mut analysis = analyze_html_detailed(&sample());
         let mut overrides = corrections();
-        overrides.retype.insert(2, BlockType::Definition);
+        overrides.retype.insert(2.into(), BlockType::Definition);
         apply_overrides(&mut analysis.document, &overrides);
 
         let block = &analysis.document.blocks[2];
@@ -871,7 +872,7 @@ mod tests {
     fn html_merged_analysis_explains_without_panicking() {
         let mut analysis = analyze_html_detailed(&sample());
         let mut overrides = corrections();
-        overrides.end.insert(1, 3);
+        overrides.end.insert(1.into(), 3);
         apply_overrides(&mut analysis.document, &overrides);
         reindex(&mut analysis);
 

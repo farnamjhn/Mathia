@@ -11,12 +11,74 @@
 //! Byte offsets in [`crate::model::Node::source`] refer to the *normalised*
 //! text when a document goes through [`crate::analyze`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::model::Direction;
 
 /// Environments KaTeX renders as display math; wrapped in `$$` when found bare.
 const MATH_ENVS: [&str; 4] = ["equation", "align", "alignat", "gather"];
+
+/// Keywords that mark semantic blocks or document structure; lines containing
+/// these must never be stripped as running headers/footers.
+const PROTECTED_KEYWORDS: &[&str] = &[
+    "theorem",
+    "thm",
+    "lemma",
+    "proposition",
+    "prop",
+    "corollary",
+    "cor",
+    "definition",
+    "defn",
+    "def",
+    "proof",
+    "example",
+    "remark",
+    "note",
+    "exercise",
+    "problem",
+    "solution",
+    "claim",
+    "notation",
+    "abstract",
+    "introduction",
+    "conclusion",
+    "references",
+    "bibliography",
+    "contents",
+    "case",
+    "step",
+    "قضیه",
+    "لم",
+    "گزاره",
+    "نتیجه",
+    "تعریف",
+    "برهان",
+    "اثبات",
+    "مثال",
+    "تذکر",
+    "نکته",
+    "توجه",
+    "تمرین",
+    "مسئله",
+    "مساله",
+    "حل",
+    "پاسخ",
+    "راه حل",
+    "ادعا",
+    "نماد",
+    "نمادگذاری",
+    "چکیده",
+    "مقدمه",
+    "نتیجه‌گیری",
+    "نتیجه گیری",
+    "منابع",
+    "مراجع",
+    "فهرست",
+    "حالت",
+    "گام",
+    "مرحله",
+];
 
 /// Runs every pass, in order.
 pub fn normalize_markdown(src: &str) -> String {
@@ -26,7 +88,147 @@ pub fn normalize_markdown(src: &str) -> String {
     let s = fix_line_breaks(&s);
     let s = fix_bold_markers(&s);
     let s = balance_dollars(&s);
+    let s = strip_page_artifacts(&s);
     crate::repair::wrap_bare_math(&s)
+}
+
+fn is_digit(c: char) -> bool {
+    c.is_ascii_digit()
+        || ('\u{06F0}'..='\u{06F9}').contains(&c)
+        || ('\u{0660}'..='\u{0669}').contains(&c)
+}
+
+/// A line containing only ASCII or Persian digits, optionally wrapped in dashes
+/// or spaces (e.g. `12`, `۱۲`, `- 4 -`, `— 12 —`).
+pub fn is_isolated_page_number(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return false;
+    }
+    let core =
+        t.trim_matches(|c: char| c == '-' || c == '–' || c == '—' || c == '~' || c.is_whitespace());
+    if core.is_empty() {
+        return false;
+    }
+    let digit_count = core.chars().filter(|c| is_digit(*c)).count();
+    digit_count > 0 && digit_count <= 6 && core.chars().all(|c| is_digit(c) || c.is_whitespace())
+}
+
+/// Whether a line qualifies as a candidate running header or footer.
+pub fn is_running_header_footer_candidate(line: &str) -> bool {
+    let t = line.trim();
+    let char_count = t.chars().count();
+    if !(3..=100).contains(&char_count) {
+        return false;
+    }
+    if is_isolated_page_number(t) {
+        return false;
+    }
+    // Markdown structural elements that must never be treated as running headers.
+    if t.starts_with("```")
+        || t.starts_with("~~~")
+        || t.starts_with("$$")
+        || t.starts_with('#')
+        || t.starts_with('|')
+        || t.starts_with('>')
+        || t.starts_with("- ")
+        || t.starts_with("* ")
+        || t.starts_with("+ ")
+    {
+        return false;
+    }
+    // Ordered list item (e.g. `1. `, `(1) `)
+    if let Some(first) = t.chars().next()
+        && is_digit(first)
+    {
+        let after_digits = t.trim_start_matches(is_digit);
+        if after_digits.starts_with(". ") || after_digits.starts_with(") ") {
+            return false;
+        }
+    }
+    // Thematic break
+    if char_count >= 3
+        && t.chars()
+            .all(|c| c == '-' || c == '*' || c == '_' || c.is_whitespace())
+    {
+        return false;
+    }
+    // Sentence cues and continuations
+    if t.ends_with(':') || t.ends_with(',') || t.ends_with('،') {
+        return false;
+    }
+    // Math display or environments
+    if t.contains("$$") || t.contains(r"\[") || t.contains(r"\begin{") {
+        return false;
+    }
+    // Check against protected keywords
+    let folded = crate::text::fold(t);
+    for &kw in PROTECTED_KEYWORDS {
+        if crate::text::contains_word(&folded, kw) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Strips isolated page numbers (e.g., `12`, `۱۲`, `- 4 -`) and repeating
+/// running headers/footers before Markdown parsing so they do not split
+/// multi-paragraph blocks.
+pub fn strip_page_artifacts(src: &str) -> String {
+    let z = zones(src);
+    let mut lines = Vec::new();
+    let mut offset = 0;
+    for line in src.split_inclusive('\n') {
+        let len = line.len();
+        let is_text = z[offset..offset + len]
+            .iter()
+            .all(|zone| *zone == Zone::Text);
+        lines.push((offset, line, is_text));
+        offset += len;
+    }
+
+    // Count occurrences of candidate running headers/footers in text zones.
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for (_, line, is_text) in &lines {
+        if *is_text && is_running_header_footer_candidate(line) {
+            *counts.entry(line.trim().to_string()).or_insert(0) += 1;
+        }
+    }
+
+    // Identify which lines to drop.
+    let mut drop = vec![false; lines.len()];
+    for (i, (_, line, is_text)) in lines.iter().enumerate() {
+        if !*is_text {
+            continue;
+        }
+        if is_isolated_page_number(line) {
+            drop[i] = true;
+        } else if is_running_header_footer_candidate(line)
+            && let Some(&cnt) = counts.get(line.trim())
+            && cnt >= 2
+        {
+            drop[i] = true;
+        }
+    }
+
+    if !drop.iter().any(|d| *d) {
+        return src.to_string();
+    }
+
+    let mut out = String::with_capacity(src.len());
+    let mut prev_was_blank = false;
+    for (i, (_, line, _)) in lines.iter().enumerate() {
+        if drop[i] {
+            continue;
+        }
+        let is_blank = line.trim().is_empty();
+        if is_blank && prev_was_blank {
+            continue;
+        }
+        out.push_str(line);
+        prev_was_blank = is_blank;
+    }
+    out
 }
 
 /// A model's reply saved whole: the transcription prompt asks for the document
@@ -738,5 +940,61 @@ mod tests {
              $$\\begin{equation*} a = b \\tag{1}\\end{equation*}$$\n\nطبق (1) و \\$$x$"
         );
         assert_eq!(normalize_markdown(&once), once);
+    }
+
+    #[test]
+    fn page_number_artifacts_are_stripped() {
+        assert!(is_isolated_page_number("12"));
+        assert!(is_isolated_page_number("۱۲"));
+        assert!(is_isolated_page_number("- 4 -"));
+        assert!(is_isolated_page_number("— 12 —"));
+        assert!(is_isolated_page_number("- ۱۲ -"));
+        assert!(is_isolated_page_number(" ~ 5 ~ "));
+
+        // Non-page-numbers protected
+        assert!(!is_isolated_page_number("---"));
+        assert!(!is_isolated_page_number("- - -"));
+        assert!(!is_isolated_page_number("1 - 2"));
+        assert!(!is_isolated_page_number("1. Introduction"));
+        assert!(!is_isolated_page_number("1."));
+        assert!(!is_isolated_page_number("Chapter 1"));
+        assert!(!is_isolated_page_number("1234567890"));
+
+        let src = "**Theorem 1.** Part one.\n\n12\n\nPart two.";
+        let out = strip_page_artifacts(src);
+        assert_eq!(out, "**Theorem 1.** Part one.\n\nPart two.");
+
+        let persian_src = "**قضیه ۱.** بخش اول.\n\n- ۱۲ -\n\nبخش دوم.";
+        let out = strip_page_artifacts(persian_src);
+        assert_eq!(out, "**قضیه ۱.** بخش اول.\n\nبخش دوم.");
+
+        // Inside code block: digits are NOT stripped
+        let code_src = "```python\n12\n- 4 -\n```\n";
+        assert_eq!(strip_page_artifacts(code_src), code_src);
+    }
+
+    #[test]
+    fn repeating_running_headers_are_stripped() {
+        let doc = "Chapter 1. Vector Spaces\n\
+                   12\n\
+                   Text on page 1.\n\n\
+                   Chapter 1. Vector Spaces\n\
+                   13\n\
+                   Text on page 2.\n";
+        let cleaned = strip_page_artifacts(doc);
+        assert!(!cleaned.contains("Chapter 1. Vector Spaces"));
+        assert!(!cleaned.contains("12"));
+        assert!(!cleaned.contains("13"));
+        assert!(cleaned.contains("Text on page 1."));
+        assert!(cleaned.contains("Text on page 2."));
+
+        // Single occurrences are preserved
+        let single = "Unique Title\n\nSome text.";
+        assert_eq!(strip_page_artifacts(single), single);
+
+        // Keywords like Proof or Example are preserved even if repeating
+        let proofs = "**Proof.**\nStep 1.\n\n**Proof.**\nStep 2.";
+        let res = strip_page_artifacts(proofs);
+        assert!(res.contains("**Proof.**"));
     }
 }
