@@ -96,9 +96,6 @@
   let source = null;
   let customTitle = null;
   let orderPaths = [];
-  let draggedIndex = null;
-  /** True while dragging an order-list item (suppresses the Tauri file-drop overlay). */
-  let internalDrag = false;
   let analysis = null;
   let revision = 0;
   let selected = null;
@@ -1312,19 +1309,148 @@
 
   // ── Multi-markdown ordering ───────────────────────────────────────────
 
-  // Allow HTML5 drag-and-drop reordering inside the order list by preventing
-  // the default browser/Tauri behaviour on the container.
-  el.orderList.addEventListener("dragover", (e) => {
-    if (internalDrag) {
-      e.preventDefault();
-      e.stopPropagation();
+  // Reorder list items via pointer events. Standard HTML5 drag-and-drop is
+  // intercepted by Tauri's window-level file drop handler on macOS/Windows,
+  // so pointer events provide smooth, reliable in-app reordering.
+  el.orderList.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest("button")) return;
+    const item = e.target.closest(".order-item");
+    if (!item) return;
+
+    const startIndex = Number(item.dataset.index);
+    if (Number.isNaN(startIndex) || orderPaths.length <= 1) return;
+
+    const pointerId = e.pointerId;
+    const startY = e.clientY;
+    const startX = e.clientX;
+    const initialRect = item.getBoundingClientRect();
+    const grabOffsetY = e.clientY - initialRect.top;
+
+    let isDragging = false;
+    let targetIndex = startIndex;
+    let ghost = null;
+
+    function onPointerMove(moveEvent) {
+      if (moveEvent.pointerId !== pointerId) return;
+
+      const dy = moveEvent.clientY - startY;
+      const dx = moveEvent.clientX - startX;
+
+      if (!isDragging) {
+        if (Math.hypot(dx, dy) < 4) return;
+        isDragging = true;
+        item.classList.add("dragging");
+
+        ghost = item.cloneNode(true);
+        ghost.classList.add("order-item-ghost");
+        ghost.style.position = "fixed";
+        ghost.style.left = initialRect.left + "px";
+        ghost.style.top = (moveEvent.clientY - grabOffsetY) + "px";
+        ghost.style.width = initialRect.width + "px";
+        ghost.style.height = initialRect.height + "px";
+        ghost.style.margin = "0";
+        ghost.style.zIndex = "1000";
+        ghost.style.pointerEvents = "none";
+        ghost.style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.22)";
+        ghost.style.transform = "scale(1.02)";
+        ghost.style.transition = "none";
+        ghost.style.opacity = "0.95";
+        el.orderDialog.appendChild(ghost);
+        document.body.style.cursor = "grabbing";
+      }
+
+      moveEvent.preventDefault();
+
+      if (ghost) {
+        ghost.style.top = (moveEvent.clientY - grabOffsetY) + "px";
+      }
+
+      const scrollContainer = el.orderList.parentElement;
+      if (scrollContainer) {
+        const containerRect = scrollContainer.getBoundingClientRect();
+        if (moveEvent.clientY < containerRect.top + 32) {
+          scrollContainer.scrollTop -= 6;
+        } else if (moveEvent.clientY > containerRect.bottom - 32) {
+          scrollContainer.scrollTop += 6;
+        }
+      }
+
+      const allItems = Array.from(el.orderList.querySelectorAll(".order-item"));
+      let newTargetIndex = startIndex;
+
+      for (let i = 0; i < allItems.length; i++) {
+        const r = allItems[i].getBoundingClientRect();
+        if (moveEvent.clientY >= r.top && moveEvent.clientY <= r.bottom) {
+          newTargetIndex = i;
+          break;
+        }
+      }
+
+      if (allItems.length > 0) {
+        if (moveEvent.clientY < allItems[0].getBoundingClientRect().top) {
+          newTargetIndex = 0;
+        } else if (moveEvent.clientY > allItems[allItems.length - 1].getBoundingClientRect().bottom) {
+          newTargetIndex = allItems.length - 1;
+        }
+      }
+
+      targetIndex = newTargetIndex;
+
+      allItems.forEach((it, i) => {
+        if (isDragging && i === targetIndex && i !== startIndex) {
+          it.classList.add("drag-over");
+        } else {
+          it.classList.remove("drag-over");
+        }
+      });
     }
-  });
-  el.orderList.addEventListener("drop", (e) => {
-    if (internalDrag) {
-      e.preventDefault();
-      e.stopPropagation();
+
+    function cleanup() {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.cursor = "";
+
+      if (ghost) {
+        ghost.remove();
+        ghost = null;
+      }
+
+      item.classList.remove("dragging");
+      const allItems = el.orderList.querySelectorAll(".order-item");
+      allItems.forEach((it) => it.classList.remove("drag-over"));
     }
+
+    function onPointerUp(upEvent) {
+      if (upEvent.pointerId !== pointerId) return;
+      const wasDragging = isDragging;
+      const finalTarget = targetIndex;
+      cleanup();
+
+      if (wasDragging && finalTarget !== null && finalTarget !== startIndex) {
+        const [moved] = orderPaths.splice(startIndex, 1);
+        orderPaths.splice(finalTarget, 0, moved);
+        renderOrderList();
+      }
+    }
+
+    function onPointerCancel(cancelEvent) {
+      if (cancelEvent.pointerId !== pointerId) return;
+      cleanup();
+    }
+
+    function onKeyDown(keyEvent) {
+      if (keyEvent.key === "Escape") {
+        cleanup();
+      }
+    }
+
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+    window.addEventListener("keydown", onKeyDown);
   });
 
   function openOrderDialog(paths) {
@@ -1348,7 +1474,6 @@
 
     el.orderList.replaceChildren(...orderPaths.map((path, index) => {
       const item = node("li", "order-item");
-      item.draggable = true;
       item.dataset.index = String(index);
 
       // Drag handle icon
@@ -1413,45 +1538,6 @@
 
       actions.append(upBtn, downBtn, removeBtn);
       item.append(handle, badge, info, actions);
-
-      // Drag and drop event listeners
-      item.addEventListener("dragstart", (e) => {
-        draggedIndex = index;
-        internalDrag = true;
-        item.classList.add("dragging");
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", String(index));
-      });
-
-      item.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        e.dataTransfer.dropEffect = "move";
-        item.classList.add("drag-over");
-      });
-
-      item.addEventListener("dragleave", () => {
-        item.classList.remove("drag-over");
-      });
-
-      item.addEventListener("drop", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        item.classList.remove("drag-over");
-        if (draggedIndex !== null && draggedIndex !== index) {
-          const [moved] = orderPaths.splice(draggedIndex, 1);
-          orderPaths.splice(index, 0, moved);
-          draggedIndex = null;
-          renderOrderList();
-        }
-      });
-
-      item.addEventListener("dragend", () => {
-        item.classList.remove("dragging");
-        draggedIndex = null;
-        internalDrag = false;
-      });
-
       return item;
     }));
   }
@@ -1477,19 +1563,6 @@
 
   el.orderCancel.addEventListener("click", () => {
     el.orderDialog.close();
-  });
-
-  // Prevent the dialog backdrop from swallowing drag events during reorder.
-  el.orderDialog.addEventListener("dragover", (e) => {
-    if (internalDrag) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-    }
-  });
-  el.orderDialog.addEventListener("drop", (e) => {
-    if (internalDrag) {
-      e.preventDefault();
-    }
   });
 
   el.orderDialog.addEventListener("click", (event) => {
@@ -1610,11 +1683,10 @@
     .catch((error) => setStatus(String(error), true))
     .finally(loadRecent);
 
-  listen("tauri://drag-enter", () => { if (!internalDrag) el.drop.hidden = false; });
-  listen("tauri://drag-leave", () => { if (!internalDrag) el.drop.hidden = true; });
+  listen("tauri://drag-enter", () => { el.drop.hidden = false; });
+  listen("tauri://drag-leave", () => { el.drop.hidden = true; });
   listen("tauri://drag-drop", (event) => {
     el.drop.hidden = true;
-    if (internalDrag) return;
     const paths = (event.payload.paths || []).filter((p) => SUPPORTED_INPUT.test(p));
     if (paths.length === 0) {
       setStatus("Drop Markdown or HTML files (.md, .html, .txt)", true);

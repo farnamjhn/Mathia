@@ -938,6 +938,7 @@ pre {
   user-select: none;
   -webkit-user-select: none;
   cursor: grab;
+  touch-action: none;
   transition: background var(--ease), border-color var(--ease);
 }
 
@@ -955,6 +956,20 @@ pre {
 .order-item.drag-over {
   border-color: var(--ink);
   background: var(--ink-wash);
+}
+
+.order-item-ghost {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  background: var(--desk);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grabbing;
 }
 
 .order-drag-handle {
