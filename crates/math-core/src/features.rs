@@ -62,6 +62,65 @@ pub struct Features {
     pub continuation: bool,
 }
 
+/// Type alias for node-level static features.
+pub type NodeFeatures = Features;
+
+/// Exported JSON schema for `dump-features`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeatureDump {
+    pub nodes: Vec<DumpNode>,
+    pub features: Vec<NodeFeatures>,
+}
+
+/// A node representation serialized during `dump-features`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DumpNode {
+    pub index: usize,
+    pub kind: String,
+    pub flat_text: String,
+    pub char_len: usize,
+    pub env_span: Option<crate::model::EnvSpan>,
+    pub features: NodeFeatures,
+}
+
+/// Dumps AST nodes and extracted static features for an input Markdown document.
+pub fn dump_features(markdown: &str, config: &ScoringConfig) -> FeatureDump {
+    let normalized = crate::normalize::normalize_markdown(markdown);
+    let nodes = crate::parser::parse_markdown(&normalized);
+    let lexicon = Lexicon::new(config);
+    let mut dump_nodes = Vec::with_capacity(nodes.len());
+    let mut dump_features = Vec::with_capacity(nodes.len());
+    for (index, node) in nodes.iter().enumerate() {
+        let features = lexicon.extract(node);
+        let kind = match &node.kind {
+            crate::model::NodeKind::Paragraph => "paragraph",
+            crate::model::NodeKind::DisplayMath => "display_math",
+            crate::model::NodeKind::List => "list",
+            crate::model::NodeKind::ListItem => "list_item",
+            crate::model::NodeKind::Heading(_) => "heading",
+            crate::model::NodeKind::Quote => "quote",
+            crate::model::NodeKind::Rule => "rule",
+            crate::model::NodeKind::Table => "table",
+            crate::model::NodeKind::Code => "code",
+            crate::model::NodeKind::Other => "other",
+        }
+        .to_string();
+        dump_nodes.push(DumpNode {
+            index,
+            kind,
+            flat_text: node.flat.clone(),
+            char_len: node.flat.chars().count(),
+            env_span: node.env.clone(),
+            features: features.clone(),
+        });
+        dump_features.push(features);
+    }
+    FeatureDump {
+        nodes: dump_nodes,
+        features: dump_features,
+    }
+}
+
 /// The [`ScoringConfig`] word lists, folded once for matching.
 #[derive(Debug, Clone)]
 pub struct Lexicon {
@@ -481,5 +540,17 @@ mod tests {
             .lead
             .unwrap();
         assert!(hit.reference && !hit.labelled);
+    }
+
+    #[test]
+    fn dump_features_produces_consistent_schema() {
+        let md = "# Title\n\n**Theorem 1.** Let $G$ be a group.\n\n$$\\sum_{i=1}^n i$$\n";
+        let dump = dump_features(md, &ScoringConfig::default());
+        assert_eq!(dump.nodes.len(), 3);
+        assert_eq!(dump.features.len(), 3);
+        assert_eq!(dump.nodes[0].kind, "heading");
+        assert_eq!(dump.nodes[1].kind, "paragraph");
+        assert_eq!(dump.nodes[2].kind, "display_math");
+        assert!(dump.nodes[1].features.lead.is_some());
     }
 }

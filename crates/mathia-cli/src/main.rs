@@ -21,13 +21,16 @@ use math_judge::{CachedJudge, CommandJudge, Policy, Replay};
 const KATEX_CDN_VERSION: &str = "0.16.22";
 
 const USAGE: &str = "usage: mathia <input.md | input.html | folder> [options]
+       mathia dump-features <input.md> [-o output.json] [--config scoring.toml]
 
   -o, --output FILE     where to write the HTML (default: input with .html, or .clean.html for HTML);
-                        for a folder input, the output folder (default: the input folder)
+                        for a folder input, the output folder (default: the input folder);
+                        for dump-features, where to write the JSON (default: stdout)
       --watch           recompile whenever an input file changes (Ctrl+C stops)
       --fix             write repaired Markdown instead of HTML: inline formulas that
                         lost their $ $, \\( \\) delimiters, bare environments, unbalanced $
                         (default output: input with .fixed.md; -o may name the input itself)
+      --dump-features   dump AST nodes and extracted NodeFeatures as JSON (or subcommand: mathia dump-features <input.md>)
       --config FILE     scoring configuration (.toml or .json)
       --dump-config     print the default scoring configuration as TOML and exit
       --explain         print every node's scores and why each block ended
@@ -100,6 +103,7 @@ fn run() -> Result<(), String> {
     let mut explain = false;
     let mut watch = false;
     let mut fix = false;
+    let mut dump_features = false;
     let mut ai_providers: Vec<AiProvider> = Vec::new();
     let mut custom_providers: Vec<CustomProvider> = Vec::new();
     let mut judge_command: Option<String> = None;
@@ -126,6 +130,7 @@ fn run() -> Result<(), String> {
             "--explain" => explain = true,
             "--watch" => watch = true,
             "--fix" => fix = true,
+            "dump-features" | "--dump-features" => dump_features = true,
             "--judge" => judge_command = Some(value(&mut args, &arg)?),
             "--judge-model" => judge_model = Some(value(&mut args, &arg)?),
             "--judge-cache" => judge_cache = Some(value(&mut args, &arg)?.into()),
@@ -209,6 +214,31 @@ fn run() -> Result<(), String> {
         && (judge_cache.is_some() || judge_log.is_some() || judge_model.is_some())
     {
         return Err("--judge-model, --judge-cache and --judge-log need --judge".into());
+    }
+
+    if dump_features {
+        if watch || judge_command.is_some() || overrides_path.is_some() || fix {
+            return Err(
+                "dump-features does not go with --watch, --judge, --overrides or --fix".into(),
+            );
+        }
+        if input.is_dir() {
+            return Err("dump-features takes a Markdown file, not a folder".into());
+        }
+        let config = match config_path {
+            Some(path) => ScoringConfig::load(path).map_err(|e| e.to_string())?,
+            None => ScoringConfig::default(),
+        };
+        let content =
+            std::fs::read_to_string(&input).map_err(|e| format!("{}: {e}", input.display()))?;
+        let dump = math_core::dump_features(&content, &config);
+        let json = serde_json::to_string_pretty(&dump).map_err(|e| e.to_string())?;
+        if let Some(out) = output {
+            std::fs::write(&out, json).map_err(|e| format!("{}: {e}", out.display()))?;
+        } else {
+            println!("{json}");
+        }
+        return Ok(());
     }
 
     if fix {

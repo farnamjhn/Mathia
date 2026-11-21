@@ -21,12 +21,13 @@ use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Scorer, ScoringConfig};
+use crate::config::ScoringConfig;
 use crate::crossref;
-use crate::features::{Features, Lexicon};
+use crate::features::{Features, Lexicon, NodeFeatures};
 use crate::model::{
     BlockType, Direction, EndReason, Node, NodeKind, SemanticBlock, document_direction,
 };
+use crate::tagger::{BioTag, HeuristicTagger, SequenceTagger, TaggedNode};
 use crate::text::fold_digits;
 
 /// Scoring result for one node.
@@ -462,6 +463,7 @@ pub struct JudgedClassification {
 pub struct HeuristicClassifier {
     config: ScoringConfig,
     lexicon: Lexicon,
+    tagger: HeuristicTagger,
 }
 
 impl Default for HeuristicClassifier {
@@ -470,81 +472,42 @@ impl Default for HeuristicClassifier {
     }
 }
 
-fn on(flag: bool) -> f32 {
-    if flag { 1.0 } else { 0.0 }
-}
-
 impl HeuristicClassifier {
     pub fn new(config: ScoringConfig) -> Self {
         let lexicon = Lexicon::new(&config);
-        HeuristicClassifier { config, lexicon }
+        let tagger = HeuristicTagger::new(config.clone(), lexicon.clone());
+        HeuristicClassifier {
+            config,
+            lexicon,
+            tagger,
+        }
     }
 
     pub fn config(&self) -> &ScoringConfig {
         &self.config
     }
 
+    pub fn lexicon(&self) -> &Lexicon {
+        &self.lexicon
+    }
+
+    pub fn tagger(&self) -> &HeuristicTagger {
+        &self.tagger
+    }
+
     /// Score of `features` for one candidate type, in `[0, 1]`, by the
     /// configured [`Scorer`].
     pub fn score(&self, features: &Features, kind: BlockType) -> f32 {
-        match &self.config.scorer {
-            Scorer::Linear => self.linear_score(features, kind),
-            Scorer::Tree(tree) => tree.score(features, kind),
-        }
+        self.tagger.score(features, kind)
     }
 
     /// Weighted sum of the features for one candidate type, in `[0, 1]`.
     pub fn linear_score(&self, features: &Features, kind: BlockType) -> f32 {
-        let w = &self.config.weights;
-
-        let mut score = match &features.lead {
-            // "Theorem 2 implies…" talks about the theorem: a mention, no more.
-            Some(hit) if hit.kind == kind && !hit.reference => {
-                w.lead + w.label * on(hit.labelled) + w.emphasis * on(features.emphasized)
-            }
-            _ => w.mention * on(features.mentions.contains(&kind)),
-        };
-        score += match kind {
-            BlockType::Proof => {
-                w.qed * on(features.qed)
-                    + w.logic * features.logic_density
-                    + w.cue * on(features.proof_cue)
-            }
-            BlockType::Definition | BlockType::Notation => {
-                w.definitional * on(features.definitional) + w.math * features.math_density
-            }
-            k if k.is_statement() => {
-                w.math * features.math_density
-                    + 0.5 * w.logic * features.logic_density
-                    + w.cue * on(features.statement_cue)
-            }
-            _ => 0.0,
-        };
-        score.clamp(0.0, 1.0)
+        self.tagger.linear_score(features, kind)
     }
 
     pub fn score_node(&self, node: &Node) -> NodeScore {
-        let features = self.lexicon.extract(node);
-        let scores: Vec<(BlockType, f32)> = BlockType::SEMANTIC
-            .iter()
-            .map(|&kind| (kind, self.score(&features, kind)))
-            .collect();
-        let mut best = (BlockType::Theorem, f32::MIN);
-        for &(kind, s) in &scores {
-            if s > best.1 {
-                best = (kind, s);
-            }
-        }
-        let can_open = matches!(
-            node.kind,
-            NodeKind::Paragraph | NodeKind::ListItem | NodeKind::Heading(_) | NodeKind::Quote
-        );
-        NodeScore {
-            opens: can_open && best.1 >= self.config.threshold,
-            features,
-            scores,
-            best,
-        }
+        self.tagger.score_node(node)
     }
 
     /// Classifies with the default scoping.
@@ -562,8 +525,30 @@ impl HeuristicClassifier {
 
     /// [`Self::classify_with_overrides`], keeping the per-node scores.
     pub fn classify_detailed(&self, nodes: &[Node], overrides: &ScopeOverrides) -> Classification {
+        let features: Vec<NodeFeatures> = nodes
+            .iter()
+            .map(|node| self.lexicon.extract(node))
+            .collect();
+        let scores: Vec<NodeScore> = nodes
+            .iter()
+            .zip(&features)
+            .map(|(node, feat)| self.tagger.score_node_with_features(node, feat))
+            .collect();
+        let tags = self.tagger.tag(nodes, &features);
+        self.tags_to_blocks(nodes, &tags, &scores, overrides)
+    }
+
+    /// Reconstructs [`SemanticBlock`] spans from BIO sequence tags while preserving
+    /// [`EnvSpan`] overrides, manual [`ScopeOverrides`], proof argument links,
+    /// and cross-references.
+    pub fn tags_to_blocks(
+        &self,
+        nodes: &[Node],
+        tags: &[TaggedNode],
+        scores: &[NodeScore],
+        overrides: &ScopeOverrides,
+    ) -> Classification {
         let n = nodes.len();
-        let scores: Vec<NodeScore> = nodes.iter().map(|node| self.score_node(node)).collect();
         let resolved = overrides.resolve(nodes);
 
         // LaTeX environments: `env_first` opens, `covered` belongs to one.
@@ -593,7 +578,7 @@ impl HeuristicClassifier {
             !covered[i]
                 && (env_first[i]
                     || (!resolved.suppressed.contains(&i)
-                        && (scores[i].opens || retype(i).is_some())))
+                        && (retype(i).is_some() || tags.get(i).is_some_and(|t| t.tag.is_begin()))))
         };
         let is_heading = |i: usize| matches!(nodes[i].kind, NodeKind::Heading(_)) && !covered[i];
         // An explicit end swallows the openers before it, up to a heading or
@@ -668,22 +653,89 @@ impl HeuristicClassifier {
                 builder.push(kind, i..end, opener, EndReason::Environment);
                 i = end;
             } else if opens(i) {
-                let (kind, score) = match retype(i) {
-                    Some(kind) => (kind, scores[i].score_of(kind)),
-                    None => scores[i].best,
+                let kind = match retype(i) {
+                    Some(kind) => kind,
+                    None => tags
+                        .get(i)
+                        .and_then(|t| t.tag.block_type())
+                        .unwrap_or(scores[i].best.0),
                 };
-                let (natural, reason) = match kind {
-                    BlockType::Proof => self.argument_end(&scores, i, scope_limit, at_scope_limit),
-                    // Solutions rarely end in a QED mark; without one they are
-                    // scoped like a statement instead of running to the cap.
-                    BlockType::Solution => {
-                        match self.argument_end(&scores, i, scope_limit, at_scope_limit) {
-                            (end, EndReason::Qed) => (end, EndReason::Qed),
-                            _ => self.statement_end(nodes, &scores, i, scope_limit, at_scope_limit),
+                let score = if retype(i).is_some() {
+                    scores[i].score_of(kind)
+                } else if let Some(t) = tags.get(i)
+                    && t.tag.is_begin()
+                {
+                    t.confidence
+                } else {
+                    scores[i].best.1
+                };
+
+                let (natural, reason) = if retype(i).is_some()
+                    && tags.get(i).is_none_or(|t| !t.tag.is_begin())
+                {
+                    match kind {
+                        BlockType::Proof => {
+                            self.tagger
+                                .argument_end(scores, i, scope_limit, at_scope_limit)
+                        }
+                        BlockType::Solution => {
+                            match self
+                                .tagger
+                                .argument_end(scores, i, scope_limit, at_scope_limit)
+                            {
+                                (end, EndReason::Qed) => (end, EndReason::Qed),
+                                _ => self.tagger.statement_end(
+                                    nodes,
+                                    scores,
+                                    i,
+                                    scope_limit,
+                                    at_scope_limit,
+                                ),
+                            }
+                        }
+                        _ => {
+                            self.tagger
+                                .statement_end(nodes, scores, i, scope_limit, at_scope_limit)
                         }
                     }
-                    _ => self.statement_end(nodes, &scores, i, scope_limit, at_scope_limit),
+                } else {
+                    let mut end = i + 1;
+                    while end < scope_limit
+                        && tags.get(end).is_some_and(|t| t.tag == BioTag::Inside(kind))
+                    {
+                        end += 1;
+                    }
+                    let reason = if matches!(kind, BlockType::Proof | BlockType::Solution)
+                        && (i..end).any(|j| scores[j].features.qed)
+                    {
+                        EndReason::Qed
+                    } else if end
+                        == (i + if kind.is_argument() {
+                            self.config.scope.proof_max_nodes
+                        } else {
+                            self.config.scope.statement_max_nodes
+                        }
+                        .max(1))
+                        .min(scope_limit)
+                        && end < scope_limit
+                    {
+                        EndReason::SizeLimit
+                    } else if end == scope_limit {
+                        if at_scope_limit == EndReason::NextOpener
+                            && !scores[end].opens
+                            && !env_first[end]
+                            && retype(end).is_none()
+                        {
+                            EndReason::NoContinuation
+                        } else {
+                            at_scope_limit
+                        }
+                    } else {
+                        EndReason::NoContinuation
+                    };
+                    (end, reason)
                 };
+
                 let (end, reason) = adjust(natural, reason);
                 let opener = Opener {
                     score,
@@ -701,21 +753,6 @@ impl HeuristicClassifier {
                     EndReason::Structural,
                 );
                 i += 1;
-            } else if !resolved.suppressed.contains(&i)
-                && !absorbed[i]
-                && let Some(score) =
-                    self.implicit_proof_score(nodes, &scores, builder.blocks.last(), i, scope_limit)
-            {
-                let (natural, reason) = self.argument_end(&scores, i, scope_limit, at_scope_limit);
-                let (end, reason) = adjust(natural, reason);
-                let opener = Opener {
-                    score,
-                    features,
-                    env_name: None,
-                    retyped: false,
-                };
-                builder.push(BlockType::Proof, i..end, opener, reason);
-                i = end;
             } else {
                 builder.push(
                     BlockType::Text,
@@ -737,7 +774,7 @@ impl HeuristicClassifier {
         }
         Classification {
             blocks,
-            scores,
+            scores: scores.to_vec(),
             block_of,
         }
     }
@@ -810,96 +847,6 @@ impl HeuristicClassifier {
             overrides,
             log,
             rounds,
-        }
-    }
-
-    /// Score of node `i` as a proof that has no "Proof." keyword: an ordinary
-    /// paragraph directly after a statement, with a QED marker before the next
-    /// boundary and/or a strong proof profile. `None` below the threshold.
-    fn implicit_proof_score(
-        &self,
-        nodes: &[Node],
-        scores: &[NodeScore],
-        previous: Option<&SemanticBlock>,
-        i: usize,
-        limit: usize,
-    ) -> Option<f32> {
-        if !previous?.kind.is_statement()
-            || !matches!(nodes[i].kind, NodeKind::Paragraph | NodeKind::ListItem)
-        {
-            return None;
-        }
-        let w = &self.config.weights;
-        let features = &scores[i].features;
-        let cap = (i + self.config.scope.proof_max_nodes.max(1)).min(limit);
-        let qed = (i..cap).any(|j| scores[j].features.qed);
-        let score = w.after_statement
-            + w.qed * on(qed)
-            + w.logic * features.logic_density
-            + w.cue * on(features.proof_cue);
-        (score >= self.config.threshold).then_some(score.clamp(0.0, 1.0))
-    }
-
-    /// A proof or solution runs through its QED marker, or to `limit` / the
-    /// size cap.
-    fn argument_end(
-        &self,
-        scores: &[NodeScore],
-        start: usize,
-        limit: usize,
-        at_limit: EndReason,
-    ) -> (usize, EndReason) {
-        let cap = (start + self.config.scope.proof_max_nodes.max(1)).min(limit);
-        match (start..cap).find(|&j| scores[j].features.qed) {
-            Some(j) => (j + 1, EndReason::Qed),
-            None if cap == limit => (cap, at_limit),
-            None => (cap, EndReason::SizeLimit),
-        }
-    }
-
-    /// A statement keeps the display math, lists and quotes that follow it,
-    /// plus paragraphs that visibly continue it.
-    fn statement_end(
-        &self,
-        nodes: &[Node],
-        scores: &[NodeScore],
-        start: usize,
-        limit: usize,
-        at_limit: EndReason,
-    ) -> (usize, EndReason) {
-        let cap = (start + self.config.scope.statement_max_nodes.max(1)).min(limit);
-        let mut needs_body = scores[start]
-            .features
-            .lead
-            .as_ref()
-            .is_some_and(|hit| hit.body_empty);
-        let mut end = start + 1;
-        while end < cap {
-            let take = match nodes[end].kind {
-                NodeKind::DisplayMath
-                | NodeKind::List
-                | NodeKind::ListItem
-                | NodeKind::Quote
-                | NodeKind::Table => true,
-                NodeKind::Paragraph => {
-                    needs_body
-                        || scores[end].features.continuation
-                        || nodes[end - 1].flat.trim_end().ends_with([':', '،', ','])
-                }
-                _ => false,
-            };
-            if !take {
-                return (end, EndReason::NoContinuation);
-            }
-            if nodes[end].kind == NodeKind::Paragraph {
-                needs_body = false;
-            }
-            end += 1;
-        }
-        if cap == limit {
-            (end, at_limit)
-        } else {
-            (end, EndReason::SizeLimit)
         }
     }
 }
@@ -1185,6 +1132,7 @@ impl<'a> Builder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Scorer;
     use crate::parser::parse_markdown;
 
     fn classify(md: &str) -> Vec<SemanticBlock> {

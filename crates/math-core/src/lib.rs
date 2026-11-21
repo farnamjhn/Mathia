@@ -22,6 +22,7 @@ pub mod normalize;
 pub mod parser;
 pub mod repair;
 mod sha256;
+pub mod tagger;
 pub mod text;
 pub mod tree;
 
@@ -32,6 +33,7 @@ pub use classifier::{
 pub use clean_html::{analyze_html, analyze_html_detailed, clean_html, is_html, is_html_file};
 pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, Scorer, ScoringConfig};
 pub use error::{Error, Result};
+pub use features::{DumpNode, FeatureDump, Features, Lexicon, NodeFeatures, dump_features};
 pub use html::{
     AiOptions, AiProvider, CustomProvider, EmbeddedFont, HtmlOptions, KatexAssets, MathAssets,
 };
@@ -41,6 +43,7 @@ pub use model::{
 };
 pub use normalize::normalize_markdown;
 pub use repair::{Repair, repair_markdown, wrap_bare_math};
+pub use tagger::{BioTag, HeuristicTagger, SequenceTagger, TaggedNode};
 pub use tree::DecisionTree;
 
 /// A [`Document`] together with the evidence behind every decision: all type
