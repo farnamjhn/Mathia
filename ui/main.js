@@ -97,6 +97,8 @@
   let customTitle = null;
   let orderPaths = [];
   let draggedIndex = null;
+  /** True while dragging an order-list item (suppresses the Tauri file-drop overlay). */
+  let internalDrag = false;
   let analysis = null;
   let revision = 0;
   let selected = null;
@@ -1310,6 +1312,21 @@
 
   // ── Multi-markdown ordering ───────────────────────────────────────────
 
+  // Allow HTML5 drag-and-drop reordering inside the order list by preventing
+  // the default browser/Tauri behaviour on the container.
+  el.orderList.addEventListener("dragover", (e) => {
+    if (internalDrag) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  });
+  el.orderList.addEventListener("drop", (e) => {
+    if (internalDrag) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  });
+
   function openOrderDialog(paths) {
     orderPaths = [];
     if (paths && paths.length > 0) {
@@ -1400,6 +1417,7 @@
       // Drag and drop event listeners
       item.addEventListener("dragstart", (e) => {
         draggedIndex = index;
+        internalDrag = true;
         item.classList.add("dragging");
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/plain", String(index));
@@ -1407,6 +1425,7 @@
 
       item.addEventListener("dragover", (e) => {
         e.preventDefault();
+        e.stopPropagation();
         e.dataTransfer.dropEffect = "move";
         item.classList.add("drag-over");
       });
@@ -1417,6 +1436,7 @@
 
       item.addEventListener("drop", (e) => {
         e.preventDefault();
+        e.stopPropagation();
         item.classList.remove("drag-over");
         if (draggedIndex !== null && draggedIndex !== index) {
           const [moved] = orderPaths.splice(draggedIndex, 1);
@@ -1429,6 +1449,7 @@
       item.addEventListener("dragend", () => {
         item.classList.remove("dragging");
         draggedIndex = null;
+        internalDrag = false;
       });
 
       return item;
@@ -1456,6 +1477,19 @@
 
   el.orderCancel.addEventListener("click", () => {
     el.orderDialog.close();
+  });
+
+  // Prevent the dialog backdrop from swallowing drag events during reorder.
+  el.orderDialog.addEventListener("dragover", (e) => {
+    if (internalDrag) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    }
+  });
+  el.orderDialog.addEventListener("drop", (e) => {
+    if (internalDrag) {
+      e.preventDefault();
+    }
   });
 
   el.orderDialog.addEventListener("click", (event) => {
@@ -1576,10 +1610,11 @@
     .catch((error) => setStatus(String(error), true))
     .finally(loadRecent);
 
-  listen("tauri://drag-enter", () => { el.drop.hidden = false; });
-  listen("tauri://drag-leave", () => { el.drop.hidden = true; });
+  listen("tauri://drag-enter", () => { if (!internalDrag) el.drop.hidden = false; });
+  listen("tauri://drag-leave", () => { if (!internalDrag) el.drop.hidden = true; });
   listen("tauri://drag-drop", (event) => {
     el.drop.hidden = true;
+    if (internalDrag) return;
     const paths = (event.payload.paths || []).filter((p) => SUPPORTED_INPUT.test(p));
     if (paths.length === 0) {
       setStatus("Drop Markdown or HTML files (.md, .html, .txt)", true);
