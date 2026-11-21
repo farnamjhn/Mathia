@@ -670,8 +670,10 @@ impl HeuristicClassifier {
                     scores[i].best.1
                 };
 
+                let original_kind = tags.get(i).and_then(|t| t.tag.block_type());
                 let (natural, reason) = if retype(i).is_some()
-                    && tags.get(i).is_none_or(|t| !t.tag.is_begin())
+                    && (tags.get(i).is_none_or(|t| !t.tag.is_begin())
+                        || original_kind != Some(kind))
                 {
                     match kind {
                         BlockType::Proof => {

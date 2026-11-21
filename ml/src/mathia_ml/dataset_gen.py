@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from mathia_ml.schema import DumpNode, FeatureDump, LabeledDocument, NodeFeatures
+from mathia_ml.split import split_documents, write_split_jsonl
 
 # Canonical block types supported by math_core
 BLOCK_TYPES = [
@@ -135,14 +136,19 @@ def find_mathia_binary() -> Path:
     )
 
 
-def run_dump_features(mathia_bin: Path, content: str) -> FeatureDump:
+def run_dump_features(
+    mathia_bin: Path, content: str, overrides_path: Optional[Path] = None
+) -> FeatureDump:
     """Run `mathia dump-features` on string content and return parsed JSON."""
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
         f.write(content)
         tmp_path = f.name
     try:
+        cmd = [str(mathia_bin), "dump-features", tmp_path]
+        if overrides_path is not None:
+            cmd.extend(["--overrides", str(overrides_path)])
         proc = subprocess.run(
-            [str(mathia_bin), "dump-features", tmp_path],
+            cmd,
             capture_output=True,
             text=True,
             check=True,
@@ -810,50 +816,23 @@ def generate_dataset(
         if doc:
             fa_docs.append(doc)
 
+    all_docs = en_docs + fa_docs
     print(f"Total documents prepared: {len(en_docs)} English, {len(fa_docs)} Persian.")
 
     # Task 4: 80/10/10 Split strictly by document, stratified by language
-    def split_stratified(docs: list[LabeledDocument]) -> tuple[list[LabeledDocument], list[LabeledDocument], list[LabeledDocument]]:
-        d = list(docs)
-        rng.shuffle(d)
-        n = len(d)
-        if n == 0:
-            return [], [], []
-        n_val = max(1, int(0.10 * n)) if n >= 10 else (1 if n >= 5 else 0)
-        n_test = max(1, int(0.10 * n)) if n >= 10 else (1 if n >= 5 else 0)
-        n_train = max(1, n - n_val - n_test) if n > (n_val + n_test) else n
-        train = d[:n_train]
-        val = d[n_train:n_train + n_val]
-        test = d[n_train + n_val:]
-        return train, val, test
+    train_set, val_set, test_set = split_documents(
+        all_docs,
+        train_ratio=0.80,
+        val_ratio=0.10,
+        test_ratio=0.10,
+        seed=seed,
+    )
 
-    en_train, en_val, en_test = split_stratified(en_docs)
-    fa_train, fa_val, fa_test = split_stratified(fa_docs)
+    stats = write_split_jsonl(output_dir, train_set, val_set, test_set)
 
-    train_set = en_train + fa_train
-    val_set = en_val + fa_val
-    test_set = en_test + fa_test
-
-    rng.shuffle(train_set)
-    rng.shuffle(val_set)
-    rng.shuffle(test_set)
-
-    def write_jsonl(path: Path, docs: list[LabeledDocument]) -> None:
-        with open(path, "w", encoding="utf-8") as f:
-            for doc in docs:
-                f.write(doc.model_dump_json() + "\n")
-
-    train_path = output_dir / "train.jsonl"
-    val_path = output_dir / "val.jsonl"
-    test_path = output_dir / "test.jsonl"
-
-    write_jsonl(train_path, train_set)
-    write_jsonl(val_path, val_set)
-    write_jsonl(test_path, test_set)
-
-    print(f"Saved {len(train_set)} documents to {train_path}")
-    print(f"Saved {len(val_set)} documents to {val_path}")
-    print(f"Saved {len(test_set)} documents to {test_path}")
+    print(f"Saved {len(train_set)} documents to {output_dir / 'train.jsonl'}")
+    print(f"Saved {len(val_set)} documents to {output_dir / 'val.jsonl'}")
+    print(f"Saved {len(test_set)} documents to {output_dir / 'test.jsonl'}")
 
     return {
         "train": len(train_set),
@@ -861,6 +840,7 @@ def generate_dataset(
         "test": len(test_set),
         "total_en": len(en_docs),
         "total_fa": len(fa_docs),
+        "stats": stats,
     }
 
 

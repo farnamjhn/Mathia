@@ -21,7 +21,7 @@ use math_judge::{CachedJudge, CommandJudge, Policy, Replay};
 const KATEX_CDN_VERSION: &str = "0.16.22";
 
 const USAGE: &str = "usage: mathia <input.md | input.html | folder> [options]
-       mathia dump-features <input.md> [-o output.json] [--config scoring.toml]
+       mathia dump-features <input.md> [-o output.json] [--config scoring.toml] [--overrides file.json]
 
   -o, --output FILE     where to write the HTML (default: input with .html, or .clean.html for HTML);
                         for a folder input, the output folder (default: the input folder);
@@ -217,10 +217,8 @@ fn run() -> Result<(), String> {
     }
 
     if dump_features {
-        if watch || judge_command.is_some() || overrides_path.is_some() || fix {
-            return Err(
-                "dump-features does not go with --watch, --judge, --overrides or --fix".into(),
-            );
+        if watch || judge_command.is_some() || fix {
+            return Err("dump-features does not go with --watch, --judge or --fix".into());
         }
         if input.is_dir() {
             return Err("dump-features takes a Markdown file, not a folder".into());
@@ -229,9 +227,13 @@ fn run() -> Result<(), String> {
             Some(path) => ScoringConfig::load(path).map_err(|e| e.to_string())?,
             None => ScoringConfig::default(),
         };
+        let overrides = match overrides_path {
+            Some(path) => Some(load_overrides(&path)?),
+            None => None,
+        };
         let content =
             std::fs::read_to_string(&input).map_err(|e| format!("{}: {e}", input.display()))?;
-        let dump = math_core::dump_features(&content, &config);
+        let dump = math_core::dump_features_with_overrides(&content, &config, overrides.as_ref());
         let json = serde_json::to_string_pretty(&dump).map_err(|e| e.to_string())?;
         if let Some(out) = output {
             std::fs::write(&out, json).map_err(|e| format!("{}: {e}", out.display()))?;

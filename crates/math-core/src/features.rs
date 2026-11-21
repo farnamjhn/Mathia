@@ -70,6 +70,8 @@ pub type NodeFeatures = Features;
 pub struct FeatureDump {
     pub nodes: Vec<DumpNode>,
     pub features: Vec<NodeFeatures>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bio_tags: Option<Vec<String>>,
 }
 
 /// A node representation serialized during `dump-features`.
@@ -85,6 +87,16 @@ pub struct DumpNode {
 
 /// Dumps AST nodes and extracted static features for an input Markdown document.
 pub fn dump_features(markdown: &str, config: &ScoringConfig) -> FeatureDump {
+    dump_features_with_overrides(markdown, config, None)
+}
+
+/// Dumps AST nodes, extracted static features, and optionally resolved BIO tags
+/// with [`crate::classifier::ScopeOverrides`] applied.
+pub fn dump_features_with_overrides(
+    markdown: &str,
+    config: &ScoringConfig,
+    overrides: Option<&crate::classifier::ScopeOverrides>,
+) -> FeatureDump {
     let normalized = crate::normalize::normalize_markdown(markdown);
     let nodes = crate::parser::parse_markdown(&normalized);
     let lexicon = Lexicon::new(config);
@@ -115,9 +127,25 @@ pub fn dump_features(markdown: &str, config: &ScoringConfig) -> FeatureDump {
         });
         dump_features.push(features);
     }
+    let bio_tags = overrides.map(|ov| {
+        let classifier = crate::classifier::HeuristicClassifier::new(config.clone());
+        let detailed = classifier.classify_detailed(&nodes, ov);
+        let mut tags = vec!["O".to_string(); nodes.len()];
+        for block in &detailed.blocks {
+            if block.kind.is_semantic() && block.span.start < nodes.len() {
+                tags[block.span.start] = format!("B-{}", block.kind.slug().to_uppercase());
+                let end = block.span.end.min(nodes.len());
+                for tag in &mut tags[block.span.start + 1..end] {
+                    *tag = format!("I-{}", block.kind.slug().to_uppercase());
+                }
+            }
+        }
+        tags
+    });
     FeatureDump {
         nodes: dump_nodes,
         features: dump_features,
+        bio_tags,
     }
 }
 
@@ -552,5 +580,16 @@ mod tests {
         assert_eq!(dump.nodes[1].kind, "paragraph");
         assert_eq!(dump.nodes[2].kind, "display_math");
         assert!(dump.nodes[1].features.lead.is_some());
+        assert!(dump.bio_tags.is_none());
+
+        let mut ov = crate::classifier::ScopeOverrides::default();
+        ov.retype.insert(1.into(), BlockType::Lemma);
+        let dump_with_ov = dump_features_with_overrides(md, &ScoringConfig::default(), Some(&ov));
+        assert!(dump_with_ov.bio_tags.is_some());
+        let tags = dump_with_ov.bio_tags.unwrap();
+        assert_eq!(tags.len(), 3);
+        assert_eq!(tags[0], "O");
+        assert_eq!(tags[1], "B-LEMMA");
+        assert_eq!(tags[2], "I-LEMMA");
     }
 }

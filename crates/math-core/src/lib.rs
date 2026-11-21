@@ -33,7 +33,10 @@ pub use classifier::{
 pub use clean_html::{analyze_html, analyze_html_detailed, clean_html, is_html, is_html_file};
 pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, Scorer, ScoringConfig};
 pub use error::{Error, Result};
-pub use features::{DumpNode, FeatureDump, Features, Lexicon, NodeFeatures, dump_features};
+pub use features::{
+    DumpNode, FeatureDump, Features, Lexicon, NodeFeatures, dump_features,
+    dump_features_with_overrides,
+};
 pub use html::{
     AiOptions, AiProvider, CustomProvider, EmbeddedFont, HtmlOptions, KatexAssets, MathAssets,
 };

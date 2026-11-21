@@ -53,6 +53,7 @@ class DumpNode(BaseModel):
 class FeatureDump(BaseModel):
     nodes: list[DumpNode]
     features: list[NodeFeatures]
+    bio_tags: Optional[list[str]] = None
 
 
 class LabeledDocument(BaseModel):
