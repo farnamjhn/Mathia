@@ -207,7 +207,20 @@ pub fn strip_page_artifacts(src: &str) -> String {
             && let Some(&cnt) = counts.get(line.trim())
             && cnt >= 2
         {
-            drop[i] = true;
+            let prev_is_boundary_or_blank = i == 0 || lines[i - 1].1.trim().is_empty();
+            let next_is_boundary_or_blank =
+                i + 1 == lines.len() || lines[i + 1].1.trim().is_empty();
+            let is_standalone = prev_is_boundary_or_blank && next_is_boundary_or_blank;
+
+            let prev_is_page_num =
+                i > 0 && lines[i - 1].2 && is_isolated_page_number(lines[i - 1].1);
+            let next_is_page_num =
+                i + 1 < lines.len() && lines[i + 1].2 && is_isolated_page_number(lines[i + 1].1);
+            let is_adjacent_to_page_num = prev_is_page_num || next_is_page_num;
+
+            if is_standalone || is_adjacent_to_page_num {
+                drop[i] = true;
+            }
         }
     }
 
@@ -996,5 +1009,17 @@ mod tests {
         let proofs = "**Proof.**\nStep 1.\n\n**Proof.**\nStep 2.";
         let res = strip_page_artifacts(proofs);
         assert!(res.contains("**Proof.**"));
+    }
+
+    #[test]
+    fn repeated_sentences_inside_paragraphs_are_not_stripped() {
+        let doc = "First paragraph starts here.\n\
+                   This is a repeated sentence in normal prose.\n\
+                   Continuing the first paragraph.\n\n\
+                   Second paragraph starts here.\n\
+                   This is a repeated sentence in normal prose.\n\
+                   Continuing the second paragraph.\n";
+        let cleaned = strip_page_artifacts(doc);
+        assert_eq!(cleaned, doc);
     }
 }

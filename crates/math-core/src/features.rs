@@ -82,7 +82,6 @@ pub struct DumpNode {
     pub flat_text: String,
     pub char_len: usize,
     pub env_span: Option<crate::model::EnvSpan>,
-    pub features: NodeFeatures,
 }
 
 /// Dumps AST nodes and extracted static features for an input Markdown document.
@@ -123,7 +122,6 @@ pub fn dump_features_with_overrides(
             flat_text: node.flat.clone(),
             char_len: node.flat.chars().count(),
             env_span: node.env.clone(),
-            features: features.clone(),
         });
         dump_features.push(features);
     }
@@ -579,7 +577,7 @@ mod tests {
         assert_eq!(dump.nodes[0].kind, "heading");
         assert_eq!(dump.nodes[1].kind, "paragraph");
         assert_eq!(dump.nodes[2].kind, "display_math");
-        assert!(dump.nodes[1].features.lead.is_some());
+        assert!(dump.features[1].lead.is_some());
         assert!(dump.bio_tags.is_none());
 
         let mut ov = crate::classifier::ScopeOverrides::default();

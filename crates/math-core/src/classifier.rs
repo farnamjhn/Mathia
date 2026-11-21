@@ -168,41 +168,45 @@ impl std::fmt::Display for OverrideKey {
 }
 
 impl std::str::FromStr for OverrideKey {
-    type Err = std::convert::Infallible;
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split(':').collect();
-        match parts.len() {
-            1 => {
-                if let Ok(idx) = parts[0].parse::<usize>() {
+        match parts.as_slice() {
+            [p] => {
+                if let Ok(idx) = p.parse::<usize>() {
                     Ok(OverrideKey::index(idx))
-                } else if let Ok(hash) = u64::from_str_radix(parts[0], 16) {
+                } else if let Ok(hash) = u64::from_str_radix(p, 16) {
                     Ok(OverrideKey::anchor(hash, 0))
                 } else {
-                    Ok(OverrideKey::index(0))
+                    Err(format!("invalid override key: '{s}'"))
                 }
             }
-            2 => {
-                let hash = u64::from_str_radix(parts[0], 16)
-                    .or_else(|_| parts[0].parse::<u64>())
-                    .unwrap_or(0);
-                let occ = parts[1].parse::<usize>().unwrap_or(0);
-                Ok(OverrideKey::anchor(hash, occ))
+            [h, occ] => {
+                let hash = u64::from_str_radix(h, 16)
+                    .or_else(|_| h.parse::<u64>())
+                    .map_err(|_| format!("invalid anchor hash in override key: '{s}'"))?;
+                let occurrence = occ
+                    .parse::<usize>()
+                    .map_err(|_| format!("invalid occurrence in override key: '{s}'"))?;
+                Ok(OverrideKey::anchor(hash, occurrence))
             }
-            _ => {
-                let hash = u64::from_str_radix(parts[0], 16)
-                    .or_else(|_| parts[0].parse::<u64>())
-                    .unwrap_or(0);
-                let occ = parts[1].parse::<usize>().unwrap_or(0);
-                let fb = parts[2].parse::<usize>().ok();
+            [h, occ, fb] => {
+                let hash = u64::from_str_radix(h, 16)
+                    .or_else(|_| h.parse::<u64>())
+                    .map_err(|_| format!("invalid anchor hash in override key: '{s}'"))?;
+                let occurrence = occ
+                    .parse::<usize>()
+                    .map_err(|_| format!("invalid occurrence in override key: '{s}'"))?;
+                let fallback = fb
+                    .parse::<usize>()
+                    .map_err(|_| format!("invalid fallback index in override key: '{s}'"))?;
                 Ok(OverrideKey {
-                    anchor: Some(ContentAnchor {
-                        hash,
-                        occurrence: occ,
-                    }),
-                    fallback: fb,
+                    anchor: Some(ContentAnchor { hash, occurrence }),
+                    fallback: Some(fallback),
                 })
             }
+            _ => Err(format!("invalid override key format: '{s}'")),
         }
     }
 }
@@ -249,7 +253,7 @@ impl<'de> Deserialize<'de> for OverrideKey {
                 E: serde::de::Error,
             {
                 use std::str::FromStr;
-                Ok(OverrideKey::from_str(v).unwrap())
+                OverrideKey::from_str(v).map_err(serde::de::Error::custom)
             }
         }
 
@@ -336,7 +340,18 @@ impl ScopeOverrides {
         }
         for (key, &val) in &self.end {
             if let Some(idx) = resolve_key(key) {
-                resolved.end.insert(idx, val);
+                let shifted_end =
+                    if let (Some(anchor), Some(old_start)) = (key.anchor, key.fallback) {
+                        if let Some(pos) = anchors.iter().position(|a| *a == anchor) {
+                            let shift = pos as isize - old_start as isize;
+                            (val as isize + shift).max(0) as usize
+                        } else {
+                            val
+                        }
+                    } else {
+                        val
+                    };
+                resolved.end.insert(idx, shifted_end);
             }
         }
         resolved
@@ -525,6 +540,16 @@ impl HeuristicClassifier {
 
     /// [`Self::classify_with_overrides`], keeping the per-node scores.
     pub fn classify_detailed(&self, nodes: &[Node], overrides: &ScopeOverrides) -> Classification {
+        self.classify_with_tagger(nodes, overrides, &self.tagger)
+    }
+
+    /// Classifies nodes using an arbitrary [`SequenceTagger`] to predict BIO tags.
+    pub fn classify_with_tagger(
+        &self,
+        nodes: &[Node],
+        overrides: &ScopeOverrides,
+        tagger: &dyn SequenceTagger,
+    ) -> Classification {
         let features: Vec<NodeFeatures> = nodes
             .iter()
             .map(|node| self.lexicon.extract(node))
@@ -534,7 +559,7 @@ impl HeuristicClassifier {
             .zip(&features)
             .map(|(node, feat)| self.tagger.score_node_with_features(node, feat))
             .collect();
-        let tags = self.tagger.tag(nodes, &features);
+        let tags = tagger.tag(nodes, &features);
         self.tags_to_blocks(nodes, &tags, &scores, overrides)
     }
 
@@ -1832,5 +1857,67 @@ mod tests {
         let json = serde_json::to_string(&overrides).unwrap();
         let parsed: ScopeOverrides = serde_json::from_str(&json).unwrap();
         assert_eq!(overrides, parsed);
+    }
+
+    #[test]
+    fn end_override_preserves_length_when_anchored_opener_shifts() {
+        let c = HeuristicClassifier::default();
+
+        // v1 document: Theorem 1 is at index 1, followed by 2 continuation paragraphs.
+        let doc_v1 = "# Section\n\n**Theorem 1.** Statement.\n\nContinuation 1.\n\nContinuation 2.\n\nAfter.";
+        let nodes_v1 = parse_markdown(doc_v1);
+        assert_eq!(nodes_v1[1].kind, NodeKind::Paragraph);
+
+        // An end override on Theorem 1 (node 1) extending it to end at node 4 (length = 4 - 1 = 3 nodes: 1, 2, 3)
+        let key = OverrideKey::for_node(&nodes_v1, 1);
+        let mut overrides = ScopeOverrides::default();
+        overrides.end.insert(key, 4);
+
+        let blocks_v1 = c.classify_with_overrides(&nodes_v1, &overrides);
+        let thm_v1 = blocks_v1
+            .iter()
+            .find(|b| b.kind == BlockType::Theorem)
+            .unwrap();
+        assert_eq!(thm_v1.span, 1..4);
+
+        // v2: 2 new paragraphs inserted ABOVE Theorem 1.
+        let doc_v2 = "# Section\n\nInserted paragraph A.\n\nInserted paragraph B.\n\n**Theorem 1.** Statement.\n\nContinuation 1.\n\nContinuation 2.\n\nAfter.";
+        let nodes_v2 = parse_markdown(doc_v2);
+        // Theorem 1 moved from index 1 to index 3.
+        assert_eq!(nodes_v2[3].kind, NodeKind::Paragraph);
+        assert!(nodes_v2[3].flat.contains("Theorem 1"));
+
+        // Overrides should resolve anchor to node 3 and shift end by (3 - 1) = +2: new end = 4 + 2 = 6.
+        let blocks_v2 = c.classify_with_overrides(&nodes_v2, &overrides);
+        let thm_v2 = blocks_v2
+            .iter()
+            .find(|b| b.kind == BlockType::Theorem)
+            .unwrap();
+        assert_eq!(thm_v2.span, 3..6);
+        assert_eq!(thm_v2.span.len(), 3);
+    }
+
+    #[test]
+    fn override_key_from_str_rejects_invalid_strings() {
+        use std::str::FromStr;
+        assert!(OverrideKey::from_str("0").is_ok());
+        assert!(OverrideKey::from_str("12").is_ok());
+        assert!(OverrideKey::from_str("deadbeef:0").is_ok());
+        assert!(OverrideKey::from_str("deadbeef:0:2").is_ok());
+
+        assert!(OverrideKey::from_str("not_a_key").is_err());
+        assert!(OverrideKey::from_str("deadbeef:not_num").is_err());
+        assert!(OverrideKey::from_str("deadbeef:0:not_num").is_err());
+        assert!(OverrideKey::from_str("a:b:c:d").is_err());
+    }
+
+    #[test]
+    fn classify_with_tagger_accepts_sequence_tagger() {
+        let c = HeuristicClassifier::default();
+        let nodes = parse_markdown("**Theorem 1.** Statement.\n\nProof. Follows.");
+        let res = c.classify_with_tagger(&nodes, &ScopeOverrides::default(), &c.tagger);
+        assert_eq!(res.blocks.len(), 2);
+        assert_eq!(res.blocks[0].kind, BlockType::Theorem);
+        assert_eq!(res.blocks[1].kind, BlockType::Proof);
     }
 }

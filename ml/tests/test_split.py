@@ -19,7 +19,6 @@ def make_dummy_doc(doc_id: str, lang: str, num_nodes: int = 3) -> LabeledDocumen
             kind="paragraph",
             flat_text=f"Node {i} text for {doc_id}",
             char_len=20,
-            features=NodeFeatures(),
         )
         for i in range(num_nodes)
     ]

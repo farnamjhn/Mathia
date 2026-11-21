@@ -47,7 +47,6 @@ class DumpNode(BaseModel):
     flat_text: str
     char_len: int
     env_span: Optional[EnvSpan] = None
-    features: NodeFeatures
 
 
 class FeatureDump(BaseModel):

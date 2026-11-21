@@ -181,150 +181,6 @@ def reconstruct_overrides_from_log(log_entries: list[dict[str, Any]]) -> dict[st
     }
 
 
-def resolve_bio_tags_in_python(nodes: list[DumpNode], overrides: dict[str, Any]) -> list[str]:
-    """Pure-Python fallback to resolve ScopeOverrides into BIO tags.
-
-    Matches math-core heuristic scoping rules and override semantics.
-    """
-    n = len(nodes)
-    if n == 0:
-        return []
-
-    tags = ["O"] * n
-
-    # Parse overrides keys
-    resolved_suppressed: set[int] = set()
-    for s_key in overrides.get("suppressed", []):
-        idx, _ = parse_override_key(s_key, n)
-        if idx is not None:
-            resolved_suppressed.add(idx)
-
-    resolved_retype: dict[int, str] = {}
-    for r_key, r_val in overrides.get("retype", {}).items():
-        idx, _ = parse_override_key(r_key, n)
-        if idx is not None:
-            resolved_retype[idx] = str(r_val).lower()
-
-    resolved_end: dict[int, int] = {}
-    for e_key, e_val in overrides.get("end", {}).items():
-        idx, _ = parse_override_key(e_key, n)
-        if idx is not None:
-            resolved_end[idx] = int(e_val)
-
-    resolved_delta: dict[int, int] = {}
-    for d_key, d_val in overrides.get("delta", {}).items():
-        idx, _ = parse_override_key(d_key, n)
-        if idx is not None:
-            resolved_delta[idx] = int(d_val)
-
-    # 1. LaTeX environments
-    env_first = [False] * n
-    covered = [False] * n
-    i = 0
-    while i < n:
-        if nodes[i].env_span is not None and i not in resolved_suppressed:
-            span_len = max(1, nodes[i].env_span.len)
-            end = min(n, i + span_len)
-            env_first[i] = True
-            for j in range(i + 1, end):
-                covered[j] = True
-            btype = resolved_retype.get(i, nodes[i].env_span.kind).lower()
-            tags[i] = f"B-{btype.upper()}"
-            for j in range(i + 1, end):
-                tags[j] = f"I-{btype.upper()}"
-            i = end
-        else:
-            i += 1
-
-    # 2. Heuristic openers and overrides
-    def opens(idx: int) -> bool:
-        if covered[idx]:
-            return False
-        if env_first[idx]:
-            return True
-        if idx in resolved_suppressed:
-            return False
-        if idx in resolved_retype:
-            return True
-        # Heuristic opener from features lead
-        lead = nodes[idx].features.lead
-        return (lead is not None and not lead.reference)
-
-    def is_heading(idx: int) -> bool:
-        return nodes[idx].kind == "heading" and not covered[idx]
-
-    def boundary(idx: int) -> bool:
-        return opens(idx) or is_heading(idx)
-
-    i = 0
-    while i < n:
-        if covered[i] or env_first[i]:
-            i += 1
-            continue
-
-        if not opens(i):
-            i += 1
-            continue
-
-        # Opener at i
-        btype = resolved_retype.get(i)
-        if not btype:
-            lead = nodes[i].features.lead
-            btype = lead.kind.lower() if lead else "theorem"
-
-        # Find boundary limit
-        limit = n
-        for j in range(i + 1, n):
-            if boundary(j):
-                limit = j
-                break
-
-        # Check for rules / thematic breaks
-        scope_limit = limit
-        for j in range(i + 1, limit):
-            if nodes[j].kind == "rule":
-                scope_limit = j
-                break
-
-        # Compute natural end
-        is_proof = btype in ("proof", "solution")
-        if is_proof:
-            natural = scope_limit
-            for j in range(i, scope_limit):
-                if nodes[j].features.qed:
-                    natural = j + 1
-                    break
-        else:
-            # Statement
-            natural = i + 1
-            while natural < scope_limit:
-                nk = nodes[natural].kind
-                feat = nodes[natural].features
-                take = (
-                    nk in ("display_math", "list", "list_item", "quote", "table")
-                    or feat.continuation
-                    or nodes[natural - 1].flat_text.rstrip().endswith((":", "،", ","))
-                )
-                if not take:
-                    break
-                natural += 1
-
-        # Adjust with overrides
-        if i in resolved_end:
-            target_end = min(limit, max(i + 1, resolved_end[i]))
-        else:
-            target_end = min(limit, max(i + 1, natural + resolved_delta.get(i, 0)))
-
-        # Assign tags
-        tags[i] = f"B-{btype.upper()}"
-        for j in range(i + 1, target_end):
-            tags[j] = f"I-{btype.upper()}"
-
-        i = target_end
-
-    return tags
-
-
 def export_feedback_from_markdown_and_overrides(
     markdown_content: str,
     overrides_data: Union[dict[str, Any], str, Path],
@@ -338,39 +194,25 @@ def export_feedback_from_markdown_and_overrides(
 
     detected_lang = language or detect_language(markdown_content)
 
-    # Attempt to resolve using mathia CLI if available
-    resolved_dump: Optional[FeatureDump] = None
     if mathia_bin is None:
-        try:
-            mathia_bin = find_mathia_binary()
-        except Exception:
-            mathia_bin = None
+        mathia_bin = find_mathia_binary()
 
-    if mathia_bin and mathia_bin.exists():
-        with tempfile.NamedTemporaryFile("w", suffix=".overrides.json", delete=False, encoding="utf-8") as f_ov:
-            json.dump(overrides_dict, f_ov)
-            tmp_ov = Path(f_ov.name)
-        try:
-            dump = run_dump_features(mathia_bin, markdown_content, overrides_path=tmp_ov)
-            if dump.bio_tags:
-                resolved_dump = dump
-        except Exception as e:
-            print(f"Warning: mathia dump-features with overrides failed: {e}", file=sys.stderr)
-        finally:
-            if tmp_ov.exists():
-                tmp_ov.unlink()
+    if not mathia_bin.exists():
+        raise FileNotFoundError(f"Mathia binary not found at {mathia_bin}")
 
-    # Fallback to standard dump + Python resolution if mathia CLI override failed
-    if resolved_dump is None or resolved_dump.bio_tags is None:
-        if mathia_bin and mathia_bin.exists():
-            dump = run_dump_features(mathia_bin, markdown_content)
-        else:
-            raise RuntimeError("Cannot process feedback without mathia CLI binary.")
+    with tempfile.NamedTemporaryFile("w", suffix=".overrides.json", delete=False, encoding="utf-8") as f_ov:
+        json.dump(overrides_dict, f_ov)
+        tmp_ov = Path(f_ov.name)
+    try:
+        dump = run_dump_features(mathia_bin, markdown_content, overrides_path=tmp_ov)
+    finally:
+        if tmp_ov.exists():
+            tmp_ov.unlink()
 
-        bio_tags = resolve_bio_tags_in_python(dump.nodes, overrides_dict)
-    else:
-        dump = resolved_dump
-        bio_tags = resolved_dump.bio_tags
+    if dump.bio_tags is None:
+        raise RuntimeError(f"mathia dump-features with overrides failed to produce bio_tags for {doc_id}")
+
+    bio_tags = dump.bio_tags
 
     if not title:
         # Extract title from first heading if present

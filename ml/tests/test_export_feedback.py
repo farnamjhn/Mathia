@@ -12,9 +12,7 @@ from mathia_ml.export_feedback import (
     load_overrides_dict,
     merge_and_resplit,
     reconstruct_overrides_from_log,
-    resolve_bio_tags_in_python,
 )
-from mathia_ml.schema import DumpNode, NodeFeatures
 from mathia_ml.split import load_jsonl
 
 
@@ -87,61 +85,6 @@ class TestExportFeedback(unittest.TestCase):
         self.assertIn("8", ov["suppressed"])
         self.assertEqual(ov["retype"]["2"], "proposition")
         self.assertEqual(ov["end"]["1"], 7)
-
-    def test_resolve_bio_tags_in_python(self):
-        # Setup dummy nodes:
-        # node 0: Theorem opener
-        # node 1: Prose
-        # node 2: Display math
-        # node 3: Text
-        nodes = [
-            DumpNode(
-                index=0,
-                kind="paragraph",
-                flat_text="Theorem 1. Let $G$ be a group.",
-                char_len=30,
-                features=NodeFeatures(lead={"kind": "theorem", "labelled": True}),
-            ),
-            DumpNode(
-                index=1,
-                kind="paragraph",
-                flat_text="Then $G$ has a subgroup.",
-                char_len=24,
-                features=NodeFeatures(continuation=True),
-            ),
-            DumpNode(
-                index=2,
-                kind="display_math",
-                flat_text="$$|G| = n$$",
-                char_len=11,
-                features=NodeFeatures(math_density=1.0),
-            ),
-            DumpNode(
-                index=3,
-                kind="paragraph",
-                flat_text="This concludes our introductory remarks.",
-                char_len=40,
-                features=NodeFeatures(),
-            ),
-        ]
-
-        # Natural scoping without overrides
-        tags_natural = resolve_bio_tags_in_python(nodes, {})
-        self.assertEqual(tags_natural[0], "B-THEOREM")
-        self.assertEqual(tags_natural[1], "I-THEOREM")
-        self.assertEqual(tags_natural[2], "I-THEOREM")
-        self.assertEqual(tags_natural[3], "O")
-
-        # Suppress opener at node 0
-        tags_suppressed = resolve_bio_tags_in_python(nodes, {"suppressed": [0]})
-        self.assertEqual(tags_suppressed, ["O", "O", "O", "O"])
-
-        # Retype node 0 to Lemma and narrow scope with delta=-1
-        tags_retyped = resolve_bio_tags_in_python(nodes, {"retype": {"0": "lemma"}, "delta": {"0": -1}})
-        self.assertEqual(tags_retyped[0], "B-LEMMA")
-        self.assertEqual(tags_retyped[1], "I-LEMMA")
-        self.assertEqual(tags_retyped[2], "O")
-        self.assertEqual(tags_retyped[3], "O")
 
     def test_export_feedback_with_mathia_cli_and_overrides(self):
         mathia_bin = find_mathia_binary()
