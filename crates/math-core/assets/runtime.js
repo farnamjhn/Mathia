@@ -522,6 +522,607 @@
     if (window.Mathia) window.Mathia.search = function (q) { input.value = q; run(q); return hits.length; };
   }
 
+  /* Keep native ranges for bidi selection and foreground color. Paint prose
+     backgrounds by visual line so that inline math and text share a height. */
+  function highlightBackgrounds(main) {
+    var prose = "p, li, dt, dd, td, th, blockquote, h1, h2, h3, h4, h5, h6, .mx-block-title, .mx-block-body";
+    var native = "code, pre, .math-display, mark.mx-hit, .mx-hit-math";
+    var skip = ".katex-mathml, script, style, svg, button, .mx-actions";
+    var painted = new Set();
+
+    function eachText(root, range, visit) {
+      if (root.nodeType === 3) { visit(root); return; }
+      var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+        acceptNode: function (node) {
+          if (range && !range.intersectsNode(node)) return NodeFilter.FILTER_REJECT;
+          if (node.nodeType === 3) return NodeFilter.FILTER_ACCEPT;
+          return node.matches(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
+        },
+      });
+      for (var node = walker.nextNode(); node; node = walker.nextNode()) visit(node);
+    }
+
+    function paint(block, selections) {
+      var measure = document.createRange();
+      var fragments = [];
+      var selected = [];
+      var mathRects = new Map();
+      var seenMath = new Set();
+
+      function textRects(node, start, end) {
+        measure.setStart(node, start);
+        measure.setEnd(node, end);
+        return Array.from(measure.getClientRects()).filter(function (r) { return r.width > 0 && r.height > 0; });
+      }
+
+      eachText(block, null, function (node) {
+        var el = node.parentElement;
+        if (el.closest(prose) !== block || el.closest(".math-display, pre")) return;
+        var length = node.length;
+        var math = el.closest(".math-inline");
+        var mathRect = null;
+        if (math) {
+          if (!mathRects.has(math)) {
+            var rect = math.getBoundingClientRect();
+            mathRects.set(math, rect);
+            if (rect.width && rect.height) fragments.push(rect);
+          }
+          mathRect = mathRects.get(math);
+        } else {
+          fragments.push.apply(fragments, textRects(node, 0, length));
+        }
+        if (el.closest(native)) return;
+        selections.forEach(function (range) {
+          if (!range.intersectsNode(node)) return;
+          if (math && range.comparePoint(math, 0) === 0 &&
+              range.comparePoint(math, math.childNodes.length) === 0) {
+            if (!seenMath.has(math)) selected.push({ rect: mathRect, anchor: mathRect });
+            seenMath.add(math);
+            return;
+          }
+          var start = range.startContainer === node ? range.startOffset : 0;
+          var end = range.endContainer === node ? range.endOffset : length;
+          textRects(node, start, end).forEach(function (rect) {
+            selected.push({ rect: rect, anchor: mathRect || rect });
+          });
+        });
+      });
+      if (!selected.length) return null;
+
+      var lines = [];
+      function center(rect) { return (rect.top + rect.bottom) / 2; }
+      function nearest(rect) {
+        var match = null;
+        var distance = Infinity;
+        lines.forEach(function (line) {
+          var delta = Math.abs(line.center - center(rect));
+          if (delta < distance) { distance = delta; match = line; }
+        });
+        return match;
+      }
+      // Start with the shorter fragments so tall formulas can extend a line
+      // without shifting the reference used to assign the other fragments.
+      fragments.sort(function (a, b) { return a.height - b.height; }).forEach(function (rect) {
+        var line = nearest(rect);
+        if (!line || Math.abs(line.center - center(rect)) >= Math.max(line.height, rect.height) / 2) {
+          lines.push({ center: center(rect), height: rect.height, top: rect.top, bottom: rect.bottom, spans: [] });
+        } else {
+          line.top = Math.min(line.top, rect.top);
+          line.bottom = Math.max(line.bottom, rect.bottom);
+        }
+      });
+      if (!lines.length) return null;
+
+      var style = window.getComputedStyle(block);
+      var height = parseFloat(style.lineHeight) || 0;
+      lines.forEach(function (line) { height = Math.max(height, line.bottom - line.top); });
+      selected.forEach(function (part) {
+        if (part.rect.width) nearest(part.anchor).spans.push(part.rect);
+      });
+      var origin = block.getBoundingClientRect();
+      var leftEdge = origin.left + parseFloat(style.borderLeftWidth);
+      var topEdge = origin.top + parseFloat(style.borderTopWidth) - height;
+      var bands = [];
+      function px(n) { return n.toFixed(3) + "px"; }
+      lines.forEach(function (line) {
+        var top = (line.top + line.bottom - height) / 2 - topEdge;
+        var left, right;
+        function addLayer() {
+          bands.push("linear-gradient(var(--mx-highlight-bg), var(--mx-highlight-bg)) " +
+            px(left - leftEdge) + " " + px(top) + " / " + px(right - left) + " " + px(height) + " no-repeat");
+        }
+        line.spans.sort(function (a, b) { return a.left - b.left; }).forEach(function (span) {
+          if (right !== undefined && span.left <= right + 0.5) {
+            right = Math.max(right, span.right);
+          } else {
+            if (right !== undefined) addLayer();
+            left = span.left;
+            right = span.right;
+          }
+        });
+        if (right !== undefined) addLayer();
+      });
+      return bands.length ? { background: bands.join(", "), inset: px(-height) } : null;
+    }
+
+    function clear() {
+      painted.forEach(function (block) {
+        block.removeAttribute("data-mx-highlight-painted");
+        block.style.removeProperty("--mx-highlight-bands");
+        block.style.removeProperty("--mx-highlight-inset");
+        if (block.getAttribute("style") === "") block.removeAttribute("style");
+      });
+      painted.clear();
+    }
+
+    return {
+      clear: clear,
+      update: function (ranges) {
+        var blocks = new Map();
+        ranges.forEach(function (range) {
+          var touched = new Set();
+          eachText(range.commonAncestorContainer, range, function (node) {
+            var el = node.parentElement;
+            var block = el.closest(prose);
+            if (block && main.contains(block) && !el.closest(native + ", " + skip)) touched.add(block);
+          });
+          touched.forEach(function (block) {
+            if (!blocks.has(block)) blocks.set(block, []);
+            blocks.get(block).push(range);
+          });
+        });
+        var bands = new Map();
+        blocks.forEach(function (selections, block) {
+          var result = paint(block, selections);
+          if (result) bands.set(block, result);
+        });
+        clear();
+        bands.forEach(function (result, block) {
+          block.style.setProperty("--mx-highlight-bands", result.background);
+          block.style.setProperty("--mx-highlight-inset", result.inset);
+          block.setAttribute("data-mx-highlight-painted", "");
+          painted.add(block);
+        });
+      },
+    };
+  }
+
+  function setupHighlights() {
+    var main = document.getElementById("mx-main");
+    var supported = !!(window.CSS && window.CSS.highlights && typeof window.Highlight === "function");
+    var NAME = "mathia-highlight";
+    var ranges = [];
+    var highlight = supported ? new window.Highlight() : null;
+    var registered = false;
+    var pending = null;
+    var toolbar = null;
+    var button = null;
+    var expandButton = null;
+    var undoBar = null;
+    var undoButton = null;
+    var redoButton = null;
+    /* Highlight states for undo/redo, oldest first. */
+    var history = [];
+    var future = [];
+    var held = false;
+    /* Inside the desktop app the host owns the undo order, so the frame only
+       replays what it is told to. */
+    var framed = window.parent !== window;
+    var backgrounds = main && supported ? highlightBackgrounds(main) : null;
+    var resizeObserver = null;
+    var mutationObserver = null;
+    var frame = 0;
+
+    function repaintSoon() {
+      if (!ranges.length || frame) return;
+      frame = window.requestAnimationFrame(function () {
+        frame = 0;
+        backgrounds.update(ranges);
+      });
+    }
+
+    function onResize() {
+      hide();
+      repaintSoon();
+    }
+
+    function hide() {
+      if (toolbar) toolbar.hidden = true;
+    }
+
+    function reset() {
+      if (registered && window.CSS && window.CSS.highlights) {
+        try { window.CSS.highlights.delete(NAME); } catch (err) { /* already gone */ }
+      }
+      registered = false;
+      ranges = [];
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = 0;
+      if (backgrounds) backgrounds.clear();
+      if (supported) highlight = new window.Highlight();
+      pending = null;
+      hide();
+    }
+
+    function snapshot() {
+      return ranges.slice();
+    }
+
+    function clear() {
+      if (ranges.length) {
+        history.push(snapshot());
+        future = [];
+      }
+      reset();
+      updateUndo();
+    }
+
+    function restore(list) {
+      reset();
+      list.forEach(function (range) {
+        try {
+          highlight.add(range);
+          ranges.push(range);
+        } catch (err) { /* the range no longer fits the document */ }
+      });
+      if (ranges.length && supported) {
+        window.CSS.highlights.set(NAME, highlight);
+        registered = true;
+      }
+      repaintSoon();
+      updateUndo();
+    }
+
+    function undo() {
+      if (!history.length) return;
+      future.push(snapshot());
+      restore(history.pop());
+    }
+
+    function redo() {
+      if (!future.length) return;
+      history.push(snapshot());
+      restore(future.pop());
+    }
+
+    function updateUndo() {
+      if (!undoBar) return;
+      undoBar.hidden = !history.length && !future.length && !ranges.length;
+      undoButton.disabled = !history.length;
+      redoButton.disabled = !future.length;
+    }
+
+    function destroy() {
+      clear();
+      if (framed) window.removeEventListener("message", onHostMessage);
+      if (toolbar) {
+        document.removeEventListener("selectionchange", onSelectionChange);
+        document.removeEventListener("keydown", onKeyDown, true);
+        window.removeEventListener("scroll", hide, true);
+        window.removeEventListener("resize", onResize);
+        if (resizeObserver) resizeObserver.disconnect();
+        if (mutationObserver) mutationObserver.disconnect();
+        if (document.fonts) document.fonts.removeEventListener("loadingdone", repaintSoon);
+        window.removeEventListener("pagehide", onPageHide);
+        window.removeEventListener("beforeunload", destroy);
+        if (toolbar.parentNode) toolbar.parentNode.removeChild(toolbar);
+        toolbar = null;
+        button = null;
+        expandButton = null;
+      }
+      if (undoBar) {
+        undoButton.removeEventListener("click", undo);
+        redoButton.removeEventListener("click", redo);
+        if (undoBar.parentNode) undoBar.parentNode.removeChild(undoBar);
+        undoBar = null;
+        undoButton = null;
+        redoButton = null;
+      }
+    }
+
+    function onPageHide(e) {
+      if (e.persisted) return;
+      destroy();
+    }
+
+    var api = {
+      supported: supported,
+      count: function () { return ranges.length; },
+      clear: clear,
+      undo: undo,
+      redo: redo,
+      destroy: destroy,
+    };
+    if (window.Mathia) window.Mathia.highlights = api;
+    if (!main || !supported) return;
+
+    var LANG_FA = document.documentElement.lang === "fa";
+    var label = LANG_FA ? "برجسته‌سازی انتخاب" : "Highlight selection";
+    var hint = LANG_FA ? "متن انتخاب‌شده را برجسته نگه می‌دارد" : "Keep the selected text highlighted";
+    var expandLabel = LANG_FA ? "گسترش بلوک" : "Expand block";
+    var expandHint = LANG_FA
+      ? "بلوک آخر در انتخاب را تا این متن بزرگ می‌کند"
+      : "Grow the last block in the selection to cover this text";
+
+    toolbar = document.createElement("div");
+    toolbar.id = "mx-highlight-toolbar";
+    toolbar.className = "mx-highlight-toolbar";
+    toolbar.setAttribute("role", "toolbar");
+    toolbar.setAttribute("aria-label", label);
+    toolbar.hidden = true;
+
+    function addTool(action, text, title, shortcut) {
+      var el = document.createElement("button");
+      el.type = "button";
+      el.id = "mx-" + action + "-button";
+      el.dataset.mxAction = action;
+      el.textContent = text;
+      el.title = title;
+      el.setAttribute("aria-label", text);
+      if (shortcut) el.setAttribute("aria-keyshortcuts", shortcut);
+      toolbar.appendChild(el);
+      return el;
+    }
+
+    button = addTool("highlight", label, hint, "Control+Shift+H");
+    /* Growing a block is a correction of the source, which only the Mathia
+       app can apply; a standalone page offers the highlight alone. */
+    if (framed) {
+      expandButton = addTool("expand", expandLabel, expandHint);
+    }
+    document.body.appendChild(toolbar);
+
+    /* A page opened on its own, as on a phone, has no toolbar of its own, so
+       the highlight history gets floating buttons. */
+    if (!framed) {
+      undoBar = document.createElement("div");
+      undoBar.id = "mx-highlight-history";
+      undoBar.className = "mx-highlight-history";
+      undoBar.setAttribute("role", "group");
+      undoBar.setAttribute("aria-label", LANG_FA ? "واگرد برجسته‌سازی" : "Highlight history");
+      undoBar.hidden = true;
+
+      undoButton = document.createElement("button");
+      undoButton.type = "button";
+      undoButton.id = "mx-highlight-undo";
+      undoButton.textContent = "↶";
+      undoButton.title = LANG_FA ? "واگرد برجسته‌سازی (Ctrl+Z)" : "Undo highlight (Ctrl+Z)";
+      undoButton.setAttribute("aria-label", LANG_FA ? "واگرد" : "Undo");
+      undoButton.disabled = true;
+
+      redoButton = document.createElement("button");
+      redoButton.type = "button";
+      redoButton.id = "mx-highlight-redo";
+      redoButton.textContent = "↷";
+      redoButton.title = LANG_FA ? "ازنو (Ctrl+Shift+Z)" : "Redo highlight (Ctrl+Shift+Z)";
+      redoButton.setAttribute("aria-label", LANG_FA ? "ازنو" : "Redo");
+      redoButton.disabled = true;
+
+      undoBar.appendChild(undoButton);
+      undoBar.appendChild(redoButton);
+      document.body.appendChild(undoBar);
+      undoButton.addEventListener("click", undo);
+      redoButton.addEventListener("click", redo);
+    }
+
+    function elementOf(node) {
+      return node && node.nodeType === 1 ? node : node && node.parentElement;
+    }
+
+    function isUi(node) {
+      var el = elementOf(node);
+      return !!(el && el.closest && el.closest(
+        "button, input, textarea, select, dialog, .mx-actions, .mx-math-copy, " +
+        ".mx-ai-panel, script, style, svg"
+      ));
+    }
+
+    function inside(node) {
+      return !!node && (node === main || main.contains(node));
+    }
+
+    function usable(range) {
+      if (!range || range.collapsed) return false;
+      if (!inside(range.startContainer) || !inside(range.endContainer)) return false;
+      if (!range.startContainer.isConnected || !range.endContainer.isConnected) return false;
+      if (isUi(range.startContainer) || isUi(range.endContainer)) return false;
+      var text = range.toString();
+      if (!text || !text.trim()) return false;
+      var rect = range.getBoundingClientRect();
+      return !!rect && (rect.width > 0 || rect.height > 0);
+    }
+
+    function show(range) {
+      var rect = range.getBoundingClientRect();
+      if (!rect) { hide(); return; }
+      toolbar.hidden = false;
+      var width = toolbar.offsetWidth || 160;
+      var height = toolbar.offsetHeight || 32;
+      var left = rect.left + (rect.width - width) / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+      var top = rect.top - height - 8;
+      if (top < 8) top = rect.bottom + 8;
+      top = Math.max(8, Math.min(top, window.innerHeight - height - 8));
+      toolbar.style.left = left + "px";
+      toolbar.style.top = top + "px";
+    }
+
+    function apply() {
+      var range = pending;
+      var sel = window.getSelection();
+      if (!range && sel && sel.rangeCount && !sel.isCollapsed) {
+        range = sel.getRangeAt(0).cloneRange();
+      }
+      if (!usable(range)) { hide(); return false; }
+      var before = snapshot();
+      try {
+        highlight.add(range);
+        if (!registered) {
+          window.CSS.highlights.set(NAME, highlight);
+          registered = true;
+        }
+        ranges.push(range);
+      } catch (err) {
+        return false;
+      }
+      history.push(before);
+      future = [];
+      repaintSoon();
+      pending = null;
+      if (sel) sel.removeAllRanges();
+      hide();
+      updateUndo();
+      if (framed) window.parent.postMessage({ mathia: "highlight-applied" }, "*");
+      return true;
+    }
+
+    /* The last block the selection touches. A selection often runs past the
+       end of a block into plain text; the block to grow is the one before it. */
+    function lastBlock(node) {
+      var el = elementOf(node);
+      var block = el && el.closest ? el.closest("[data-block-id]") : null;
+      var all = document.querySelectorAll("[data-block-id]");
+      while (block) {
+        var type = block.dataset.blockType;
+        if (type && type !== "text" && type !== "heading") return block;
+        var index = Array.prototype.indexOf.call(all, block);
+        block = index > 0 ? all[index - 1] : null;
+      }
+      return null;
+    }
+
+    /* The element the compiled document made for one node of the source: a
+       paragraph, a list item, a heading, a block quote. */
+    function endElement(node) {
+      var el = elementOf(node);
+      while (el && el.parentElement) {
+        if (el.tagName === "LI") return el;
+        var parent = el.parentElement;
+        if (parent.id === "mx-main" ||
+            (parent.classList && parent.classList.contains("mx-block-body"))) return el;
+        el = parent;
+      }
+      return null;
+    }
+
+    /* The node's prose without the rendered formulas, so the host can match it
+       against the source nodes. */
+    function proseOf(el) {
+      if (!el) return "";
+      var clone = el.cloneNode(true);
+      clone.querySelectorAll(".mx-block-head, .mx-math-copy, .mx-actions, .math").forEach(function (n) {
+        n.remove();
+      });
+      return clone.textContent.replace(/\s+/g, " ").trim();
+    }
+
+    /* Asks the host app to grow the last block of the selection. */
+    function expand() {
+      var range = pending;
+      var sel = window.getSelection();
+      if (!range && sel && sel.rangeCount && !sel.isCollapsed) {
+        range = sel.getRangeAt(0).cloneRange();
+      }
+      if (!range) { hide(); return; }
+      var block = lastBlock(range.endContainer) || lastBlock(range.startContainer);
+      var last = endElement(range.endContainer);
+      var owner = last && last.closest ? last.closest("[data-block-id]") : null;
+      var text = proseOf(last);
+      pending = null;
+      if (sel) sel.removeAllRanges();
+      hide();
+      if (!block) return;
+      window.parent.postMessage(
+        { mathia: "expand", id: block.dataset.blockId, endId: owner ? owner.dataset.blockId : null, text: text },
+        "*"
+      );
+    }
+
+    function onSelectionChange() {
+      if (held) return;
+      var sel = window.getSelection();
+      if (!sel || !sel.rangeCount || sel.isCollapsed) { pending = null; hide(); return; }
+      var range = sel.getRangeAt(0);
+      if (!usable(range)) { pending = null; hide(); return; }
+      pending = range.cloneRange();
+      show(pending);
+    }
+
+    /* The desktop app decides what undo means across corrections and
+       highlights, then asks the frame to replay its part. */
+    function onHostMessage(e) {
+      if (e.source !== window.parent || !e.data) return;
+      if (e.data.mathia === "highlight-undo") undo();
+      else if (e.data.mathia === "highlight-redo") redo();
+    }
+
+    function onKeyDown(e) {
+      if (e.repeat) return;
+      var typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || "") ||
+        (e.target && e.target.isContentEditable);
+      var key = e.key ? e.key.toLowerCase() : "";
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (key === "z" || key === "y") && !typing) {
+        e.preventDefault();
+        var action = key === "y" || e.shiftKey ? "redo" : "undo";
+        if (framed) window.parent.postMessage({ mathia: action }, "*");
+        else if (action === "redo") redo();
+        else undo();
+        return;
+      }
+      if (!(e.code === "KeyH" || key === "h")) return;
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
+      var sel = window.getSelection();
+      if (!sel || !sel.rangeCount || sel.isCollapsed) return;
+      var range = sel.getRangeAt(0);
+      if (!usable(range)) return;
+      e.preventDefault();
+      pending = range.cloneRange();
+      apply();
+    }
+
+    function releaseSoon(delay) {
+      window.setTimeout(function () { held = false; }, delay);
+    }
+
+    /* Capture the range before a toolbar interaction can clear the native
+       selection. mousedown.preventDefault keeps the selection for mouse
+       users; touch users rely on the range captured on selectionchange. */
+    toolbar.addEventListener("mousedown", function (e) {
+      held = true;
+      e.preventDefault();
+    });
+    toolbar.addEventListener("touchstart", function () { held = true; }, { passive: true });
+    toolbar.addEventListener("pointerdown", function () { held = true; });
+    toolbar.addEventListener("pointerup", function (e) {
+      if (e.pointerType !== "touch") releaseSoon(0);
+    });
+    toolbar.addEventListener("touchend", function () { releaseSoon(400); });
+    toolbar.addEventListener("click", function (e) {
+      var target = e.target && e.target.closest ? e.target.closest("button[data-mx-action]") : null;
+      if (!target) return;
+      e.preventDefault();
+      if (target.dataset.mxAction === "expand") expand();
+      else apply();
+    });
+
+    document.addEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("keydown", onKeyDown, true);
+    if (framed) window.addEventListener("message", onHostMessage);
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("resize", onResize);
+    if ("ResizeObserver" in window) {
+      resizeObserver = new ResizeObserver(repaintSoon);
+      resizeObserver.observe(main);
+    }
+    if ("MutationObserver" in window) {
+      mutationObserver = new MutationObserver(repaintSoon);
+      mutationObserver.observe(main, { subtree: true, childList: true, characterData: true });
+    }
+    if (document.fonts) document.fonts.addEventListener("loadingdone", repaintSoon);
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("beforeunload", destroy);
+  }
+
   function setupScrollSpy() {
     if (!("IntersectionObserver" in window)) return;
     var links = {};
@@ -636,6 +1237,7 @@
     setupSidebar();
     setupTocFolding();
     setupSearch();
+    setupHighlights();
     setupScrollSpy();
   }
   if (document.readyState === "loading") {

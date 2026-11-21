@@ -94,6 +94,7 @@ impl CompileOptions {
                 MathAssets::bundled()
             },
             title: self.title.clone().filter(|t| !t.trim().is_empty()),
+            source_name: None,
             fonts: vec![math_core::EmbeddedFont::bundled()],
             ai: AiOptions {
                 providers,
@@ -272,14 +273,41 @@ impl Session {
     /// Classifies with the session's configuration and corrections.
     fn classify(&self, source: &Source) -> Result<math_core::Analysis, String> {
         let content = self.read(source)?;
-        if self.is_html_source(source) || math_core::is_html(&content) {
-            return Ok(math_core::clean_html::analyze_html_detailed(&content));
+        self.classify_content(source, &content)
+    }
+
+    fn classify_content(
+        &self,
+        source: &Source,
+        content: &str,
+    ) -> Result<math_core::Analysis, String> {
+        if self.is_html_source(source) || math_core::is_html(content) {
+            let mut analysis = math_core::clean_html::analyze_html_detailed(content);
+            math_core::clean_html::apply_overrides(&mut analysis.document, &self.overrides);
+            math_core::clean_html::reindex(&mut analysis);
+            return Ok(analysis);
         }
-        let analysis = math_core::analyze_with_overrides(&content, &self.config, &self.overrides);
+        let analysis = math_core::analyze_with_overrides(content, &self.config, &self.overrides);
         self.overrides
             .validate(analysis.document.nodes.len())
             .map_err(|e| format!("the corrections no longer fit this file ({e}); reset them"))?;
         Ok(analysis)
+    }
+
+    /// The open document as Markdown, with every block labelled the way
+    /// Mathia detected it. HTML sources are converted; Markdown sources keep
+    /// their own text.
+    pub fn markdown(&self, source: &Source) -> Result<String, String> {
+        let content = self.read(source)?;
+        let analysis = self.classify_content(source, &content)?;
+        if analysis.document.nodes.is_empty() {
+            return Ok(math_core::markdown::render(&analysis.document, None));
+        }
+        let normalized = math_core::normalize_markdown(&content);
+        Ok(math_core::markdown::render(
+            &analysis.document,
+            Some(&normalized),
+        ))
     }
 
     /// Modification time and size of opened file(s), as an opaque string
@@ -343,7 +371,7 @@ impl Session {
         out_dir: &Path,
         options: &CompileOptions,
     ) -> Result<Vec<PathBuf>, String> {
-        let html_options = options.html_options()?;
+        let mut html_options = options.html_options()?;
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
             .map_err(|e| format!("{}: {e}", dir.display()))?
             .filter_map(|entry| entry.ok().map(|e| e.path()))
@@ -352,6 +380,9 @@ impl Session {
         files.sort();
         let mut written = Vec::new();
         for file in files {
+            html_options.source_name = file
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned());
             let markdown =
                 std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
             let document = math_core::analyze(&markdown, &self.config);
@@ -392,16 +423,24 @@ impl Session {
         options: &CompileOptions,
     ) -> Result<(String, usize), String> {
         let content = self.read(source)?;
-        let html_options = options.html_options()?;
+        let mut html_options = options.html_options()?;
+        html_options.source_name = match source {
+            Source::Path(path) => path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned()),
+            _ => None,
+        };
         if self.is_html_source(source) || math_core::is_html(&content) {
-            let analysis = math_core::clean_html::analyze_html_detailed(&content);
+            let mut analysis = math_core::clean_html::analyze_html_detailed(&content);
+            math_core::clean_html::apply_overrides(&mut analysis.document, &self.overrides);
             let semantic = analysis
                 .document
                 .blocks
                 .iter()
                 .filter(|b| b.kind.is_semantic())
                 .count();
-            let html = math_core::clean_html(&content, &html_options).map_err(|e| e.to_string())?;
+            let html = math_core::html::render(&analysis.document, &html_options)
+                .map_err(|e| e.to_string())?;
             return Ok((html, semantic));
         }
         let document = self.classify(source)?.document;
@@ -543,6 +582,40 @@ mod tests {
     }
 
     #[test]
+    fn markdown_export_keeps_the_text_and_labels_every_block() {
+        let session = Session::default();
+        let exported = session.markdown(&text()).unwrap();
+        assert!(exported.contains("**Theorem 1.** Every group of prime order is cyclic."));
+        assert!(exported.contains("$g \\neq e$"));
+        // The corrections shown in the inspector reach the export.
+        let mut corrected = Session::default();
+        let mut overrides = ScopeOverrides::default();
+        overrides.retype.insert(1, BlockType::Lemma);
+        corrected.set_overrides(overrides);
+        assert!(
+            corrected
+                .markdown(&text())
+                .unwrap()
+                .contains("**Lemma 1.**")
+        );
+    }
+
+    #[test]
+    fn markdown_export_converts_an_html_source() {
+        let html = "<html><body><h1>Groups</h1>\
+            <section class=\"mx-block mx-theorem\"><p><strong>Theorem 1.</strong> \
+            Every group of prime order is cyclic.</p></section></body></html>";
+        let exported = Session::default()
+            .markdown(&Source::Text(html.to_string()))
+            .unwrap();
+        assert!(exported.contains("# Groups"), "{exported}");
+        assert!(
+            exported.contains("**Theorem 1.** Every group of prime order is cyclic."),
+            "{exported}"
+        );
+    }
+
+    #[test]
     fn options_map_onto_html_options() {
         let options: CompileOptions = serde_json::from_str(
             r#"{"noMath": true, "aiProviders": ["anthropic", "Anthropic"],
@@ -607,6 +680,46 @@ mod tests {
         let parsed: ScopeOverrides =
             serde_json::from_str(r#"{"retype": {"1": "lemma"}, "end": {"1": 3}}"#).unwrap();
         assert_eq!(parsed.end.get(&1), Some(&3));
+    }
+
+    #[test]
+    fn html_corrections_apply_to_analysis_and_preview() {
+        let html = "<html><body><main>\
+            <h1>Groups</h1>\
+            <p><strong>Theorem 1.</strong> Every group of prime order is cyclic.</p>\
+            <p>This proof follows from Lagrange's theorem.</p>\
+            </main></body></html>";
+        let source = Source::Text(html.to_string());
+        let mut session = Session::default();
+
+        let before = session.analyze(&source).unwrap();
+        let theorem = before
+            .document
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockType::Theorem)
+            .expect("theorem detected");
+        assert_eq!(theorem.span.end - theorem.span.start, 1);
+        let start = theorem.span.start;
+
+        let mut overrides = ScopeOverrides::default();
+        overrides.end.insert(start, start + 2);
+        session.set_overrides(overrides);
+
+        let after = session.analyze(&source).unwrap();
+        let theorem = after
+            .document
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockType::Theorem)
+            .expect("theorem survives");
+        assert_eq!(theorem.span.end - theorem.span.start, 2);
+        assert!(theorem.html.contains("This proof follows"));
+
+        let (compiled, _) = session
+            .compile(&source, &CompileOptions::default())
+            .unwrap();
+        assert!(compiled.contains("This proof follows"));
     }
 
     #[test]

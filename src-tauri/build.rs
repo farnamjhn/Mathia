@@ -8,6 +8,7 @@ const COMMANDS: &[&str] = &[
     "analyze",
     "compile",
     "export",
+    "export_markdown",
     "export_pdf",
     "fix_markdown",
     "get_config",

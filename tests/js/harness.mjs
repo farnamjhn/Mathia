@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { chromium } from "playwright-core";
+import { chromium, webkit } from "playwright-core";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const FIXTURES = join(ROOT, "crates/math-core/tests/fixtures");
@@ -37,7 +37,10 @@ export async function setup() {
   pages.fa = compile("analysis_fa.md", "fa-ai.html", "--ai");
   pages.figure = compile("svg_figure.html", "figure-ai.html", "--ai");
   pages.plain = compile("algebra_en.md", "en-plain.html");
-  browser = await chromium.launch({ channel: "chrome" });
+  pages.mindmap = compile("runtime/mindmap_fa.md", "mindmap-fa.html");
+  browser = process.env.MATHIA_TEST_BROWSER === "webkit"
+    ? await webkit.launch()
+    : await chromium.launch({ channel: "chrome" });
 }
 
 export async function teardown() {
@@ -46,8 +49,8 @@ export async function teardown() {
 }
 
 /** A fresh browser context (own storage) with one page on `url`. */
-export async function open(url) {
-  const context = await browser.newContext();
+export async function open(url, options = {}) {
+  const context = await browser.newContext(options);
   const leaked = [];
   await context.route(/^(?!file:)/, (route) => {
     leaked.push(route.request().url());

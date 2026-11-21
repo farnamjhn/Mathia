@@ -88,6 +88,30 @@ fn display(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// The file name (without extension) a save dialog proposes for `source`.
+fn default_stem(source: &Source, title: Option<&str>) -> String {
+    if let Some(title) = title {
+        return title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+    }
+    match source {
+        Source::Path(path) => path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "document".into()),
+        Source::MultiPath(paths) => {
+            if paths.len() == 1 {
+                paths[0]
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "document".into())
+            } else {
+                "combined".into()
+            }
+        }
+        Source::Text(_) => "document".into(),
+    }
+}
+
 /// Opens the file dialog. Returns the chosen paths (canonical) in order,
 /// or an empty list if the dialog was cancelled.
 #[tauri::command]
@@ -211,27 +235,7 @@ async fn export(
 ) -> Result<Option<String>, String> {
     let (html, _) = lock(&state).compile(&source, &options)?;
     let mut dialog = app.dialog().file().add_filter("HTML", &["html"]);
-    let default_name = if let Some(ref title) = options.title {
-        title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
-    } else {
-        match &source {
-            Source::Path(p) => p
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "document".into()),
-            Source::MultiPath(paths) => {
-                if paths.len() == 1 {
-                    paths[0]
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "document".into())
-                } else {
-                    "combined".into()
-                }
-            }
-            Source::Text(_) => "document".into(),
-        }
-    };
+    let default_name = default_stem(&source, options.title.as_deref());
     dialog = dialog.set_file_name(format!("{default_name}.html"));
     if let Some(dir) = source.path().and_then(Path::parent) {
         dialog = dialog.set_directory(dir);
@@ -241,6 +245,62 @@ async fn export(
     };
     let dest = dest.into_path().map_err(|e| e.to_string())?;
     std::fs::write(&dest, html).map_err(|e| format!("{}: {e}", dest.display()))?;
+    Ok(Some(display(&dest)))
+}
+
+/// Writes the compiled document as Markdown where the user says. Returns the
+/// destination, or `None` if the dialog was cancelled.
+#[tauri::command]
+async fn export_markdown(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    source: Source,
+) -> Result<Option<String>, String> {
+    let markdown = lock(&state).markdown(&source)?;
+    let mut dialog = app
+        .dialog()
+        .file()
+        .add_filter("Markdown", &["md"])
+        .set_file_name(format!("{}.md", default_stem(&source, None)));
+    if let Some(dir) = source.path().and_then(Path::parent) {
+        dialog = dialog.set_directory(dir);
+    }
+    let Some(dest) = dialog.blocking_save_file() else {
+        return Ok(None);
+    };
+    let dest = dest.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(&dest, markdown).map_err(|e| format!("{}: {e}", dest.display()))?;
+    Ok(Some(display(&dest)))
+}
+
+/// Save a rendered map from the sandboxed preview through the native dialog.
+#[tauri::command]
+async fn export_mindmap(
+    app: AppHandle,
+    extension: String,
+    bytes: Vec<u8>,
+) -> Result<Option<String>, String> {
+    if !matches!(extension.as_str(), "svg" | "png") || bytes.len() > 48 * 1024 * 1024 {
+        return Err("Unsupported mind map export".into());
+    }
+    let valid = match extension.as_str() {
+        "png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        _ => std::str::from_utf8(&bytes).is_ok_and(|text| text.trim_start().starts_with("<svg")),
+    };
+    if !valid {
+        return Err("Invalid mind map image".into());
+    }
+    let Some(dest) = app
+        .dialog()
+        .file()
+        .add_filter(extension.to_uppercase(), &[extension.as_str()])
+        .set_file_name(format!("mathia-mindmap.{extension}"))
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let dest = dest.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(&dest, bytes).map_err(|e| format!("{}: {e}", dest.display()))?;
     Ok(Some(display(&dest)))
 }
 
@@ -707,8 +767,15 @@ fn main() {
                     dock::sync(Some(*theme));
                     theme::sync_os_content_appearance(window, *theme);
                 }
-                WindowEvent::Focused(true) => {
+                WindowEvent::Focused(_) => {
                     dock::sync(None);
+                }
+                #[cfg(target_os = "macos")]
+                WindowEvent::CloseRequested { api, .. } => {
+                    if window.label() == "main" {
+                        let _ = window.hide();
+                        api.prevent_close();
+                    }
                 }
                 // A dropped Markdown or HTML file is as much the user's choice as one
                 // picked in the dialog. The frontend gets the same paths through
@@ -731,6 +798,8 @@ fn main() {
             analyze,
             compile,
             export,
+            export_markdown,
+            export_mindmap,
             export_pdf,
             fix_markdown,
             get_config,
@@ -755,11 +824,30 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("failed to build Mathia")
         .run(|_app_handle, event| {
-            if let RunEvent::Ready = event {
-                // In dev builds on macOS, Tauri sets the light bundle icon
-                // right after `setup` returns (inside `RuntimeRunEvent::Ready`)
-                // before emitting `RunEvent::Ready`, so apply ours here.
-                dock::refresh(None);
+            match event {
+                RunEvent::Ready => {
+                    // In dev builds on macOS, Tauri sets the light bundle icon
+                    // right after `setup` returns (inside `RuntimeRunEvent::Ready`)
+                    // before emitting `RunEvent::Ready`, so apply ours here.
+                    dock::refresh(None);
+                }
+                RunEvent::Resumed => {
+                    dock::sync(None);
+                }
+                #[cfg(target_os = "macos")]
+                RunEvent::Reopen {
+                    has_visible_windows,
+                    ..
+                } => {
+                    if !has_visible_windows
+                        && let Some(window) = _app_handle.get_webview_window("main")
+                    {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                    dock::refresh(None);
+                }
+                _ => {}
             }
         });
 }

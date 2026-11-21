@@ -15,6 +15,8 @@ pub mod error;
 pub mod features;
 pub mod html;
 mod html_import;
+pub mod markdown;
+pub mod mindmap;
 pub mod model;
 pub mod normalize;
 pub mod parser;
@@ -34,7 +36,8 @@ pub use html::{
     AiOptions, AiProvider, CustomProvider, EmbeddedFont, HtmlOptions, KatexAssets, MathAssets,
 };
 pub use model::{
-    BlockType, Direction, Document, EndReason, EnvSpan, Node, NodeKind, SemanticBlock, TocEntry,
+    BlockType, Direction, Document, EndReason, EnvSpan, ListInfo, Node, NodeKind, SemanticBlock,
+    TocEntry,
 };
 pub use normalize::normalize_markdown;
 pub use repair::{Repair, repair_markdown, wrap_bare_math};
@@ -84,14 +87,20 @@ impl Analysis {
                 .filter(|(_, s)| *s > 0.0)
                 .map(|(kind, s)| format!(", then {} {s:.2}", kind.slug()))
                 .unwrap_or_default();
-            let preview: String = self.document.nodes[index]
-                .flat
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .chars()
-                .take(48)
-                .collect();
+            let preview: String = self
+                .document
+                .nodes
+                .get(index)
+                .map(|node| {
+                    node.flat
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .chars()
+                        .take(48)
+                        .collect()
+                })
+                .unwrap_or_default();
             let best = if score.best.1 > 0.0 {
                 format!("{} {:.2}", score.best.0.slug(), score.best.1)
             } else {
@@ -126,7 +135,10 @@ pub fn analyze_with_overrides(
     overrides: &ScopeOverrides,
 ) -> Analysis {
     if is_html(markdown) {
-        return clean_html::analyze_html_detailed(markdown);
+        let mut analysis = clean_html::analyze_html_detailed(markdown);
+        clean_html::apply_overrides(&mut analysis.document, overrides);
+        clean_html::reindex(&mut analysis);
+        return analysis;
     }
     let nodes = parser::parse_markdown(&normalize_markdown(markdown));
     let Classification {

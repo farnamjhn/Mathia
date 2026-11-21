@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -721,6 +721,276 @@ describe("copy", () => {
   });
 });
 
+describe("highlights", () => {
+  async function select(page, from, to, { backward = false } = {}) {
+    return page.evaluate(({ from, to, backward }) => {
+      const main = document.getElementById("mx-main");
+      const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+      let startNode = null;
+      let startOffset = 0;
+      let endNode = null;
+      let endOffset = 0;
+      let node;
+      while ((node = walker.nextNode())) {
+        const text = node.nodeValue || "";
+        if (!startNode) {
+          const at = text.indexOf(from);
+          if (at === -1) continue;
+          startNode = node;
+          startOffset = at;
+          const after = text.indexOf(to, at + from.length);
+          if (after !== -1) {
+            endNode = node;
+            endOffset = after + to.length;
+            break;
+          }
+        } else {
+          const at = text.indexOf(to);
+          if (at !== -1) {
+            endNode = node;
+            endOffset = at + to.length;
+            break;
+          }
+        }
+      }
+      if (!startNode || !endNode) throw new Error(`selection text not found: ${from} / ${to}`);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      if (backward) sel.setBaseAndExtent(endNode, endOffset, startNode, startOffset);
+      else sel.setBaseAndExtent(startNode, startOffset, endNode, endOffset);
+      const range = sel.getRangeAt(0);
+      return {
+        text: range.toString(),
+        rects: range.getClientRects().length,
+        backward: sel.anchorNode === endNode,
+      };
+    }, { from, to, backward });
+  }
+
+  async function ranges(page) {
+    return page.evaluate(() => {
+      const highlight = CSS.highlights.get("mathia-highlight");
+      return highlight ? Array.from(highlight).map((range) => range.toString()) : [];
+    });
+  }
+
+  async function waitForToolbar(page) {
+    await page.waitForSelector("#mx-highlight-toolbar:not([hidden])");
+  }
+
+  test("highlights an RTL lesson with inline LTR math in both directions", async () => {
+    const s = await open(pages.fa);
+    const { page } = s;
+    await page.waitForSelector("#block-definition-1 .katex");
+    const before = await page.locator("#mx-main").innerHTML();
+    const formula = page.locator("#block-definition-1 .katex").first();
+    const mathBefore = await formula.evaluate((el) => el.outerHTML);
+
+    const forward = await select(page, "تابع", "را");
+    assert.equal(forward.backward, false);
+    assert.match(forward.text, /تابع/);
+    assert.match(forward.text, /را/);
+    assert.ok(
+      await page.evaluate(() => Boolean(document.querySelector("#block-definition-1 .math-inline .katex"))),
+      "inline math uses KaTeX's HTML/MathML renderer",
+    );
+    assert.ok(
+      await page.evaluate(() => Array.from(document.styleSheets).some((sheet) => {
+        try {
+          return Array.from(sheet.cssRules).some((rule) => rule.selectorText === "::highlight(mathia-highlight)");
+        } catch (err) {
+          return false;
+        }
+      })),
+      "the highlight pseudo-element is styled",
+    );
+    await waitForToolbar(page);
+    assert.equal(await page.locator("#mx-highlight-button").textContent(), "برجسته‌سازی انتخاب");
+    await page.locator("#mx-highlight-button").click();
+
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 1);
+    assert.equal(await page.evaluate(() => window.getSelection().isCollapsed), true);
+    await page.waitForSelector("#block-definition-1 [data-mx-highlight-painted]");
+    assert.equal(await formula.evaluate((el) => el.outerHTML), mathBefore, "highlighting leaves KaTeX markup alone");
+    const first = await ranges(page);
+    assert.equal(first.length, 1);
+    assert.match(first[0], /تابع/);
+    assert.match(first[0], /را/);
+
+    const backward = await select(page, "نتیجه", "است", { backward: true });
+    assert.equal(backward.backward, true);
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 2);
+    assert.equal((await ranges(page)).length, 2);
+    await page.evaluate(() => Mathia.highlights.clear());
+    assert.equal(await page.locator("#mx-main").innerHTML(), before, "clearing removes the painting styles");
+    await finish(s);
+  });
+
+  test("uses the tallest line for every highlight band in a paragraph", async () => {
+    const s = await open(pages.fa);
+    const { page } = s;
+    await page.evaluate(() => {
+      const math = document.querySelector(".math-inline .mfrac").closest(".math-inline").cloneNode(true);
+      math.style.fontSize = "2em";
+      const p = document.createElement("p");
+      p.id = "uniform-highlight";
+      p.append("آغاز کوتاه", document.createElement("br"), "فرمول ", math, " در میان متن",
+        document.createElement("br"), "پایان کوتاه بدون انتخاب");
+      document.getElementById("mx-main").prepend(p);
+    });
+    const paragraph = page.locator("#uniform-highlight");
+    await paragraph.evaluate((el) => {
+      window.getSelection().setBaseAndExtent(el.firstChild, 0, el.lastChild, "پایان کوتاه".length);
+    });
+    await page.keyboard.press("Control+Shift+H");
+    await page.waitForSelector("#uniform-highlight[data-mx-highlight-painted]");
+    const { heights, lineHeight, mathHeight } = await paragraph.evaluate((el) => ({
+      heights: getComputedStyle(el, "::before").backgroundSize.split(", ").map((size) => parseFloat(size.split(" ")[1])),
+      lineHeight: parseFloat(getComputedStyle(el).lineHeight),
+      mathHeight: el.querySelector(".math-inline").getBoundingClientRect().height,
+    }));
+    assert.equal(heights.length, 3, "one continuous band per line, including across the inline formula");
+    assert.ok(heights.every((height) => height === heights[0]), "all bands use the same height");
+    assert.ok(heights[0] > lineHeight && heights[0] >= mathHeight - 0.001, "the tallest formula sets the height");
+    await finish(s);
+  });
+
+  test("supports multi-element and wrapped selections, and rejects outside the lesson", async () => {
+    const s = await open(pages.fa);
+    const { page } = s;
+    await page.setViewportSize({ width: 420, height: 800 });
+    await page.waitForTimeout(100);
+
+    const wrapped = await select(page, "فرض", "می‌شوند");
+    assert.ok(wrapped.rects > 1, `selection wraps lines (${wrapped.rects} rects)`);
+    await waitForToolbar(page);
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 1);
+
+    const across = await select(page, "تابع", "هست");
+    assert.match(across.text, /تابع/);
+    assert.match(across.text, /هست/);
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 2);
+
+    await page.evaluate(() => {
+      const link = document.querySelector("#mx-toc a");
+      const text = document.createTreeWalker(link, NodeFilter.SHOW_TEXT).nextNode();
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.setBaseAndExtent(text, 0, text, Math.min(4, text.nodeValue.length));
+    });
+    await page.waitForTimeout(50);
+    assert.equal(await page.locator("#mx-highlight-toolbar").isHidden(), true);
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 2, "outside selection is ignored");
+
+    await page.evaluate(() => {
+      const link = document.querySelector("#mx-toc a");
+      const tocText = document.createTreeWalker(link, NodeFilter.SHOW_TEXT).nextNode();
+      const mainText = document.createTreeWalker(document.getElementById("mx-main"), NodeFilter.SHOW_TEXT).nextNode();
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.setBaseAndExtent(tocText, 0, mainText, Math.min(3, mainText.nodeValue.length));
+    });
+    await page.waitForTimeout(50);
+    assert.equal(await page.locator("#mx-highlight-toolbar").isHidden(), true);
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 2, "cross-boundary selection is ignored");
+    await finish(s);
+  });
+
+  test("activates with touch and keyboard without losing the captured selection", async () => {
+    const s = await open(pages.fa, { hasTouch: true });
+    const { page } = s;
+    await select(page, "تابع", "را");
+    await waitForToolbar(page);
+    const box = await page.locator("#mx-highlight-button").boundingBox();
+    assert.ok(box);
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 1);
+    assert.equal(await page.evaluate(() => window.getSelection().isCollapsed), true);
+
+    await select(page, "نتیجه", "است");
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 2);
+    await finish(s);
+  });
+
+  test("hides the action when CSS Custom Highlight API is unavailable", async () => {
+    const s = await open(pages.plain);
+    const { page } = s;
+    await page.addInitScript(() => {
+      Object.defineProperty(CSS, "highlights", { value: undefined, configurable: true });
+    });
+    await page.reload();
+    assert.equal(await page.evaluate(() => Mathia.highlights.supported), false);
+    assert.equal(await page.locator("#mx-highlight-toolbar").count(), 0);
+    await select(page, "group", "operation");
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 0);
+    await finish(s);
+  });
+
+  test("undoes and redoes highlights from the buttons and the keyboard", async () => {
+    const s = await open(pages.fa);
+    const { page } = s;
+    const count = () => page.evaluate(() => Mathia.highlights.count());
+    const undo = page.locator("#mx-highlight-undo");
+    const redo = page.locator("#mx-highlight-redo");
+
+    await select(page, "تابع", "را");
+    await page.keyboard.press("Control+Shift+H");
+    await select(page, "نتیجه", "است");
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await count(), 2);
+    assert.equal(await undo.isDisabled(), false);
+    assert.equal(await redo.isDisabled(), true);
+
+    await undo.click();
+    assert.equal(await count(), 1);
+    assert.equal(await redo.isDisabled(), false);
+
+    await page.keyboard.press("Control+Z");
+    assert.equal(await count(), 0);
+    await page.keyboard.press("Control+Shift+Z");
+    assert.equal(await count(), 1);
+    await redo.click();
+    assert.equal(await count(), 2);
+
+    // A new highlight is a new branch: the redo stack is gone.
+    await undo.click();
+    assert.equal(await count(), 1);
+    await select(page, "فرض", "می‌شوند");
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await count(), 2);
+    assert.equal(await redo.isDisabled(), true);
+    await finish(s);
+  });
+
+  test("cleans up registrations and listeners on destroy", async () => {
+    const s = await open(pages.fa);
+    const { page } = s;
+    await select(page, "تابع", "را");
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 1);
+    assert.equal(await page.evaluate(() => Boolean(CSS.highlights.get("mathia-highlight"))), true);
+
+    await page.evaluate(() => Mathia.highlights.destroy());
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 0);
+    assert.equal(await page.evaluate(() => Boolean(CSS.highlights.get("mathia-highlight"))), false);
+    assert.equal(await page.locator("#mx-highlight-toolbar").count(), 0);
+
+    await select(page, "نتیجه", "است");
+    await page.waitForTimeout(50);
+    assert.equal(await page.locator("#mx-highlight-toolbar").count(), 0);
+    await page.keyboard.press("Control+Shift+H");
+    assert.equal(await page.evaluate(() => Mathia.highlights.count()), 0);
+    await finish(s);
+  });
+});
+
 describe("host frame", () => {
   test("a click on a block tells the embedding app which block it was", async () => {
     // The desktop app shows the document in a frame and listens for this.
@@ -756,5 +1026,201 @@ describe("host frame", () => {
     });
     assert.equal(posted, 0);
     await finish(alone);
+  });
+
+  test("a drag offers Expand block, naming the block and the node it ends in", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mathia-expand-"));
+    const host = join(dir, "host.html");
+    writeFileSync(
+      host,
+      `<!doctype html><script>window.got = [];
+       addEventListener("message", (e) => window.got.push(e.data));</script>
+       <iframe id="f" src="${pages.plain}" style="width:900px;height:700px"></iframe>`,
+    );
+    const s = await open(pathToFileURL(host).href);
+    const frame = s.page.frames().find((f) => f !== s.page.mainFrame());
+    await frame.waitForSelector("section.mx-proof .mx-block-body p");
+
+    // The app frame owns undo and the correction buttons; a page on its own does not.
+    assert.equal(await frame.locator("#mx-expand-button").count(), 1);
+    assert.equal(await frame.locator("#mx-highlight-history").count(), 0);
+
+    const expected = await frame.evaluate(() => {
+      const proof = document.querySelector("section.mx-proof");
+      const first = proof.querySelector(".mx-block-body p");
+      const after = Array.from(document.querySelectorAll("#mx-main .mx-block-body p"))
+        .find((p) => p.textContent.startsWith("By Theorem 1.3"));
+      if (!after) throw new Error("the plain paragraph after the proof was not found");
+      const range = document.createRange();
+      range.setStart(first.firstChild, 0);
+      range.setEnd(after.lastChild, after.lastChild.nodeValue.length);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return {
+        proof: proof.dataset.blockId,
+        owner: after.closest("[data-block-id]").dataset.blockId,
+        text: after.textContent.replace(/\s+/g, " ").trim(),
+      };
+    });
+    await frame.waitForSelector("#mx-highlight-toolbar:not([hidden])");
+    await frame.locator("#mx-expand-button").click();
+    await s.page.waitForFunction(() => window.got.length > 0);
+    assert.deepEqual(await s.page.evaluate(() => window.got), [
+      { mathia: "expand", id: expected.proof, endId: expected.owner, text: expected.text },
+    ]);
+    await finish(s);
+    rmSync(dir, { recursive: true, force: true });
+
+    // Opened on its own there is nothing to correct, so only the highlight is offered.
+    const alone = await open(pages.plain);
+    assert.equal(await alone.page.locator("#mx-expand-button").count(), 0);
+    await finish(alone);
+  });
+});
+
+describe("deterministic mind map", () => {
+  test("tree targets, views, collapse, zoom, and document navigation", async () => {
+    const s = await open(pages.plain);
+    const initial = await s.page.evaluate(() => {
+      const tree = window.Mathia.mindmap.tree;
+      const walk = (n) => [n, ...n.children.flatMap(walk)];
+      const nodes = walk(tree);
+      return {
+        title: tree.label,
+        missing: nodes.filter((n) => !document.getElementById(n.id)).map((n) => n.id),
+        proof: nodes.some((n) => /proof|solution/.test(n.node_type)),
+        total: nodes.length,
+      };
+    });
+    assert.equal(initial.title, "algebra_en.md");
+    assert.deepEqual(initial.missing, []);
+    assert.equal(initial.proof, false);
+    await s.page.getByRole("button", { name: "Split view", exact: true }).click();
+    const visible = () => s.page.locator(".mx-map-node:visible").count();
+    assert.equal(await visible(), initial.total);
+    const canvas = s.page.locator(".mx-map-world");
+    const beforeZoom = await canvas.getAttribute("style");
+    await s.page.getByRole("button", { name: "Zoom in", exact: true }).click();
+    assert.notEqual(await canvas.getAttribute("style"), beforeZoom);
+    await s.page.getByRole("button", { name: "Collapse all", exact: true }).click();
+    assert.equal(await visible(), 1);
+    await s.page.getByRole("button", { name: "Expand all", exact: true }).click();
+    assert.equal(await visible(), initial.total);
+    await s.page.getByRole("button", { name: "Mind map", exact: true }).click();
+    assert.equal(await s.page.locator("#mx-main").isVisible(), false);
+    await s.page.locator('[data-map-id="block-theorem-1"] .mx-map-label').click();
+    assert.equal(await s.page.locator("#mx-main").isVisible(), true);
+    assert.equal(await s.page.locator("#block-theorem-1").evaluate((el) => el.classList.contains("mathia-scroll-highlight")), true);
+    await finish(s);
+  });
+
+  test("Persian cards isolate KaTeX and fit their measured height", async () => {
+    const s = await open(pages.mindmap);
+    await s.page.getByRole("button", { name: "نمای دوگانه", exact: true }).click();
+    assert.equal(await s.page.locator(".mx-map-card[dir=auto]").count() > 0, true);
+    assert.ok(await s.page.locator(".mx-map-card .katex").count() > 0);
+    assert.deepEqual(await s.page.locator(".mx-map-card .katex").evaluateAll((math) => math.map((el) => {
+      const style = getComputedStyle(el);
+      return { direction: style.direction, bidi: style.unicodeBidi };
+    })), Array(await s.page.locator(".mx-map-card .katex").count()).fill({ direction: "ltr", bidi: "isolate" }));
+    const bad = await s.page.evaluate(() => Array.from(document.querySelectorAll(".mx-map-card")).filter((card) => {
+      const node = card.closest(".mx-map-node");
+      return card.scrollHeight > parseFloat(node.style.height);
+    }).length);
+    assert.equal(bad, 0);
+    await finish(s);
+  });
+
+  test("HTML cards stay attached to connectors across fit, zoom, and branch changes", async () => {
+    for (const url of [pages.plain, pages.mindmap]) {
+      const s = await open(url);
+      const rtl = url === pages.mindmap;
+      await s.page.getByRole("button", { name: rtl ? "نقشه ذهنی" : "Mind map", exact: true }).click();
+      async function assertGeometry() {
+        // Wait until card position transitions finish before comparing screen
+        // coordinates, including the shared HTML camera and SVG edge matrix.
+        await s.page.waitForTimeout(300);
+        const geometry = await s.page.evaluate(() => {
+          const viewport = document.querySelector(".mx-map-canvas");
+          const nodes = Array.from(viewport.querySelectorAll(".mx-map-node"));
+          const rects = new Map(nodes.map((n) => [n.dataset.mapId, n.querySelector(".mx-map-card").getBoundingClientRect()]));
+          const errors = [];
+          viewport.querySelectorAll(".mx-map-edge").forEach((edge) => {
+            const from = rects.get(edge.dataset.mapFrom), to = rects.get(edge.dataset.mapTo);
+            const matrix = edge.getScreenCTM();
+            const start = edge.getPointAtLength(0).matrixTransform(matrix);
+            const end = edge.getPointAtLength(edge.getTotalLength()).matrixTransform(matrix);
+            if (Math.abs(start.x - from.right) > 3 || Math.abs(start.y - (from.top + from.height / 2)) > 3
+                || Math.abs(end.x - to.left) > 3 || Math.abs(end.y - (to.top + to.height / 2)) > 3) {
+              errors.push(edge.dataset.mapTo);
+            }
+          });
+          return { errors, foreignObjects: viewport.querySelectorAll("foreignObject").length };
+        });
+        assert.deepEqual(geometry.errors, [], "cards and connector endpoints share screen coordinates");
+        assert.equal(geometry.foreignObjects, 0, "interactive KaTeX stays outside SVG on WebKit");
+      }
+      await assertGeometry();
+      await s.page.getByRole("button", { name: rtl ? "بزرگ‌نمایی" : "Zoom in", exact: true }).click();
+      await assertGeometry();
+      await s.page.getByRole("button", { name: rtl ? "بستن همه" : "Collapse all", exact: true }).click();
+      await s.page.getByRole("button", { name: rtl ? "باز کردن همه" : "Expand all", exact: true }).click();
+      await assertGeometry();
+      await s.page.getByRole("button", { name: rtl ? "جا دادن" : "Fit", exact: true }).click();
+      await assertGeometry();
+      await finish(s);
+    }
+  });
+
+  test("dragging moves one card at the current zoom without navigating or panning", async () => {
+    const s = await open(pages.plain);
+    await s.page.getByRole("button", { name: "Mind map", exact: true }).click();
+    await s.page.getByRole("button", { name: "Zoom in", exact: true }).click();
+    const node = s.page.locator('[data-map-id="sec-1"]');
+    const state = () => node.evaluate((el) => ({ x: parseFloat(el.style.left), y: parseFloat(el.style.top),
+      scale: new DOMMatrix(getComputedStyle(document.querySelector(".mx-map-world")).transform).a,
+      camera: document.querySelector(".mx-map-world").style.transform }));
+    const before = await state(), rect = await node.locator(".mx-map-label").boundingBox();
+    await s.page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    await s.page.mouse.down();
+    await s.page.mouse.move(rect.x + rect.width / 2 + 80, rect.y + rect.height / 2 - 40, { steps: 8 });
+    await s.page.mouse.up();
+    const moved = await state();
+    assert.ok(Math.abs(moved.x - before.x - 80 / before.scale) < 1);
+    assert.ok(Math.abs(moved.y - before.y + 40 / before.scale) < 1);
+    assert.equal(moved.camera, before.camera);
+    assert.equal(await s.page.locator("#mx-main").isVisible(), false);
+    await s.page.getByRole("button", { name: "Collapse all", exact: true }).click();
+    await s.page.getByRole("button", { name: "Expand all", exact: true }).click();
+    assert.equal((await state()).x, moved.x);
+    assert.equal((await state()).y, moved.y);
+    await s.page.getByRole("button", { name: "Reset layout", exact: true }).click();
+    assert.equal((await state()).x, before.x);
+    assert.equal((await state()).y, before.y);
+    await node.locator(".mx-map-label").click();
+    assert.equal(await s.page.locator("#mx-main").isVisible(), true);
+    await finish(s);
+  });
+
+  test("SVG and PNG export complete without errors or network access", async () => {
+    const s = await open(pages.plain);
+    await s.page.getByRole("button", { name: "Mind map", exact: true }).click();
+    // Move the root beyond the original origin; exports must include it.
+    await s.page.locator('[data-map-id="mx-main"] .mx-map-label').press("Alt+ArrowLeft");
+    for (const format of ["SVG", "PNG"]) {
+      const pending = s.page.waitForEvent("download", { timeout: 30_000 });
+      await s.page.getByRole("button", { name: `Export mind map as ${format}`, exact: true }).click();
+      const download = await pending;
+      assert.equal(download.suggestedFilename(), `mathia-mindmap.${format.toLowerCase()}`);
+      assert.equal(await download.failure(), null);
+      if (format === "SVG") {
+        const exported = readFileSync(await download.path(), "utf8");
+        assert.match(exported, /viewBox="-44 /, "export includes negative card coordinates");
+        assert.match(exported, /<foreignObject\b[^>]*\bx="-20"/, "export retains the moved root");
+      }
+    }
+    assert.equal(await s.page.locator(".mx-map-status").textContent(), "");
+    await finish(s);
   });
 });

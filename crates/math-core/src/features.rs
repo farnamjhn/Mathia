@@ -116,6 +116,16 @@ impl Lexicon {
         }
     }
 
+    /// The keyword label at the start of `text`, when it reads as a label
+    /// ("Theorem 2.", "قضیه ۵.۳ (کوشی).") rather than prose that merely
+    /// mentions a block.
+    pub fn lead(&self, text: &str) -> Option<KeywordHit> {
+        let norm: Vec<char> = normalize(text).chars().collect();
+        let low: Vec<char> = norm.iter().copied().map(lower_char).collect();
+        self.find_lead(&norm, &low)
+            .filter(|hit| hit.labelled && !hit.reference)
+    }
+
     pub fn extract(&self, node: &Node) -> Features {
         let norm: Vec<char> = normalize(&node.text).chars().collect();
         let low: Vec<char> = norm.iter().copied().map(lower_char).collect();

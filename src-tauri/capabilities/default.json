@@ -11,6 +11,7 @@
     "allow-analyze",
     "allow-compile",
     "allow-export",
+    "allow-export-markdown",
     "allow-export-pdf",
     "allow-fix-markdown",
     "allow-get-config",

@@ -11,7 +11,9 @@ use std::collections::HashSet;
 use regex::{Captures, Regex};
 
 use crate::clean_html::{normalize_html_math, slugify, strip_html_tags};
+use crate::config::ScoringConfig;
 use crate::dom::{Dom, Element, NodeData, NodeId, SerializeOptions};
+use crate::features::{KeywordHit, Lexicon};
 use crate::model::{BlockType, Direction, Document, EndReason, SemanticBlock, TocEntry};
 
 pub(crate) struct ExtractedHtml {
@@ -350,24 +352,50 @@ fn remove_empty(dom: &mut Dom, id: NodeId) -> (bool, bool) {
 
 /// For every node, whether its subtree contains a heading or a semantic block.
 fn compute_block_flags(dom: &Dom) -> Vec<bool> {
+    let lexicon = Lexicon::new(&ScoringConfig::default());
     let mut flags = vec![false; dom.len()];
-    compute_block_flags_at(dom, dom.root(), &mut flags);
+    compute_block_flags_at(dom, dom.root(), &mut flags, &lexicon);
     flags
 }
 
-fn compute_block_flags_at(dom: &Dom, id: NodeId, flags: &mut Vec<bool>) -> bool {
+fn compute_block_flags_at(dom: &Dom, id: NodeId, flags: &mut Vec<bool>, lexicon: &Lexicon) -> bool {
     let mut any = false;
     for child in dom.children(id) {
-        let mut child_any = dom
-            .element(*child)
-            .is_some_and(|el| is_heading_tag(el.tag()) || semantic_kind(el).is_some());
-        if compute_block_flags_at(dom, *child, flags) {
+        let mut child_any = dom.element(*child).is_some_and(|el| {
+            is_heading_tag(el.tag())
+                || semantic_kind(el).is_some()
+                || keyword_label(dom, *child, lexicon).is_some()
+        });
+        if compute_block_flags_at(dom, *child, flags, lexicon) {
             child_any = true;
         }
         flags[*child] = child_any;
         any |= child_any;
     }
     any
+}
+
+/// A paragraph or list item whose text starts with a theorem-like keyword
+/// label ("**Theorem 2.1.** …", "قضیه ۵.۳ (کوشی). …").
+fn keyword_label(dom: &Dom, id: NodeId, lexicon: &Lexicon) -> Option<KeywordHit> {
+    let el = dom.element(id)?;
+    if !el.is_html() {
+        return None;
+    }
+    let tag = el.tag().to_ascii_lowercase();
+    if !matches!(tag.as_str(), "li" | "p") {
+        return None;
+    }
+    lexicon.lead(&dom.text_content(id))
+}
+
+/// Whether `id` contains a heading or a block of its own. A malformed page can
+/// leave a whole section inside one list item; such an item is a container, not
+/// a keyword-labelled block.
+fn has_block_children(dom: &Dom, id: NodeId, block_flags: &[bool]) -> bool {
+    dom.children(id)
+        .iter()
+        .any(|child| block_flags.get(*child).copied().unwrap_or(false))
 }
 
 fn content_root(dom: &Dom) -> NodeId {
@@ -521,6 +549,7 @@ fn should_recurse(dom: &Dom, id: NodeId, block_flags: &[bool]) -> bool {
 
 struct BlockBuilder {
     direction: Direction,
+    lexicon: Lexicon,
     blocks: Vec<SemanticBlock>,
     toc: Vec<TocEntry>,
     pending: Vec<NodeId>,
@@ -532,6 +561,7 @@ impl BlockBuilder {
     fn new(direction: Direction) -> Self {
         BlockBuilder {
             direction,
+            lexicon: Lexicon::new(&ScoringConfig::default()),
             blocks: Vec::new(),
             toc: Vec::new(),
             pending: Vec::new(),
@@ -548,22 +578,86 @@ impl BlockBuilder {
                         self.pending.push(child);
                     }
                 }
-                NodeData::Element(el) => {
-                    if is_heading_tag(el.tag()) {
-                        self.flush(dom);
-                        self.add_heading(dom, child, el);
-                    } else if let Some(kind) = semantic_kind(el) {
-                        self.flush(dom);
-                        self.add_semantic(dom, child, kind);
-                    } else if should_recurse(dom, child, block_flags) {
-                        self.walk(dom, child, block_flags);
-                    } else {
-                        self.pending.push(child);
-                    }
-                }
+                NodeData::Element(el) => self.visit(dom, child, el, block_flags),
                 _ => {}
             }
         }
+    }
+
+    fn visit(&mut self, dom: &Dom, id: NodeId, el: &Element, block_flags: &[bool]) {
+        if is_heading_tag(el.tag()) {
+            self.flush(dom);
+            self.add_heading(dom, id, el);
+        } else if let Some(kind) = semantic_kind(el) {
+            self.flush(dom);
+            self.add_semantic(dom, id, kind);
+        } else if !has_block_children(dom, id, block_flags)
+            && let Some(hit) = keyword_label(dom, id, &self.lexicon)
+        {
+            self.flush(dom);
+            self.add_keyword(dom, id, hit);
+        } else if matches!(el.tag().to_ascii_lowercase().as_str(), "ul" | "ol")
+            && should_recurse(dom, id, block_flags)
+        {
+            self.walk_list(dom, id, block_flags);
+        } else if should_recurse(dom, id, block_flags) {
+            self.walk(dom, id, block_flags);
+        } else {
+            self.pending.push(id);
+        }
+    }
+
+    /// A list that holds keyword-labelled blocks: its block items become
+    /// blocks, and the remaining items keep their `<ul>` / `<ol>` wrapper.
+    fn walk_list(&mut self, dom: &Dom, id: NodeId, block_flags: &[bool]) {
+        self.flush(dom);
+        let ordered = dom
+            .element(id)
+            .is_some_and(|el| el.tag().eq_ignore_ascii_case("ol"));
+        let mut run: Vec<NodeId> = Vec::new();
+        for child in dom.children(id).to_vec() {
+            let Some(el) = dom.element(child) else {
+                run.push(child);
+                continue;
+            };
+            let is_block = is_heading_tag(el.tag())
+                || semantic_kind(el).is_some()
+                || keyword_label(dom, child, &self.lexicon).is_some();
+            if is_block || should_recurse(dom, child, block_flags) {
+                self.flush_list_run(dom, &mut run, ordered);
+                self.visit(dom, child, el, block_flags);
+            } else {
+                run.push(child);
+            }
+        }
+        self.flush_list_run(dom, &mut run, ordered);
+    }
+
+    fn flush_list_run(&mut self, dom: &Dom, run: &mut Vec<NodeId>, ordered: bool) {
+        if run.is_empty() {
+            return;
+        }
+        // Only wrap a run in `<ul>` / `<ol>` when every item is a list item;
+        // block content that merely sits inside the list (for example a
+        // `div.math-block` between items) is emitted on its own.
+        let all_items = run.iter().all(|id| match dom.element(*id) {
+            Some(el) => el.tag().eq_ignore_ascii_case("li"),
+            None => dom.text_content(*id).trim().is_empty(),
+        });
+        let mut html = String::new();
+        if all_items {
+            let tag = if ordered { "ol" } else { "ul" };
+            html.push_str(&format!("<{tag}>"));
+            for id in run.drain(..) {
+                html.push_str(&dom.serialize(id, &SERIALIZE));
+            }
+            html.push_str(&format!("</{tag}>"));
+        } else {
+            for id in run.drain(..) {
+                html.push_str(&dom.serialize(id, &SERIALIZE));
+            }
+        }
+        self.push_text(html);
     }
 
     fn add_heading(&mut self, dom: &Dom, id: NodeId, el: &Element) {
@@ -634,6 +728,44 @@ impl BlockBuilder {
         });
     }
 
+    fn add_keyword(&mut self, dom: &Dom, id: NodeId, hit: KeywordHit) {
+        let kind = hit.kind;
+        let direction = Direction::detect(&dom.text_content(id)).unwrap_or(self.direction);
+        let mut title = kind.label(direction).to_string();
+        if let Some(number) = &hit.number {
+            title.push(' ');
+            title.push_str(number);
+        }
+        if let Some(name) = &hit.name {
+            title.push_str(&format!(" ({name})"));
+        }
+        let body = dom.serialize_children(id, &SERIALIZE);
+        let html = normalize_html_math(&body).trim().to_string();
+        let block_id = self.unique_id(format!("block-{}-{}", kind.slug(), self.blocks.len() + 1));
+
+        self.blocks.push(SemanticBlock {
+            id: block_id.clone(),
+            kind,
+            span: self.blocks.len()..self.blocks.len() + 1,
+            heading_level: None,
+            number: hit.number,
+            name: hit.name,
+            title: title.clone(),
+            direction,
+            score: 1.0,
+            features: None,
+            proves: None,
+            end: EndReason::Structural,
+            html,
+        });
+        self.toc.push(TocEntry {
+            id: block_id,
+            title,
+            depth: self.heading_level.saturating_add(1).max(2),
+            kind,
+        });
+    }
+
     fn flush(&mut self, dom: &Dom) {
         if self.pending.is_empty() {
             return;
@@ -642,6 +774,10 @@ impl BlockBuilder {
         for id in self.pending.drain(..) {
             html.push_str(&dom.serialize(id, &SERIALIZE));
         }
+        self.push_text(html);
+    }
+
+    fn push_text(&mut self, html: String) {
         let html = normalize_html_math(&html).trim().to_string();
         if !has_content(&html) {
             return;
@@ -788,5 +924,39 @@ mod tests {
         // The document heading is content and survives; the masthead junk goes.
         assert!(html.contains("Site title"));
         assert!(!html.contains("Meta"));
+    }
+
+    #[test]
+    fn keyword_labelled_list_items_become_blocks() {
+        let out = import(
+            r#"<html><body><main>
+            <ul>
+              <li><strong>قضیه ۵.۳.</strong> اگر $W$ زیرفضا باشد آنگاه حکم برقرار است.</li>
+              <li><strong>Theorem 2.1.</strong> Every finite set is bounded.</li>
+              <li>یک مورد عادی.</li>
+            </ul>
+            <p>Theorem 2 gives a bound.</p>
+            </main></body></html>"#,
+        );
+        let kinds: Vec<_> = out.document.blocks.iter().map(|b| b.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                BlockType::Theorem,
+                BlockType::Theorem,
+                BlockType::Text,
+                BlockType::Text
+            ]
+        );
+        assert_eq!(out.document.blocks[0].title, "قضیه ۵.۳");
+        assert_eq!(out.document.blocks[1].title, "Theorem 2.1");
+
+        let html = crate::html::render(&out.document, &crate::html::HtmlOptions::default())
+            .expect("renders");
+        // The plain item keeps its list wrapper; prose that only mentions a
+        // theorem stays text.
+        assert!(html.contains("<ul>"));
+        assert!(html.contains("یک مورد عادی."));
+        assert!(html.contains("Theorem 2 gives a bound."));
     }
 }

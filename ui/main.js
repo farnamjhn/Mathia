@@ -16,6 +16,7 @@
   const $ = (id) => document.getElementById(id);
   const el = {
     open: $("open"), reload: $("reload"), export: $("export"),
+    undo: $("undo"), redo: $("redo"),
     ai: $("ai"), math: $("render-math"), showText: $("show-text"),
     status: $("status"), blocks: $("blocks"), panes: $("panes"),
     preview: $("preview"), previewToggle: $("preview-toggle"),
@@ -28,6 +29,7 @@
     orderEmpty: $("order-empty"), orderTitleInput: $("order-title-input"),
     orderCancel: $("order-cancel"), orderCompile: $("order-compile"),
     filter: $("filter"), views: $("views"), blocksEmpty: $("blocks-empty"),
+    typeFilter: $("block-type"),
     countAll: $("count-all"), countUnsure: $("count-unsure"), countChanged: $("count-changed"),
     optionsButton: $("options-button"), optionsMenu: $("options-menu"),
     exportMore: $("export-more"), exportMenu: $("export-menu"),
@@ -44,6 +46,7 @@
     promptContinuation: $("prompt-continuation"),
     copyPrompt: $("copy-prompt"), copyPromptEmpty: $("copy-prompt-empty"),
     exportFolder: $("export-folder"),
+    exportMarkdown: $("export-markdown"),
     fixMarkdown: $("fix-markdown"),
     exportPdf: $("export-pdf"),
     recent: $("recent"), recentList: $("recent-list"), recentClear: $("recent-clear"),
@@ -78,6 +81,11 @@
     proof: "Proof", example: "Ex", remark: "Rem", exercise: "Exer", solution: "Sol",
     claim: "Claim", notation: "Not", heading: "§", text: "¶",
   };
+  /** The order the Type menu lists block types in. */
+  const SEMANTIC_ORDER = [
+    "theorem", "lemma", "proposition", "corollary", "definition", "proof",
+    "example", "remark", "exercise", "solution", "claim", "notation",
+  ];
   /** A detected block scoring less than this above the threshold is listed
    *  as "unsure": the ones worth a second look. */
   const UNSURE_MARGIN = 0.1;
@@ -88,7 +96,6 @@
   let source = null;
   let customTitle = null;
   let orderPaths = [];
-  let draggedIndex = null;
   let analysis = null;
   let revision = 0;
   let selected = null;
@@ -100,10 +107,18 @@
   let stamp = null;
   /** Hand corrections (math_core::ScopeOverrides), keyed by opener node. */
   let overrides = emptyOverrides();
+  /** Every change that can be undone, oldest first: corrections before and
+   *  after, and highlights the frame can replay. */
+  let undoStack = [];
+  let redoStack = [];
   /** The configuration shown in the detection settings dialog. */
   let editing = null;
   /** Which blocks the list shows: "all", "unsure" or "changed". */
   let view = "all";
+  /** Which block type the list shows: "all", or a block kind such as "theorem". */
+  let typeFilter = "all";
+  /** The Type menu built last, so it is only rebuilt when the counts change. */
+  let typeFilterKey = "";
   /** Whether the user wants the preview pane (it only shows with a document). */
   let previewOpen = true;
   let initialPromptText = el.promptText ? el.promptText.value : "";
@@ -112,6 +127,78 @@
 
   function emptyOverrides() {
     return { delta: {}, suppressed: [], retype: {}, end: {} };
+  }
+
+  function cloneOverrides(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function sameOverrides(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  function updateHistory() {
+    if (!el.undo || !el.redo) return;
+    el.undo.disabled = undoStack.length === 0;
+    el.redo.disabled = redoStack.length === 0;
+  }
+
+  function pushHistory(entry) {
+    undoStack.push(entry);
+    if (undoStack.length > 100) undoStack.shift();
+    redoStack = [];
+    updateHistory();
+  }
+
+  /** A recompile reloads the frame, which drops its highlights: their history
+   *  entries would no longer mean anything. */
+  function forgetHighlights() {
+    undoStack = undoStack.filter((entry) => entry.kind !== "highlight");
+    redoStack = redoStack.filter((entry) => entry.kind !== "highlight");
+    updateHistory();
+  }
+
+  function resetHistory() {
+    undoStack = [];
+    redoStack = [];
+    updateHistory();
+  }
+
+  function postToFrame(kind) {
+    const frame = el.frame.contentWindow;
+    if (frame) frame.postMessage({ mathia: kind }, "*");
+  }
+
+  async function replayHistory(entry, backwards) {
+    if (entry.kind === "highlight") {
+      postToFrame(backwards ? "highlight-undo" : "highlight-redo");
+      return;
+    }
+    overrides = cloneOverrides(backwards ? entry.before : entry.after);
+    try {
+      await invoke("set_overrides", { overrides });
+      await refresh(true);
+      renderBlocks();
+      setStatus(backwards ? "Undone" : "Redone");
+    } catch (error) {
+      setStatus(String(error), true);
+    }
+  }
+
+  async function undoChange() {
+    const entry = undoStack.pop();
+    if (!entry) return;
+    redoStack.push(entry);
+    updateHistory();
+    await replayHistory(entry, true);
+  }
+
+  async function redoChange() {
+    const entry = redoStack.pop();
+    if (!entry) return;
+    undoStack.push(entry);
+    updateHistory();
+    await replayHistory(entry, false);
   }
 
   function setStatus(text, isError) {
@@ -148,7 +235,9 @@
     el.panes.classList.toggle("preview-closed", has && !previewOpen);
     el.previewToggle.disabled = !has;
     updateDecisionRun();
+    updateHistory();
     el.reload.disabled = el.export.disabled = el.exportPdf.disabled = !has;
+    el.exportMarkdown.disabled = !has;
     const isHtml = Boolean(
       (source && source.path && HTML_EXT.test(source.path)) ||
       (source && source.multi_path && source.multi_path.some((p) => HTML_EXT.test(p)))
@@ -188,6 +277,7 @@
         analysis = await invoke("analyze", { source });
         renderBlocks();
         el.frame.src = previewUrl(selected);
+        forgetHighlights();
       }
       layout();
       let name = "Mathia";
@@ -231,7 +321,10 @@
     analysis = null;
     stamp = null;
     overrides = emptyOverrides();
+    resetHistory();
     view = "all";
+    typeFilter = "all";
+    typeFilterKey = "";
     el.filter.value = "";
     try {
       await invoke("set_overrides", { overrides });
@@ -254,7 +347,10 @@
     analysis = null;
     stamp = null;
     overrides = emptyOverrides();
+    resetHistory();
     view = "all";
+    typeFilter = "all";
+    typeFilterKey = "";
     el.filter.value = "";
     try {
       await invoke("set_overrides", { overrides });
@@ -385,6 +481,18 @@
     }
   }
 
+  // The compiled document as Markdown: the same text, with every block
+  // labelled the way the inspector shows it.
+  async function exportMarkdown() {
+    if (!source) return;
+    try {
+      const dest = await invoke("export_markdown", { source });
+      if (dest) setStatus("Exported Markdown to " + dest);
+    } catch (error) {
+      setStatus(String(error), true);
+    }
+  }
+
   function blockClass(kind) {
     return kind === "heading" || kind === "text" ? kind : "semantic";
   }
@@ -406,6 +514,7 @@
 
   function listed(block, query) {
     if (!matches(block, query)) return false;
+    if (typeFilter !== "all" && block.kind !== typeFilter) return false;
     if (view === "unsure") return unsure(block);
     if (view === "changed") return corrected(block.span.start);
     if (block.kind === "heading") return !query;
@@ -414,10 +523,40 @@
     return true;
   }
 
+  // The Type menu lists the block types this document has, with their counts,
+  // so "every theorem" is one click away. It is rebuilt only when the counts
+  // change, so an open menu is not closed by a keystroke in the filter.
+  function renderTypeFilter(blocks) {
+    const counts = new Map();
+    let total = 0;
+    for (const block of blocks) {
+      if (!isSemantic(block)) continue;
+      counts.set(block.kind, (counts.get(block.kind) || 0) + 1);
+      total += 1;
+    }
+    const kinds = SEMANTIC_ORDER.filter((kind) => counts.has(kind));
+    for (const kind of counts.keys()) {
+      if (!kinds.includes(kind)) kinds.push(kind);
+    }
+    // A type that is gone (retyped, merged away) falls back to every type.
+    if (typeFilter !== "all" && !counts.has(typeFilter)) typeFilter = "all";
+    const key = kinds.map((kind) => kind + ":" + counts.get(kind)).join(",");
+    if (key !== typeFilterKey) {
+      typeFilterKey = key;
+      const options = [new Option("All types (" + total + ")", "all")];
+      for (const kind of kinds) {
+        options.push(new Option(kindLabel(kind) + " (" + counts.get(kind) + ")", kind));
+      }
+      el.typeFilter.replaceChildren(...options);
+    }
+    el.typeFilter.value = typeFilter;
+  }
+
   function renderBlocks() {
     el.blocks.replaceChildren();
     if (!analysis) return;
     const blocks = analysis.document.blocks;
+    renderTypeFilter(blocks);
     const query = el.filter.value.trim().toLowerCase();
     let shown = 0;
     for (const block of blocks) {
@@ -449,6 +588,7 @@
     el.blocksEmpty.textContent = query ? "No block matches “" + el.filter.value.trim() + "”."
       : view === "unsure" ? "Nothing here. Mathia is confident about every block it found."
       : view === "changed" ? "You have not changed any block."
+      : typeFilter !== "all" ? "No " + kindLabel(typeFilter).toLowerCase() + " blocks here."
       : "Mathia found no blocks in this file. Show plain paragraphs to mark some yourself.";
 
     const current = blocks.find((b) => b.id === selected) ||
@@ -553,7 +693,7 @@
     el.fixLength.textContent = parts === 1 ? "1 part" : parts + " parts";
     el.fixShorter.disabled = !semantic || block.end === "environment" || block.span.end - start < 2;
     el.fixLonger.disabled = !semantic || block.end === "environment" ||
-      block.span.end >= analysis.document.nodes.length;
+      block.span.end >= scopeUnits();
     el.fixReject.disabled = !semantic;
     el.fixReset.disabled = !corrected(start);
   }
@@ -569,8 +709,11 @@
   async function correct(change, message) {
     const block = analysis && analysis.document.blocks.find((b) => b.id === selected);
     if (!block) return;
+    const before = cloneOverrides(overrides);
     change(block, block.span.start);
+    if (sameOverrides(before, overrides)) return;
     selectedStart = block.span.start;
+    pushHistory({ kind: "overrides", before, after: cloneOverrides(overrides) });
     await pushOverrides(message);
   }
 
@@ -597,11 +740,68 @@
 
   function moveEnd(by) {
     return correct((block, start) => {
-      const nodes = analysis.document.nodes.length;
-      const end = Math.min(nodes, Math.max(start + 1, block.span.end + by));
+      const end = Math.min(scopeUnits(), Math.max(start + 1, block.span.end + by));
       delete overrides.delta[String(start)];
       overrides.end[String(start)] = end;
     }, by < 0 ? "Block made shorter" : "Block made longer");
+  }
+
+  /** How far a block's scope may reach: source nodes for Markdown, the
+   *  highest block span for HTML, which has no source nodes. */
+  function scopeUnits() {
+    const doc = analysis && analysis.document;
+    if (!doc) return 0;
+    const nodes = doc.nodes ? doc.nodes.length : 0;
+    const spans = doc.blocks.reduce((max, b) => Math.max(max, b.span.end), 0);
+    return Math.max(nodes, spans);
+  }
+
+  /** The source node whose prose matches the text the drag ended in. The
+   *  runtime sends that prose and the block it sits in, which narrows the
+   *  search to one block's nodes. */
+  function nodeIndexFor(text, from) {
+    const nodes = analysis && analysis.document.nodes;
+    const target = String(text || "").replace(/\s+/g, " ").trim();
+    if (!nodes || !target) return -1;
+    let loose = -1;
+    for (let i = Math.max(0, from); i < nodes.length; i += 1) {
+      const candidate = nodes[i].text.replace(/\s+/g, " ").trim();
+      if (!candidate) continue;
+      if (candidate === target) return i;
+      if (loose < 0 && (candidate.startsWith(target) || target.startsWith(candidate))) loose = i;
+    }
+    return loose;
+  }
+
+  /** Grows the last block of a drag over the text it covers. */
+  async function expandBlock(id, endId, text) {
+    const block = analysis && analysis.document.blocks.find((b) => b.id === id);
+    if (!block) return;
+    if (block.end === "environment") {
+      setStatus("A LaTeX environment cannot be expanded.", true);
+      return;
+    }
+    const owner = analysis.document.blocks.find((b) => b.id === endId);
+    let index = nodeIndexFor(text, owner ? owner.span.start : block.span.start);
+    if (index < 0) index = nodeIndexFor(text, block.span.start);
+    // A node of nothing but a formula has no prose to match; its block still
+    // tells us where the drag ended.
+    if (index < 0 && owner) index = owner.span.end - 1;
+    if (index < 0) {
+      setStatus("Could not find where the selection ends.", true);
+      return;
+    }
+    if (index + 1 <= block.span.end) {
+      setStatus("The block already covers this text.");
+      return;
+    }
+    const before = cloneOverrides(overrides);
+    delete overrides.delta[String(block.span.start)];
+    overrides.end[String(block.span.start)] = index + 1;
+    pushHistory({ kind: "overrides", before, after: cloneOverrides(overrides) });
+    selected = block.id;
+    selectedStart = block.span.start;
+    await pushOverrides("Block expanded");
   }
 
   function reject() {
@@ -628,7 +828,11 @@
     try {
       const loaded = await invoke("load_overrides");
       if (!loaded) return;
+      const before = cloneOverrides(overrides);
       overrides = Object.assign(emptyOverrides(), loaded);
+      if (!sameOverrides(before, overrides)) {
+        pushHistory({ kind: "overrides", before, after: cloneOverrides(overrides) });
+      }
       await pushOverrides("Corrections loaded");
     } catch (error) {
       setStatus(String(error), true);
@@ -636,7 +840,10 @@
   }
 
   function clearCorrections() {
+    const before = cloneOverrides(overrides);
     overrides = emptyOverrides();
+    if (sameOverrides(before, overrides)) return Promise.resolve();
+    pushHistory({ kind: "overrides", before, after: cloneOverrides(overrides) });
     return pushOverrides("All corrections undone");
   }
 
@@ -672,6 +879,39 @@
     const data = event.data;
     if (data && data.mathia === "print") {
       exportPdf();
+      return;
+    }
+    if (data && data.mathia === "expand" && typeof data.id === "string") {
+      expandBlock(data.id, data.endId, data.text);
+      return;
+    }
+    if (data && data.mathia === "highlight-applied") {
+      pushHistory({ kind: "highlight" });
+      return;
+    }
+    if (data && data.mathia === "undo") {
+      undoChange();
+      return;
+    }
+    if (data && data.mathia === "redo") {
+      redoChange();
+      return;
+    }
+    if (data && data.mathia === "mindmap-export" && ["svg", "png"].includes(data.extension)
+        && typeof data.data === "string"
+        && data.data.startsWith(data.extension === "svg" ? "data:image/svg+xml;base64," : "data:image/png;base64,")) {
+      if (data.data.length > 64 * 1024 * 1024) {
+        setStatus("Mind map export is too large.", true);
+        return;
+      }
+      try {
+        const bytes = Array.from(atob(data.data.slice(data.data.indexOf(",") + 1)), (c) => c.charCodeAt(0));
+        invoke("export_mindmap", { extension: data.extension, bytes })
+          .then((dest) => { if (dest) setStatus("Exported mind map to " + dest); })
+          .catch((error) => setStatus(String(error), true));
+      } catch (error) {
+        setStatus(String(error), true);
+      }
       return;
     }
     if (!data || data.mathia !== "select" || typeof data.id !== "string") return;
@@ -912,7 +1152,11 @@
     setStatus("Asking the decision model…");
     try {
       const run = await invoke("run_decision_model", { source });
+      const before = cloneOverrides(overrides);
       overrides = Object.assign(emptyOverrides(), run.overrides);
+      if (!sameOverrides(before, overrides)) {
+        pushHistory({ kind: "overrides", before, after: cloneOverrides(overrides) });
+      }
       await pushOverrides();
       setStatus(
         "Decision model reviewed " + run.reviewed + " blocks and changed " + run.changed +
@@ -1065,6 +1309,150 @@
 
   // ── Multi-markdown ordering ───────────────────────────────────────────
 
+  // Reorder list items via pointer events. Standard HTML5 drag-and-drop is
+  // intercepted by Tauri's window-level file drop handler on macOS/Windows,
+  // so pointer events provide smooth, reliable in-app reordering.
+  el.orderList.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest("button")) return;
+    const item = e.target.closest(".order-item");
+    if (!item) return;
+
+    const startIndex = Number(item.dataset.index);
+    if (Number.isNaN(startIndex) || orderPaths.length <= 1) return;
+
+    const pointerId = e.pointerId;
+    const startY = e.clientY;
+    const startX = e.clientX;
+    const initialRect = item.getBoundingClientRect();
+    const grabOffsetY = e.clientY - initialRect.top;
+
+    let isDragging = false;
+    let targetIndex = startIndex;
+    let ghost = null;
+
+    function onPointerMove(moveEvent) {
+      if (moveEvent.pointerId !== pointerId) return;
+
+      const dy = moveEvent.clientY - startY;
+      const dx = moveEvent.clientX - startX;
+
+      if (!isDragging) {
+        if (Math.hypot(dx, dy) < 4) return;
+        isDragging = true;
+        item.classList.add("dragging");
+
+        ghost = item.cloneNode(true);
+        ghost.classList.add("order-item-ghost");
+        ghost.style.position = "fixed";
+        ghost.style.left = initialRect.left + "px";
+        ghost.style.top = (moveEvent.clientY - grabOffsetY) + "px";
+        ghost.style.width = initialRect.width + "px";
+        ghost.style.height = initialRect.height + "px";
+        ghost.style.margin = "0";
+        ghost.style.zIndex = "1000";
+        ghost.style.pointerEvents = "none";
+        ghost.style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.22)";
+        ghost.style.transform = "scale(1.02)";
+        ghost.style.transition = "none";
+        ghost.style.opacity = "0.95";
+        el.orderDialog.appendChild(ghost);
+        document.body.style.cursor = "grabbing";
+      }
+
+      moveEvent.preventDefault();
+
+      if (ghost) {
+        ghost.style.top = (moveEvent.clientY - grabOffsetY) + "px";
+      }
+
+      const scrollContainer = el.orderList.parentElement;
+      if (scrollContainer) {
+        const containerRect = scrollContainer.getBoundingClientRect();
+        if (moveEvent.clientY < containerRect.top + 32) {
+          scrollContainer.scrollTop -= 6;
+        } else if (moveEvent.clientY > containerRect.bottom - 32) {
+          scrollContainer.scrollTop += 6;
+        }
+      }
+
+      const allItems = Array.from(el.orderList.querySelectorAll(".order-item"));
+      let newTargetIndex = startIndex;
+
+      for (let i = 0; i < allItems.length; i++) {
+        const r = allItems[i].getBoundingClientRect();
+        if (moveEvent.clientY >= r.top && moveEvent.clientY <= r.bottom) {
+          newTargetIndex = i;
+          break;
+        }
+      }
+
+      if (allItems.length > 0) {
+        if (moveEvent.clientY < allItems[0].getBoundingClientRect().top) {
+          newTargetIndex = 0;
+        } else if (moveEvent.clientY > allItems[allItems.length - 1].getBoundingClientRect().bottom) {
+          newTargetIndex = allItems.length - 1;
+        }
+      }
+
+      targetIndex = newTargetIndex;
+
+      allItems.forEach((it, i) => {
+        if (isDragging && i === targetIndex && i !== startIndex) {
+          it.classList.add("drag-over");
+        } else {
+          it.classList.remove("drag-over");
+        }
+      });
+    }
+
+    function cleanup() {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.cursor = "";
+
+      if (ghost) {
+        ghost.remove();
+        ghost = null;
+      }
+
+      item.classList.remove("dragging");
+      const allItems = el.orderList.querySelectorAll(".order-item");
+      allItems.forEach((it) => it.classList.remove("drag-over"));
+    }
+
+    function onPointerUp(upEvent) {
+      if (upEvent.pointerId !== pointerId) return;
+      const wasDragging = isDragging;
+      const finalTarget = targetIndex;
+      cleanup();
+
+      if (wasDragging && finalTarget !== null && finalTarget !== startIndex) {
+        const [moved] = orderPaths.splice(startIndex, 1);
+        orderPaths.splice(finalTarget, 0, moved);
+        renderOrderList();
+      }
+    }
+
+    function onPointerCancel(cancelEvent) {
+      if (cancelEvent.pointerId !== pointerId) return;
+      cleanup();
+    }
+
+    function onKeyDown(keyEvent) {
+      if (keyEvent.key === "Escape") {
+        cleanup();
+      }
+    }
+
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+    window.addEventListener("keydown", onKeyDown);
+  });
+
   function openOrderDialog(paths) {
     orderPaths = [];
     if (paths && paths.length > 0) {
@@ -1086,7 +1474,6 @@
 
     el.orderList.replaceChildren(...orderPaths.map((path, index) => {
       const item = node("li", "order-item");
-      item.draggable = true;
       item.dataset.index = String(index);
 
       // Drag handle icon
@@ -1151,41 +1538,6 @@
 
       actions.append(upBtn, downBtn, removeBtn);
       item.append(handle, badge, info, actions);
-
-      // Drag and drop event listeners
-      item.addEventListener("dragstart", (e) => {
-        draggedIndex = index;
-        item.classList.add("dragging");
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", String(index));
-      });
-
-      item.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        item.classList.add("drag-over");
-      });
-
-      item.addEventListener("dragleave", () => {
-        item.classList.remove("drag-over");
-      });
-
-      item.addEventListener("drop", (e) => {
-        e.preventDefault();
-        item.classList.remove("drag-over");
-        if (draggedIndex !== null && draggedIndex !== index) {
-          const [moved] = orderPaths.splice(draggedIndex, 1);
-          orderPaths.splice(index, 0, moved);
-          draggedIndex = null;
-          renderOrderList();
-        }
-      });
-
-      item.addEventListener("dragend", () => {
-        item.classList.remove("dragging");
-        draggedIndex = null;
-      });
-
       return item;
     }));
   }
@@ -1230,6 +1582,10 @@
   el.openMultiWelcome.addEventListener("click", combineMarkdowns);
   el.detailClose.addEventListener("click", deselect);
   el.filter.addEventListener("input", renderBlocks);
+  el.typeFilter.addEventListener("change", () => {
+    typeFilter = el.typeFilter.value;
+    renderBlocks();
+  });
   el.views.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-view]");
     if (!button) return;
@@ -1248,6 +1604,8 @@
     select(next.dataset.id);
   });
   el.reload.addEventListener("click", () => refresh());
+  el.undo.addEventListener("click", () => undoChange());
+  el.redo.addEventListener("click", () => redoChange());
   el.export.addEventListener("click", exportHtml);
   el.previewToggle.addEventListener("click", () => setPreviewOpen(!previewOpen));
   el.ai.addEventListener("change", () => refresh());
@@ -1266,6 +1624,7 @@
   el.correctionsLoad.addEventListener("click", loadCorrections);
   el.correctionsClear.addEventListener("click", clearCorrections);
   el.exportFolder.addEventListener("click", exportFolder);
+  el.exportMarkdown.addEventListener("click", exportMarkdown);
   el.exportPdf.addEventListener("click", exportPdf);
   el.fixMarkdown.addEventListener("click", fixMarkdown);
 
@@ -1274,7 +1633,14 @@
     if (event.key === "Escape") closeMenus();
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
     const key = event.key.toLowerCase();
-    if (key === "o") open();
+    // Text fields keep their own undo while the user is typing in them.
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName || "") ||
+      event.target.isContentEditable;
+    if (key === "z" && !typing) {
+      if (event.shiftKey) redoChange();
+      else undoChange();
+    } else if (key === "y" && !typing) redoChange();
+    else if (key === "o") open();
     else if (key === "f" && analysis) el.filter.focus();
     else if (key === "e") exportHtml();
     else if (key === "p") exportPdf();

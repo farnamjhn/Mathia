@@ -51,6 +51,8 @@ jobs:
           ./scripts/vendor-fonts.sh
       - name: Build the CLI the tests drive
         run: cargo build -p mathia
+      - name: Validate the exported HTML scripts
+        run: node scripts/check-exported-html.mjs
       - working-directory: tests/js
         run: npm ci
       - working-directory: tests/js

@@ -458,6 +458,10 @@ code {
 .views button[aria-pressed="true"] { color: var(--ink); background: var(--ink-wash); font-weight: 600; }
 .views .n { font-variant-numeric: tabular-nums; opacity: 0.8; }
 
+.type-filter { display: flex; align-items: center; gap: 8px; }
+.type-filter label { flex: none; font-size: 12px; color: var(--muted); }
+.type-filter select { flex: 1; min-width: 0; }
+
 .blocks {
   flex: 1;
   min-height: 72px;
@@ -934,6 +938,7 @@ pre {
   user-select: none;
   -webkit-user-select: none;
   cursor: grab;
+  touch-action: none;
   transition: background var(--ease), border-color var(--ease);
 }
 
@@ -951,6 +956,20 @@ pre {
 .order-item.drag-over {
   border-color: var(--ink);
   background: var(--ink-wash);
+}
+
+.order-item-ghost {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  background: var(--desk);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grabbing;
 }
 
 .order-drag-handle {
