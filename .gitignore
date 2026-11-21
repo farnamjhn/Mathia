@@ -7,3 +7,7 @@
 tests/js/node_modules
 /src-tauri/gen
 .claude
+/ml/.venv/
+/ml/data/*.jsonl
+__pycache__/
+*.py[cod]
