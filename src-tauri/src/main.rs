@@ -823,7 +823,7 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Mathia")
-        .run(|app_handle, event| {
+        .run(|_app_handle, event| {
             match event {
                 RunEvent::Ready => {
                     // In dev builds on macOS, Tauri sets the light bundle icon
@@ -840,7 +840,7 @@ fn main() {
                     ..
                 } => {
                     if !has_visible_windows
-                        && let Some(window) = app_handle.get_webview_window("main")
+                        && let Some(window) = _app_handle.get_webview_window("main")
                     {
                         let _ = window.show();
                         let _ = window.set_focus();
