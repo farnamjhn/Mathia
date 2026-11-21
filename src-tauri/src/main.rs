@@ -767,8 +767,15 @@ fn main() {
                     dock::sync(Some(*theme));
                     theme::sync_os_content_appearance(window, *theme);
                 }
-                WindowEvent::Focused(true) => {
+                WindowEvent::Focused(_) => {
                     dock::sync(None);
+                }
+                #[cfg(target_os = "macos")]
+                WindowEvent::CloseRequested { api, .. } => {
+                    if window.label() == "main" {
+                        let _ = window.hide();
+                        api.prevent_close();
+                    }
                 }
                 // A dropped Markdown or HTML file is as much the user's choice as one
                 // picked in the dialog. The frontend gets the same paths through
@@ -816,12 +823,31 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Mathia")
-        .run(|_app_handle, event| {
-            if let RunEvent::Ready = event {
-                // In dev builds on macOS, Tauri sets the light bundle icon
-                // right after `setup` returns (inside `RuntimeRunEvent::Ready`)
-                // before emitting `RunEvent::Ready`, so apply ours here.
-                dock::refresh(None);
+        .run(|app_handle, event| {
+            match event {
+                RunEvent::Ready => {
+                    // In dev builds on macOS, Tauri sets the light bundle icon
+                    // right after `setup` returns (inside `RuntimeRunEvent::Ready`)
+                    // before emitting `RunEvent::Ready`, so apply ours here.
+                    dock::refresh(None);
+                }
+                RunEvent::Resumed => {
+                    dock::sync(None);
+                }
+                #[cfg(target_os = "macos")]
+                RunEvent::Reopen {
+                    has_visible_windows,
+                    ..
+                } => {
+                    if !has_visible_windows
+                        && let Some(window) = app_handle.get_webview_window("main")
+                    {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                    dock::refresh(None);
+                }
+                _ => {}
             }
         });
 }

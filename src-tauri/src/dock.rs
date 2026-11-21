@@ -25,7 +25,9 @@ mod macos {
     use std::sync::atomic::{AtomicU8, Ordering};
 
     use objc2::{AllocAnyThread, MainThreadMarker};
-    use objc2_app_kit::{NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication, NSImage};
+    use objc2_app_kit::{
+        NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication, NSImage, NSImageView,
+    };
     use objc2_foundation::{NSArray, NSData, NSUserDefaults, ns_string};
     use tauri::Theme;
 
@@ -73,10 +75,14 @@ mod macos {
             return;
         };
 
+        let app = NSApplication::sharedApplication(mtm);
         let system_theme = hint.unwrap_or_else(|| effective_system_theme(mtm));
         let resolved = super::resolve_theme(system_theme, icon_appearance_default().as_deref());
         let code = encode(resolved);
-        if !force && APPLIED.load(Ordering::Relaxed) == code {
+
+        let dock_tile = app.dockTile();
+        let has_content_view = dock_tile.contentView(mtm).is_some();
+        if !force && has_content_view && APPLIED.load(Ordering::Relaxed) == code {
             return;
         }
 
@@ -88,11 +94,14 @@ mod macos {
         let Some(image) = decode_icon(bytes) else {
             return;
         };
-        let app = NSApplication::sharedApplication(mtm);
+
         #[allow(unused_unsafe)]
         unsafe {
             app.setApplicationIconImage(Some(&image));
         }
+        let image_view = NSImageView::imageViewWithImage(&image, mtm);
+        dock_tile.setContentView(Some(&image_view));
+        dock_tile.display();
         APPLIED.store(code, Ordering::Relaxed);
     }
 }
