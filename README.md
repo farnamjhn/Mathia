@@ -1,6 +1,3 @@
-<!-- Improved compatibility of back to top link: See: https://github.com/othneildrew/Best-README-Template/pull/73 -->
-<a id="readme-top"></a>
-
 <!-- PROJECT SHIELDS -->
 [![Contributors][contributors-shield]][contributors-url]
 [![Forks][forks-shield]][forks-url]
@@ -21,7 +18,6 @@
 
   <p align="center">
     Compile OCR transcribed Markdown into a single interactive HTML study guide.
-    <br />
     <br />
     <br />
     <a href="#usage">View Usage</a>
@@ -84,19 +80,12 @@ Although the application is labeled with math all over, you can use it for any o
 study. Computer science probably fits best outside of math, but physics, chemistry and
 Similar fields should be fine with this compiler as well.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
 
 ### Built With
 
-* [![Rust][Rust-badge]][Rust-url]
-* [![Tauri][Tauri-badge]][Tauri-url]
-* [![KaTeX][KaTeX-badge]][KaTeX-url]
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
+ [![Rust][Rust-badge]][Rust-url] [![Tauri][Tauri-badge]][Tauri-url] [![KaTeX][KaTeX-badge]][KaTeX-url]
 
 ### Project Layout
 
@@ -106,11 +95,6 @@ Similar fields should be fine with this compiler as well.
 | `crates/math-judge` | Decision models around the classifier: JSON contract, external-process judge, verdict cache, replay logs |
 | `crates/mathia-cli` | Command-line front end (`mathia`) |
 | `src-tauri`, `ui` | Desktop app (Tauri v2, `mathia-app`) and its frontend |
-| `docs/archive/PLAN.md` | Design decisions and roadmap |
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
 
 <!-- GETTING STARTED -->
 ## Getting Started
@@ -130,6 +114,7 @@ before opening the app.
 #### Prerequisites
 
 * Rust toolchain
+  
   ```sh
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   ```
@@ -138,15 +123,18 @@ before opening the app.
 #### Installation
 
 1. Clone the repo
+
    ```sh
    git clone https://github.com/farnamjhn/Mathia.git
    cd Mathia
    ```
 2. Vendor the pinned, checksummed KaTeX (once)
+
    ```sh
    ./scripts/vendor-katex.sh
    ```
 3. Vendor the pinned, checksummed Vazirmatn font subset (once)
+
    ```sh
    ./scripts/vendor-fonts.sh
    ```
@@ -189,10 +177,6 @@ conservatively: a LaTeX command or a sub/superscript, a relation between operand
 a function value (`P(E)`), and, in Persian text, a Latin letter standing alone or a numeric
 interval. English words and parenthesised glosses are never touched.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
-
 <!-- USAGE EXAMPLES -->
 ## Usage
 
@@ -227,7 +211,7 @@ and `--overrides FILE` replays them later without the model. The contract is doc
 ### Interactive AI
 
 With an `--ai*` option the compiled page gets a settings button (⚙) and two actions on every
-block: **Ask** (a conversation about the block) and **Illustrate** (an explanatory figure).
+block: **Ask** (a conversation about the block) and **Illustrate** (an exsatory figure).
 The reader pastes their own API key into the page; it is kept in that browser's
 `localStorage`, never written into the file, and sent only to the chosen provider. Without
 these options the output contains no AI code and allows no network connections.
@@ -292,13 +276,6 @@ start screen) holds a ready-made prompt to paste into your OCR / vision LLM, so 
 It transcribes using the conventions that Mathia detects. **Options → Fix Markdown…** saves a
 repaired copy of the open file (see [Running Mathia](#running-mathia)) and switches to it.
 
-The app requires the vendored KaTeX and Vazirmatn (see [Build from Source](#build-from-source)). It is
-early; see [PLAN.md](docs/archive/PLAN.md), Phase 3.
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
-
 <!-- DEVELOPMENT -->
 ## Development
 
@@ -319,19 +296,12 @@ The JavaScript inside compiled documents is tested in headless Chrome (see
 cd tests/js && npm install && npm test
 ```
 
-See [PLAN.md](docs/archive/PLAN.md) for the current state and next steps.
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
-
 <!-- LICENSE -->
 ## License
 
 Mathia is free software, distributed under the
 [GNU General Public License v3.0 or later](LICENSE). See `LICENSE` for more information.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 
 
