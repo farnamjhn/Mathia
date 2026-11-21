@@ -9,6 +9,7 @@
 pub mod classifier;
 pub mod clean_html;
 pub mod config;
+pub mod crf;
 mod crossref;
 mod dom;
 pub mod error;
@@ -32,6 +33,7 @@ pub use classifier::{
 };
 pub use clean_html::{analyze_html, analyze_html_detailed, clean_html, is_html, is_html_file};
 pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, Scorer, ScoringConfig};
+pub use crf::{CrfModel, CrfTagger, RawCrfWeights};
 pub use error::{Error, Result};
 pub use features::{
     DumpNode, FeatureDump, Features, Lexicon, NodeFeatures, dump_features,
