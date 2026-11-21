@@ -27,6 +27,15 @@ from mathia_ml.split import (
     verify_split_directory,
     write_split_jsonl,
 )
+from mathia_ml.train_crf import (
+    export_crf_weights_json,
+    format_crf_weights,
+    train_and_export,
+    train_crf_model,
+    tune_hyperparameters,
+    verify_viterbi_parity,
+    viterbi_decode,
+)
 
 __all__ = [
     "DumpNode",
@@ -46,6 +55,13 @@ __all__ = [
     "extract_document_features",
     "extract_dataset",
     "summarize_features",
+    "train_crf_model",
+    "tune_hyperparameters",
+    "format_crf_weights",
+    "export_crf_weights_json",
+    "viterbi_decode",
+    "verify_viterbi_parity",
+    "train_and_export",
     "split_documents",
     "write_split_jsonl",
     "load_jsonl",
