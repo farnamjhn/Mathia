@@ -58,6 +58,7 @@
         <li><a href="#desktop-app">Desktop App</a></li>
       </ul>
     </li>
+    <li><a href="#documentation">Documentation</a></li>
     <li><a href="#development">Development</a></li>
     <li><a href="#license">License</a></li>
   </ol>
@@ -91,10 +92,12 @@ Similar fields should be fine with this compiler as well.
 
 | Path | Purpose |
 |---|---|
-| `crates/math-core` | Parser, feature extraction, block classifier and HTML renderer |
+| `crates/math-core` | Parser, feature extraction, block classifier (Heuristic / Tree / CRF) and HTML/Markdown renderers |
 | `crates/math-judge` | Decision models around the classifier: JSON contract, external-process judge, verdict cache, replay logs |
-| `crates/mathia-cli` | Command-line front end (`mathia`) |
-| `src-tauri`, `ui` | Desktop app (Tauri v2, `mathia-app`) and its frontend |
+| `crates/mathia-cli` | Command-line front end (`mathia`) and feature dumper |
+| `src-tauri`, `ui` | Desktop app (Tauri v2, `mathia-app`) and sandboxed UI |
+| `ml/` | Dev-only Python flywheel for synthetic OCR data, CRF training, and evaluation |
+| `docs/` | System architecture, extension recipes, and technical documentation |
 
 <!-- GETTING STARTED -->
 ## Getting Started
@@ -198,15 +201,19 @@ interval. English words and parenthesised glosses are never touched.
 
 ### Decision Models
 
-`--judge CMD` lets an external model review every block: `CMD` reads one JSON request per line
-on stdin (block text with LaTeX, neighbours, proposed type and scope) and answers one verdict
-per line (`accept`, `incomplete`, `overreach`, `reject`, `{"retype": "lemma"}`,
-`{"end_at": 7}`, `{"start_at": 3}`, optionally with a `confidence`).
+Mathia supports multiple decision models to detect block openers and their scopes:
+
+1. **Linear Weighted Sum (Default)**: Evaluates weighted features per candidate block type against a configurable threshold (`--config scoring.toml`).
+2. **Static Decision Tree (`[scorer] model = "tree"`)**: A deterministic binary test tree evaluated over node features.
+3. **Linear-Chain Conditional Random Field (CRF)**: A joint BIO sequence labeling model trained with `sklearn-crfsuite` on bilingual textbook datasets and decoded in pure Rust via Viterbi dynamic programming with embedded compile-time weights (`crf_weights.json`).
+4. **External Judge (`--judge CMD`)**: Lets an external model review proposed blocks. `CMD` reads one JSON request per line on stdin (block text with LaTeX, neighbours, proposed type and scope) and answers one verdict per line (`accept`, `incomplete`, `overreach`, `reject`, `{"retype": "lemma"}`, `{"end_at": 7}`, `{"start_at": 3}`, optionally with a `confidence`).
 
 `--judge-cache FILE` keeps verdicts keyed by block text, type and `--judge-model`, so an
 unchanged document is not sent again; `--judge-log FILE` records the resulting corrections,
 and `--overrides FILE` replays them later without the model. The contract is documented in
 `crates/math-judge`.
+
+In the desktop app and CLI, confidence gating can automatically escalate ambiguous spans (where the CRF confidence margin is low or high-logic paragraphs follow a statement) to the judge layer while keeping clean documents instant and free.
 
 ### Interactive AI
 
@@ -275,6 +282,16 @@ loads or saves configuration files. The **Transcription prompt** button (also sh
 start screen) holds a ready-made prompt to paste into your OCR / vision LLM, so the Markdown
 It transcribes using the conventions that Mathia detects. **Options → Fix Markdown…** saves a
 repaired copy of the open file (see [Running Mathia](#running-mathia)) and switches to it.
+
+<!-- DOCUMENTATION -->
+## Documentation
+
+Comprehensive architecture, design, and extension documentation is available in the [`docs/`](docs/) directory:
+
+- [**System Overview & Architecture (`docs/ARCHITECTURE.md`)**](docs/ARCHITECTURE.md) — Authoritative blueprint covering the compiler pipeline, AST representation, block detection stages, Heuristic Decision Tree, Linear-Chain CRF model with Viterbi decoding, external judge wiring, and the client-side interactive AI security model.
+- [**Extension Guide (`docs/EXTENDING.md`)**](docs/EXTENDING.md) — Step-by-step developer recipes for adding new semantic block types, adding feature signals, retraining & deploying CRF weights, adding CLI options, adding Tauri IPC commands, and integrating new AI providers.
+- [**Known Issues & Technical Debt (`docs/KNOWN_ISSUES.md`)**](docs/KNOWN_ISSUES.md) — Detailed catalog of grounded architectural constraints, implicit assumptions, fragile couplings, and edge cases.
+- [**ML Flywheel Developer Guide (`ml/README.md`)**](ml/README.md) — Guide to the offline Python workspace: synthetic OCR dataset generation, hyperparameter tuning, exact-span F1 evaluation, and weight export.
 
 <!-- DEVELOPMENT -->
 ## Development
