@@ -15,7 +15,7 @@
 
   const $ = (id) => document.getElementById(id);
   const el = {
-    open: $("open"), reload: $("reload"), export: $("export"),
+    home: $("home"), open: $("open"), reload: $("reload"), export: $("export"),
     undo: $("undo"), redo: $("redo"),
     ai: $("ai"), math: $("render-math"), showText: $("show-text"),
     status: $("status"), blocks: $("blocks"), panes: $("panes"),
@@ -241,6 +241,7 @@
     updateHistory();
     el.reload.disabled = el.export.disabled = el.exportPdf.disabled = !has;
     el.exportMarkdown.disabled = !has;
+    el.home.disabled = !has;
     const isHtml = Boolean(
       (source && source.path && HTML_EXT.test(source.path)) ||
       (source && source.multi_path && source.multi_path.some((p) => HTML_EXT.test(p)))
@@ -406,6 +407,32 @@
         refresh(true);
       }
     }
+  }
+
+  async function goHome() {
+    source = null;
+    customTitle = null;
+    selected = null;
+    selectedStart = null;
+    analysis = null;
+    stamp = null;
+    overrides = emptyOverrides();
+    resetHistory();
+    view = "all";
+    typeFilter = "all";
+    typeFilterKey = "";
+    if (el.filter) el.filter.value = "";
+    if (el.frame) el.frame.src = "about:blank";
+    el.blocks.innerHTML = "";
+    document.title = "Mathia";
+    el.docName.textContent = "Mathia";
+    el.docName.title = "";
+    setStatus("");
+    try {
+      await invoke("set_overrides", { overrides });
+    } catch (_) {}
+    layout();
+    loadRecent();
   }
 
   async function openPath(path) {
@@ -1704,6 +1731,7 @@
     next.focus();
     select(next.dataset.id);
   });
+  el.home.addEventListener("click", goHome);
   el.reload.addEventListener("click", () => refresh());
   el.undo.addEventListener("click", () => undoChange());
   el.redo.addEventListener("click", () => redoChange());
