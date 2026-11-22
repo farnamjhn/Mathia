@@ -1,3 +1,9 @@
+from mathia_ml.evaluate import (
+    compute_metrics,
+    evaluate_dataset,
+    format_report_markdown,
+    tag_heuristic,
+)
 from mathia_ml.export_feedback import (
     export_feedback_directory,
     export_feedback_from_markdown_and_overrides,
@@ -71,6 +77,10 @@ __all__ = [
     "export_feedback_directory",
     "export_feedback_telemetry",
     "load_overrides_dict",
+    "tag_heuristic",
+    "compute_metrics",
+    "evaluate_dataset",
+    "format_report_markdown",
 ]
 
 

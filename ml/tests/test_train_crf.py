@@ -129,6 +129,8 @@ class TestTrainCRF(unittest.TestCase):
 
     def test_exported_crf_weights_json_file(self) -> None:
         weights_path = Path(DEFAULT_OUTPUT_WEIGHTS)
+        if not weights_path.exists():
+            weights_path = Path("..") / DEFAULT_OUTPUT_WEIGHTS
         self.assertTrue(
             weights_path.exists(),
             f"Expected weights file at {weights_path} does not exist",
