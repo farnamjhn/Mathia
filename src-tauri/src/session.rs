@@ -393,12 +393,26 @@ impl Session {
     /// Compiles every Markdown file directly inside `dir` (not recursive)
     /// into `out_dir`, with the session's configuration but without the
     /// corrections, which belong to one document. Returns the files written.
+    #[allow(dead_code)]
     pub fn compile_folder(
         &self,
         dir: &Path,
         out_dir: &Path,
         options: &CompileOptions,
     ) -> Result<Vec<PathBuf>, String> {
+        self.compile_folder_with_progress(dir, out_dir, options, |_, _| {})
+    }
+
+    pub fn compile_folder_with_progress<F>(
+        &self,
+        dir: &Path,
+        out_dir: &Path,
+        options: &CompileOptions,
+        mut on_progress: F,
+    ) -> Result<Vec<PathBuf>, String>
+    where
+        F: FnMut(f32, &str),
+    {
         let mut html_options = options.html_options()?;
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
             .map_err(|e| format!("{}: {e}", dir.display()))?
@@ -406,13 +420,25 @@ impl Session {
             .filter(|path| path.is_file() && is_markdown(path))
             .collect();
         files.sort();
+        let total = files.len();
         let mut written = Vec::new();
-        for file in files {
-            html_options.source_name = file
+        for (i, file) in files.iter().enumerate() {
+            let file_name = file
                 .file_name()
-                .map(|name| name.to_string_lossy().into_owned());
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "document".to_string());
+            let pct = if total > 0 {
+                i as f32 / total as f32
+            } else {
+                0.0
+            };
+            on_progress(
+                pct,
+                &format!("Compiling {} of {}: {}", i + 1, total, file_name),
+            );
+            html_options.source_name = Some(file_name);
             let markdown =
-                std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+                std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
             let document = math_core::analyze(&markdown, &self.config);
             let html =
                 math_core::html::render(&document, &html_options).map_err(|e| e.to_string())?;
@@ -421,6 +447,7 @@ impl Session {
             std::fs::write(&dest, html).map_err(|e| format!("{}: {e}", dest.display()))?;
             written.push(dest);
         }
+        on_progress(1.0, "Folder compilation complete");
         Ok(written)
     }
 
@@ -450,6 +477,19 @@ impl Session {
         source: &Source,
         options: &CompileOptions,
     ) -> Result<(String, usize), String> {
+        self.compile_with_progress(source, options, |_, _| {})
+    }
+
+    pub fn compile_with_progress<F>(
+        &self,
+        source: &Source,
+        options: &CompileOptions,
+        mut on_progress: F,
+    ) -> Result<(String, usize), String>
+    where
+        F: FnMut(f32, &str),
+    {
+        on_progress(0.1, "Reading document…");
         let content = self.read(source)?;
         let mut html_options = options.html_options()?;
         html_options.source_name = match source {
@@ -459,7 +499,9 @@ impl Session {
             _ => None,
         };
         if self.is_html_source(source) || math_core::is_html(&content) {
+            on_progress(0.3, "Extracting and cleaning HTML…");
             let mut analysis = math_core::clean_html::analyze_html_detailed(&content);
+            on_progress(0.6, "Applying corrections…");
             math_core::clean_html::apply_overrides(&mut analysis.document, &self.overrides);
             let semantic = analysis
                 .document
@@ -467,27 +509,46 @@ impl Session {
                 .iter()
                 .filter(|b| b.kind.is_semantic())
                 .count();
+            on_progress(0.8, "Compiling standalone HTML…");
             let html = math_core::html::render(&analysis.document, &html_options)
                 .map_err(|e| e.to_string())?;
+            on_progress(0.95, "HTML compiled");
             return Ok((html, semantic));
         }
+        on_progress(0.3, "Parsing Markdown content…");
         let document = self.classify(source)?.document;
+        on_progress(0.6, "Classifying semantic blocks…");
         let semantic = document
             .blocks
             .iter()
             .filter(|b| b.kind.is_semantic())
             .count();
+        on_progress(0.8, "Compiling standalone HTML…");
         let html = math_core::html::render(&document, &html_options).map_err(|e| e.to_string())?;
+        on_progress(0.95, "HTML compiled");
         Ok((html, semantic))
     }
 
     /// Compiles and makes the result the preview.
+    #[allow(dead_code)]
     pub fn compile_preview(
         &mut self,
         source: &Source,
         options: &CompileOptions,
     ) -> Result<Compiled, String> {
-        let (html, semantic_blocks) = self.compile(source, options)?;
+        self.compile_preview_with_progress(source, options, |_, _| {})
+    }
+
+    pub fn compile_preview_with_progress<F>(
+        &mut self,
+        source: &Source,
+        options: &CompileOptions,
+        progress: F,
+    ) -> Result<Compiled, String>
+    where
+        F: FnMut(f32, &str),
+    {
+        let (html, semantic_blocks) = self.compile_with_progress(source, options, progress)?;
         let changed = html != self.preview;
         if changed {
             self.preview = html;
@@ -925,5 +986,46 @@ mod tests {
         );
         let serialized = serde_json::to_string(&source).unwrap();
         assert!(serialized.contains(r#""multi_path":["#));
+    }
+
+    #[test]
+    fn compile_with_progress_reports_stages() {
+        let f_md = temp_file("test.md", "# Heading\n\n**Theorem 1.** Let $x > 0$.\n");
+        let f_html = temp_file(
+            "test.html",
+            "<h1>Title</h1><p><strong>Theorem 1</strong> Mathia</p>",
+        );
+
+        let mut session = Session::default();
+        session.grant(&f_md).unwrap();
+        session.grant(&f_html).unwrap();
+
+        let mut md_events = Vec::new();
+        let source_md = Source::Path(f_md);
+        let res_md = session.compile_preview_with_progress(
+            &source_md,
+            &CompileOptions::default(),
+            |progress, stage| {
+                md_events.push((progress, stage.to_string()));
+            },
+        );
+        assert!(res_md.is_ok());
+        assert!(!md_events.is_empty());
+        assert!(md_events.first().unwrap().0 <= 0.15);
+        assert!(md_events.last().unwrap().0 >= 0.9);
+
+        let mut html_events = Vec::new();
+        let source_html = Source::Path(f_html);
+        let res_html = session.compile_with_progress(
+            &source_html,
+            &CompileOptions::default(),
+            |progress, stage| {
+                html_events.push((progress, stage.to_string()));
+            },
+        );
+        assert!(res_html.is_ok());
+        assert!(!html_events.is_empty());
+        assert!(html_events.first().unwrap().0 <= 0.15);
+        assert!(html_events.last().unwrap().0 >= 0.9);
     }
 }

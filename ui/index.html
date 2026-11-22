@@ -520,6 +520,26 @@ BEFORE YOU ANSWER, CHECK
   </footer>
 </dialog>
 
+<section id="loading-screen" class="loading-screen" aria-live="polite" aria-label="Compiling document" hidden>
+  <div class="loading-card">
+    <div class="loading-logo" aria-hidden="true">
+      <img class="if-light" src="assets/mathia-light.png" width="60" height="60" alt="">
+      <img class="if-dark" src="assets/mathia-dark.png" width="60" height="60" alt="">
+    </div>
+    <h2 id="loading-title" class="loading-title">Compiling HTML…</h2>
+    <p id="loading-desc" class="loading-desc">Parsing markdown and rendering mathematics</p>
+    <div class="loading-progress-wrap">
+      <div class="loading-progress-track" role="progressbar" id="loading-bar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="loading-fill" class="loading-progress-fill"></div>
+      </div>
+      <div class="loading-progress-meta">
+        <span id="loading-stage" class="loading-stage">Reading document…</span>
+        <span id="loading-percent" class="loading-percent">0%</span>
+      </div>
+    </div>
+  </div>
+</section>
+
 <div id="drop" class="drop" hidden>Drop the Markdown or HTML file to open it</div>
 <script src="main.js"></script>
 </body>

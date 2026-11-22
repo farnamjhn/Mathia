@@ -19,12 +19,18 @@ use std::sync::{Mutex, MutexGuard};
 
 use math_core::{ConfigFormat, ScopeOverrides, ScoringConfig};
 use tauri::{
-    AppHandle, DragDropEvent, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, DragDropEvent, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder,
     WindowEvent,
 };
 use tauri_plugin_dialog::DialogExt;
 
 use session::{AnalysisView, CompileOptions, Compiled, Session, Source};
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CompileProgress {
+    pub progress: f32,
+    pub stage: String,
+}
 
 /// Scheme of the preview frame; the frontend builds the URL with
 /// `convertFileSrc(revision, "mathia-preview")`.
@@ -217,11 +223,44 @@ async fn analyze(state: State<'_, Shared>, source: Source) -> Result<AnalysisVie
 /// Compiles `source` and makes it the preview document.
 #[tauri::command]
 async fn compile(
+    app: AppHandle,
     state: State<'_, Shared>,
     source: Source,
     options: CompileOptions,
 ) -> Result<Compiled, String> {
-    lock(&state).compile_preview(&source, &options)
+    app.emit(
+        "compile-progress",
+        CompileProgress {
+            progress: 0.05,
+            stage: "Preparing compilation…".to_string(),
+        },
+    )
+    .ok();
+
+    let result =
+        lock(&state).compile_preview_with_progress(&source, &options, |progress, stage| {
+            app.emit(
+                "compile-progress",
+                CompileProgress {
+                    progress,
+                    stage: stage.to_string(),
+                },
+            )
+            .ok();
+        });
+
+    if result.is_ok() {
+        app.emit(
+            "compile-progress",
+            CompileProgress {
+                progress: 0.95,
+                stage: "HTML compiled".to_string(),
+            },
+        )
+        .ok();
+    }
+
+    result
 }
 
 /// Compiles `source` and writes it where the user says. Returns the
@@ -233,7 +272,35 @@ async fn export(
     source: Source,
     options: CompileOptions,
 ) -> Result<Option<String>, String> {
-    let (html, _) = lock(&state).compile(&source, &options)?;
+    app.emit(
+        "compile-progress",
+        CompileProgress {
+            progress: 0.05,
+            stage: "Compiling HTML for export…".to_string(),
+        },
+    )
+    .ok();
+
+    let (html, _) = lock(&state).compile_with_progress(&source, &options, |progress, stage| {
+        app.emit(
+            "compile-progress",
+            CompileProgress {
+                progress,
+                stage: stage.to_string(),
+            },
+        )
+        .ok();
+    })?;
+
+    app.emit(
+        "compile-progress",
+        CompileProgress {
+            progress: 1.0,
+            stage: "Complete".to_string(),
+        },
+    )
+    .ok();
+
     let mut dialog = app.dialog().file().add_filter("HTML", &["html"]);
     let default_name = default_stem(&source, options.title.as_deref());
     dialog = dialog.set_file_name(format!("{default_name}.html"));
@@ -563,7 +630,25 @@ async fn export_folder(
         return Ok(None);
     };
     let out = out.into_path().map_err(|e| e.to_string())?;
-    let written = lock(&state).compile_folder(&dir, &out, &options)?;
+    let written =
+        lock(&state).compile_folder_with_progress(&dir, &out, &options, |progress, stage| {
+            app.emit(
+                "compile-progress",
+                CompileProgress {
+                    progress,
+                    stage: stage.to_string(),
+                },
+            )
+            .ok();
+        })?;
+    app.emit(
+        "compile-progress",
+        CompileProgress {
+            progress: 1.0,
+            stage: "Complete".to_string(),
+        },
+    )
+    .ok();
     Ok(Some((written.len(), display(&out))))
 }
 

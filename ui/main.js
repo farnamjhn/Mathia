@@ -65,6 +65,9 @@
     dmKeyHint: $("dm-key-hint"), dmRemoveKey: $("dm-remove-key"), dmTest: $("dm-test"),
     dmCancel: $("dm-cancel"), dmSave: $("dm-save"), decisionMessage: $("decision-message"),
     configReset: $("config-reset"), configCancel: $("config-cancel"), configApply: $("config-apply"),
+    loadingScreen: $("loading-screen"), loadingTitle: $("loading-title"), loadingDesc: $("loading-desc"),
+    loadingBar: $("loading-bar"), loadingFill: $("loading-fill"),
+    loadingStage: $("loading-stage"), loadingPercent: $("loading-percent"),
   };
 
   const SEMANTIC = [
@@ -258,6 +261,60 @@
     return blockId ? base + "#" + encodeURIComponent(blockId) : base;
   }
 
+  let loadingStartTime = 0;
+  let loadingVisible = false;
+  let currentProgress = 0;
+
+  function setProgress(percent, stageText) {
+    currentProgress = Math.max(0, Math.min(100, Math.round(percent)));
+    if (el.loadingBar) {
+      el.loadingBar.setAttribute("aria-valuenow", String(currentProgress));
+    }
+    if (el.loadingFill) {
+      el.loadingFill.style.width = currentProgress + "%";
+    }
+    if (el.loadingPercent) {
+      el.loadingPercent.textContent = currentProgress + "%";
+    }
+    if (stageText && el.loadingStage) {
+      el.loadingStage.textContent = stageText;
+    }
+  }
+
+  function showLoading(title, desc) {
+    if (!el.loadingScreen) return;
+    loadingStartTime = performance.now();
+    loadingVisible = true;
+    if (title && el.loadingTitle) el.loadingTitle.textContent = title;
+    if (desc && el.loadingDesc) el.loadingDesc.textContent = desc;
+    setProgress(5, "Preparing compilation…");
+    el.loadingScreen.classList.remove("loading-fade-out");
+    el.loadingScreen.hidden = false;
+  }
+
+  async function finishLoading() {
+    if (!loadingVisible || !el.loadingScreen) return;
+    setProgress(100, "Complete");
+    const elapsed = performance.now() - loadingStartTime;
+    const minDisplay = 260;
+    const remaining = Math.max(0, minDisplay - elapsed);
+    if (remaining > 0) {
+      await new Promise((resolve) => setTimeout(resolve, remaining));
+    }
+    el.loadingScreen.classList.add("loading-fade-out");
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    el.loadingScreen.hidden = true;
+    el.loadingScreen.classList.remove("loading-fade-out");
+    loadingVisible = false;
+  }
+
+  function hideLoading() {
+    if (!el.loadingScreen) return;
+    el.loadingScreen.hidden = true;
+    el.loadingScreen.classList.remove("loading-fade-out");
+    loadingVisible = false;
+  }
+
   // Compile and analyse the current source; the frame reloads only when the
   // HTML actually changed, so its scroll position survives a no-op refresh.
   async function refresh(quiet) {
@@ -269,14 +326,47 @@
       return;
     }
     busy = true;
-    if (!quiet) setStatus("Compiling…");
+    if (!quiet) {
+      setStatus("Compiling…");
+      const isHtml = Boolean(
+        (source.path && HTML_EXT.test(source.path)) ||
+        (source.multi_path && source.multi_path.some((p) => HTML_EXT.test(p)))
+      );
+      const title = "Compiling HTML…";
+      let desc = "Parsing markdown and rendering mathematics";
+      if (source.multi_path && source.multi_path.length > 1) {
+        desc = "Combining " + source.multi_path.length + " files into a standalone HTML document";
+      } else if (isHtml) {
+        desc = "Extracting structure, formulas and cleaning bloat";
+      }
+      showLoading(title, desc);
+    }
     try {
       const compiled = await invoke("compile", { source, options: options() });
       if (compiled.changed || compiled.revision !== revision || !analysis) {
         revision = compiled.revision;
+        if (!quiet) setProgress(88, "Analyzing blocks…");
         analysis = await invoke("analyze", { source });
+        if (!quiet) setProgress(94, "Rendering preview…");
         renderBlocks();
+
+        let frameLoadedResolve;
+        const frameLoadedPromise = new Promise((resolve) => {
+          frameLoadedResolve = resolve;
+        });
+        const onFrameLoad = () => {
+          el.frame.removeEventListener("load", onFrameLoad);
+          frameLoadedResolve();
+        };
+        el.frame.addEventListener("load", onFrameLoad);
+        const timeoutId = setTimeout(onFrameLoad, 700);
+
         el.frame.src = previewUrl(selected);
+
+        if (!quiet) {
+          await frameLoadedPromise;
+          clearTimeout(timeoutId);
+        }
         forgetHighlights();
       }
       layout();
@@ -305,6 +395,11 @@
       layout();
       setStatus(String(error), true);
     } finally {
+      if (!quiet) {
+        await finishLoading();
+      } else {
+        hideLoading();
+      }
       busy = false;
       if (again) {
         again = false;
@@ -435,11 +530,14 @@
 
   async function exportHtml() {
     if (!source) return;
+    showLoading("Compiling HTML…", "Preparing standalone HTML file for export");
     try {
       const dest = await invoke("export", { source, options: options() });
       if (dest) setStatus("Exported to " + dest);
     } catch (error) {
       setStatus(String(error), true);
+    } finally {
+      await finishLoading();
     }
   }
 
@@ -1187,11 +1285,14 @@
   async function exportFolder() {
     try {
       setStatus("Choose a folder of Markdown files…");
+      showLoading("Compiling HTML files…", "Exporting folder to HTML files");
       const result = await invoke("export_folder", { options: options() });
       if (result) setStatus("Exported " + result[0] + " file(s) to " + result[1]);
       else setStatus("");
     } catch (error) {
       setStatus(String(error), true);
+    } finally {
+      await finishLoading();
     }
   }
 
@@ -1682,6 +1783,19 @@
     })
     .catch((error) => setStatus(String(error), true))
     .finally(loadRecent);
+
+  listen("compile-progress", (event) => {
+    if (!loadingVisible) return;
+    const data = event.payload;
+    if (data && typeof data.progress === "number") {
+      const pct = Math.round(data.progress * 100);
+      if (pct >= currentProgress) {
+        setProgress(pct, data.stage);
+      } else if (data.stage && el.loadingStage) {
+        el.loadingStage.textContent = data.stage;
+      }
+    }
+  });
 
   listen("tauri://drag-enter", () => { el.drop.hidden = false; });
   listen("tauri://drag-leave", () => { el.drop.hidden = true; });
