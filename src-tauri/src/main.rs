@@ -11,6 +11,7 @@
 
 mod decision;
 mod dock;
+mod menu;
 mod session;
 mod theme;
 
@@ -80,6 +81,12 @@ fn save_recent(app: &AppHandle, session: &Session) {
     }
     if let Ok(json) = serde_json::to_string(&paths) {
         let _ = std::fs::write(file, json);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(m) = menu::build_app_menu(app, &paths) {
+            let _ = app.set_menu(m);
+        }
     }
 }
 
@@ -833,6 +840,14 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .on_menu_event(|app, event| {
+            let id = event.id().as_ref();
+            if let Some(recent_path) = id.strip_prefix("recent:") {
+                let _ = app.emit("menu-open-recent", recent_path);
+            } else {
+                let _ = app.emit("menu-action", id);
+            }
+        })
         .manage(Shared::default())
         .manage(PrintDoc::default())
         .manage(SharedDecision::default())
@@ -854,9 +869,15 @@ fn main() {
         })
         .setup(|app| {
             let saved = load_recent(app.handle());
-            lock(&app.state::<Shared>()).set_recent(saved);
+            lock(&app.state::<Shared>()).set_recent(saved.clone());
             if let Ok(dir) = app.path().app_data_dir() {
                 *lock_decision(&app.state::<SharedDecision>()) = decision::Decision::load(&dir);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                if let Ok(m) = menu::build_app_menu(app.handle(), &saved) {
+                    let _ = app.set_menu(m);
+                }
             }
             // Replace the static bundle icon as soon as AppKit is available.
             // Waiting for `RunEvent::Ready` leaves the light bundle icon visible

@@ -245,6 +245,170 @@ code {
   border-radius: 4px;
 }
 
+/* ── Windows in-app menubar ──────────────────────────────────────────── */
+
+.win-menubar {
+  display: none;
+  position: relative;
+  z-index: 10;
+  align-items: center;
+  height: 30px;
+  padding: 0 6px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+  font-size: 12px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body.platform-windows .win-menubar {
+  display: flex;
+}
+
+body.platform-mac .win-menubar {
+  display: none !important;
+}
+
+.menubar-item {
+  position: relative;
+}
+
+.menubar-btn {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--print);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background var(--ease);
+}
+
+.menubar-btn:hover,
+.menubar-btn[aria-expanded="true"] {
+  background: var(--hover);
+}
+
+.menubar-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: 200;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px -4px light-dark(rgba(20, 25, 60, 0.25), rgba(0, 0, 0, 0.65));
+}
+
+.menubar-submenu-parent {
+  position: relative;
+  width: 100%;
+}
+
+.menubar-submenu {
+  top: -4px;
+  left: calc(100% - 2px);
+  min-width: 220px;
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.menu-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--print);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  text-align: start;
+  cursor: pointer;
+  gap: 16px;
+  white-space: nowrap;
+  transition: background var(--ease), color var(--ease);
+}
+
+.menu-action:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.menu-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.menu-shortcut {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+  font-family: var(--font-ui);
+}
+
+.menu-caret {
+  font-size: 13px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.menu-divider {
+  height: 1px;
+  margin: 4px 4px;
+  background: var(--rule);
+}
+
+.menu-empty {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.menu-toggle {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.menu-check {
+  display: inline-block;
+  width: 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+  text-align: center;
+}
+
+.win-recent-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.win-recent-item .recent-name {
+  font-weight: 500;
+  color: var(--print);
+}
+
+.win-recent-item .recent-dir {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* ── Top bar integrated items ────────────────────────────────────────── */
+
+.bar-group-integrated,
+.bar-separator-integrated {
+  display: none !important;
+}
+
 /* ── Top bar ─────────────────────────────────────────────────────────── */
 
 .bar {

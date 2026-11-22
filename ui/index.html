@@ -11,6 +11,132 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<nav id="win-menubar" class="win-menubar" role="menubar" aria-label="Application menu">
+  <div class="menubar-item">
+    <button type="button" class="menubar-btn" id="win-menu-file-btn" aria-haspopup="true" aria-expanded="false">File</button>
+    <div class="menubar-dropdown" id="win-menu-file" hidden>
+      <button type="button" class="menu-action" data-action="open">
+        <span>Open…</span>
+        <span class="menu-shortcut">Ctrl+O</span>
+      </button>
+      <button type="button" class="menu-action" data-action="combine">
+        <span>Combine…</span>
+      </button>
+      <div class="menubar-submenu-parent" id="win-recent-parent">
+        <button type="button" class="menu-action submenu-trigger" id="win-recent-trigger">
+          <span>Open Recent</span>
+          <span class="menu-caret">›</span>
+        </button>
+        <div class="menubar-dropdown menubar-submenu" id="win-recent-menu" hidden>
+          <div class="menu-empty" id="win-recent-empty">No Recent Files</div>
+          <div class="menu-divider" id="win-recent-divider" hidden></div>
+          <button type="button" class="menu-action" id="win-recent-clear" data-action="clear_recent" hidden>
+            <span>Clear Recent</span>
+          </button>
+        </div>
+      </div>
+      <div class="menu-divider"></div>
+      <button type="button" class="menu-action" data-action="home" id="win-menu-home" disabled>
+        <span>Back to Home</span>
+      </button>
+      <button type="button" class="menu-action" data-action="reload" id="win-menu-reload" disabled>
+        <span>Compile Again</span>
+        <span class="menu-shortcut">Ctrl+R</span>
+      </button>
+      <div class="menu-divider"></div>
+      <button type="button" class="menu-action" data-action="export_html" id="win-menu-export-html" disabled>
+        <span>Export as HTML…</span>
+        <span class="menu-shortcut">Ctrl+E</span>
+      </button>
+      <button type="button" class="menu-action" data-action="export_markdown" id="win-menu-export-markdown" disabled>
+        <span>Export as Markdown…</span>
+      </button>
+      <button type="button" class="menu-action" data-action="export_pdf" id="win-menu-export-pdf" disabled>
+        <span>Export as PDF…</span>
+        <span class="menu-shortcut">Ctrl+P</span>
+      </button>
+      <button type="button" class="menu-action" data-action="export_folder">
+        <span>Export Folder…</span>
+      </button>
+      <div class="menu-divider"></div>
+      <button type="button" class="menu-action" data-action="close_window">
+        <span>Exit</span>
+        <span class="menu-shortcut">Alt+F4</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="menubar-item">
+    <button type="button" class="menubar-btn" id="win-menu-edit-btn" aria-haspopup="true" aria-expanded="false">Edit</button>
+    <div class="menubar-dropdown" id="win-menu-edit" hidden>
+      <button type="button" class="menu-action" data-action="undo" id="win-menu-undo" disabled>
+        <span>Undo</span>
+        <span class="menu-shortcut">Ctrl+Z</span>
+      </button>
+      <button type="button" class="menu-action" data-action="redo" id="win-menu-redo" disabled>
+        <span>Redo</span>
+        <span class="menu-shortcut">Ctrl+Y</span>
+      </button>
+      <div class="menu-divider"></div>
+      <button type="button" class="menu-action" data-action="fix_markdown" id="win-menu-fix-markdown" disabled>
+        <span>Fix Markdown…</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="menubar-item">
+    <button type="button" class="menubar-btn" id="win-menu-view-btn" aria-haspopup="true" aria-expanded="false">View</button>
+    <div class="menubar-dropdown" id="win-menu-view" hidden>
+      <button type="button" class="menu-action" data-action="preview_toggle" id="win-menu-preview" disabled>
+        <span>Toggle Preview</span>
+      </button>
+      <button type="button" class="menu-action" data-action="theme_toggle">
+        <span>Toggle Color Theme</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="menubar-item">
+    <button type="button" class="menubar-btn" id="win-menu-tools-btn" aria-haspopup="true" aria-expanded="false">Tools</button>
+    <div class="menubar-dropdown" id="win-menu-tools" hidden>
+      <button type="button" class="menu-action" data-action="guide">
+        <span>Transcription Prompt…</span>
+      </button>
+      <div class="menu-divider"></div>
+      <button type="button" class="menu-action" data-action="decision_run" id="win-menu-decision-run" disabled>
+        <span>Review Blocks with Model</span>
+      </button>
+      <button type="button" class="menu-action" data-action="decision">
+        <span>Decision Model…</span>
+      </button>
+      <button type="button" class="menu-action" data-action="scoring">
+        <span>Detection Settings…</span>
+      </button>
+      <div class="menu-divider"></div>
+      <button type="button" class="menu-action menu-toggle" data-action="toggle_render_math" id="win-menu-render-math">
+        <span class="menu-check" aria-hidden="true">✓</span>
+        <span>Render Formulas</span>
+      </button>
+      <button type="button" class="menu-action menu-toggle" data-action="toggle_ai" id="win-menu-ai">
+        <span class="menu-check" aria-hidden="true" style="visibility: hidden;">✓</span>
+        <span>Add AI Study Tools</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="menubar-item">
+    <button type="button" class="menubar-btn" id="win-menu-help-btn" aria-haspopup="true" aria-expanded="false">Help</button>
+    <div class="menubar-dropdown" id="win-menu-help" hidden>
+      <button type="button" class="menu-action" data-action="about">
+        <span>About Mathia</span>
+      </button>
+      <button type="button" class="menu-action" data-action="guide">
+        <span>Prompt Guide</span>
+      </button>
+    </div>
+  </div>
+</nav>
+
 <header class="bar" role="toolbar" aria-label="Application toolbar">
   <div class="bar-group" role="group" aria-label="Document info">
     <button id="home" class="icon-btn" type="button" aria-label="Back to home" title="Back to home" disabled>
@@ -34,7 +160,7 @@
 
   <span class="bar-space"></span>
 
-  <div class="bar-group" role="group" aria-label="Document files">
+  <div class="bar-group bar-group-integrated" role="group" aria-label="Document files">
     <button id="open" class="btn" type="button" title="Open a Markdown or HTML file (⌘O / Ctrl+O)">Open…</button>
     <button id="open-multi" class="btn" type="button" title="Import multiple Markdown files and compile them together">Combine…</button>
     <div class="menu-wrap" id="recent-wrap" hidden>
@@ -46,9 +172,9 @@
     </div>
   </div>
 
-  <span class="bar-separator" role="separator" aria-orientation="vertical"></span>
+  <span class="bar-separator bar-separator-integrated" role="separator" aria-orientation="vertical"></span>
 
-  <div class="bar-group" role="group" aria-label="History">
+  <div class="bar-group bar-group-integrated" role="group" aria-label="History">
     <button id="undo" class="icon-btn" type="button" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M9 14 4 9l5-5"/>
@@ -63,9 +189,9 @@
     </button>
   </div>
 
-  <span class="bar-separator" role="separator" aria-orientation="vertical"></span>
+  <span class="bar-separator bar-separator-integrated" role="separator" aria-orientation="vertical"></span>
 
-  <div class="bar-group" role="group" aria-label="Tools and options">
+  <div class="bar-group bar-group-integrated" role="group" aria-label="Tools and options">
     <button id="guide" class="btn" type="button" title="The prompt that makes a vision model transcribe pages the way Mathia reads them">Transcription prompt</button>
 
     <div class="menu-wrap">
@@ -129,9 +255,9 @@
     </button>
   </div>
 
-  <span class="bar-separator" role="separator" aria-orientation="vertical"></span>
+  <span class="bar-separator bar-separator-integrated" role="separator" aria-orientation="vertical"></span>
 
-  <div class="bar-group" role="group" aria-label="Export">
+  <div class="bar-group bar-group-integrated" role="group" aria-label="Export">
     <div class="menu-wrap split">
       <button id="export" class="btn primary split-main" type="button" title="Save this document as one HTML file (⌘E / Ctrl+E)" disabled>Export…</button>
       <button id="export-more" class="btn primary split-more" type="button" aria-label="More ways to export" aria-haspopup="true" aria-expanded="false" aria-controls="export-menu">
@@ -498,6 +624,24 @@ BEFORE YOU ANSWER, CHECK
     <span class="spacer"></span>
     <button id="dm-cancel" class="btn" type="button">Cancel</button>
     <button id="dm-save" class="btn primary" type="button">Save</button>
+  </footer>
+</dialog>
+
+<dialog id="about-dialog" class="dialog about-dialog" aria-labelledby="about-title">
+  <header class="dialog-head" style="text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+    <div class="welcome-logo" aria-hidden="true" style="margin-bottom: 4px;">
+      <img class="if-light" src="assets/mathia-light.png" width="48" height="48" alt="">
+      <img class="if-dark" src="assets/mathia-dark.png" width="48" height="48" alt="">
+    </div>
+    <h2 id="about-title" style="font-family: var(--font-serif); font-size: 20px;">Mathia</h2>
+    <p style="font-size: 13px; color: var(--muted);">Accessible Mathematics Reader and Compiler</p>
+  </header>
+  <div style="padding: 16px 20px; font-size: 13px; color: var(--text); line-height: 1.5; text-align: center;">
+    <p>Version 0.1.0</p>
+    <p style="margin-top: 8px; color: var(--muted);">Reads, structures, and compiles mathematical documents into accessible, responsive textbooks.</p>
+  </div>
+  <footer class="dialog-actions" style="justify-content: center;">
+    <button id="about-close" class="btn primary" type="button">Close</button>
   </footer>
 </dialog>
 

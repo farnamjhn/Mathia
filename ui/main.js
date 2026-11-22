@@ -5,6 +5,20 @@
 (function () {
   "use strict";
 
+  const isMac = !window.location.search.includes("platform=windows") && (
+    (typeof navigator !== "undefined" && (
+      (navigator.userAgent && navigator.userAgent.includes("Mac")) ||
+      (navigator.platform && navigator.platform.startsWith("Mac"))
+    ))
+  );
+  if (isMac) {
+    document.body.classList.add("platform-mac");
+    document.body.classList.remove("platform-windows");
+  } else {
+    document.body.classList.add("platform-windows");
+    document.body.classList.remove("platform-mac");
+  }
+
   const { invoke, convertFileSrc } = window.__TAURI__.core;
   const { listen } = window.__TAURI__.event;
 
@@ -51,6 +65,10 @@
     exportPdf: $("export-pdf"),
     recent: $("recent"), recentList: $("recent-list"), recentClear: $("recent-clear"),
     recentWrap: $("recent-wrap"), recentButton: $("recent-button"), recentMenu: $("recent-menu"),
+    winMenubar: $("win-menubar"),
+    aboutDialog: $("about-dialog"), aboutClose: $("about-close"),
+    winRecentMenu: $("win-recent-menu"), winRecentEmpty: $("win-recent-empty"),
+    winRecentDivider: $("win-recent-divider"), winRecentClear: $("win-recent-clear"),
     corrections: $("corrections"), correctionsCount: $("corrections-count"),
     correctionsLoad: $("corrections-load"), correctionsSave: $("corrections-save"),
     correctionsClear: $("corrections-clear"),
@@ -141,9 +159,14 @@
   }
 
   function updateHistory() {
-    if (!el.undo || !el.redo) return;
-    el.undo.disabled = undoStack.length === 0;
-    el.redo.disabled = redoStack.length === 0;
+    if (el.undo && el.redo) {
+      el.undo.disabled = undoStack.length === 0;
+      el.redo.disabled = redoStack.length === 0;
+    }
+    const winUndo = $("win-menu-undo");
+    if (winUndo) winUndo.disabled = undoStack.length === 0;
+    const winRedo = $("win-menu-redo");
+    if (winRedo) winRedo.disabled = redoStack.length === 0;
   }
 
   function pushHistory(entry) {
@@ -229,6 +252,19 @@
     return kind === "text" ? "Plain text" : titleCase(kind);
   }
 
+  function updateMenuToggles() {
+    const mathBtn = $("win-menu-render-math");
+    if (mathBtn) {
+      const check = mathBtn.querySelector(".menu-check");
+      if (check) check.style.visibility = el.math.checked ? "visible" : "hidden";
+    }
+    const aiBtn = $("win-menu-ai");
+    if (aiBtn) {
+      const check = aiBtn.querySelector(".menu-check");
+      if (check) check.style.visibility = el.ai.checked ? "visible" : "hidden";
+    }
+  }
+
   // The welcome screen stands in for both panes until a document compiles.
   function layout() {
     const has = Boolean(analysis);
@@ -239,6 +275,7 @@
     el.previewToggle.disabled = !has;
     updateDecisionRun();
     updateHistory();
+    updateMenuToggles();
     el.reload.disabled = el.export.disabled = el.exportPdf.disabled = !has;
     el.exportMarkdown.disabled = !has;
     el.home.disabled = !has;
@@ -248,6 +285,24 @@
     );
     el.fixMarkdown.disabled = !has || isHtml;
     el.fixMarkdown.title = isHtml ? "Fix Markdown is for Markdown files." : "";
+
+    const winHome = $("win-menu-home");
+    if (winHome) winHome.disabled = !has;
+    const winReload = $("win-menu-reload");
+    if (winReload) winReload.disabled = !has;
+    const winExportHtml = $("win-menu-export-html");
+    if (winExportHtml) winExportHtml.disabled = !has;
+    const winExportMd = $("win-menu-export-markdown");
+    if (winExportMd) winExportMd.disabled = !has;
+    const winExportPdf = $("win-menu-export-pdf");
+    if (winExportPdf) winExportPdf.disabled = !has;
+    const winFixMd = $("win-menu-fix-markdown");
+    if (winFixMd) {
+      winFixMd.disabled = !has || isHtml;
+      winFixMd.title = isHtml ? "Fix Markdown is for Markdown files." : "";
+    }
+    const winPreview = $("win-menu-preview");
+    if (winPreview) winPreview.disabled = !has;
   }
 
   function node(tag, className, text) {
@@ -518,6 +573,38 @@
     );
     el.recent.hidden = paths.length === 0;
     el.recentWrap.hidden = paths.length === 0;
+
+    if (el.winRecentMenu) {
+      const existingItems = el.winRecentMenu.querySelectorAll(".win-recent-item");
+      existingItems.forEach((it) => it.remove());
+
+      if (paths.length === 0) {
+        if (el.winRecentEmpty) el.winRecentEmpty.hidden = false;
+        if (el.winRecentDivider) el.winRecentDivider.hidden = true;
+        if (el.winRecentClear) el.winRecentClear.hidden = true;
+      } else {
+        if (el.winRecentEmpty) el.winRecentEmpty.hidden = true;
+        if (el.winRecentDivider) el.winRecentDivider.hidden = false;
+        if (el.winRecentClear) el.winRecentClear.hidden = false;
+
+        for (const path of paths) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "menu-action win-recent-item";
+          btn.dataset.path = path;
+          btn.title = path;
+          const nameSpan = document.createElement("span");
+          nameSpan.className = "recent-name";
+          nameSpan.textContent = fileName(path);
+          const dirSpan = document.createElement("span");
+          dirSpan.className = "recent-dir";
+          dirSpan.textContent = parentDir(path);
+          btn.appendChild(nameSpan);
+          btn.appendChild(dirSpan);
+          el.winRecentMenu.insertBefore(btn, el.winRecentDivider);
+        }
+      }
+    }
   }
 
   async function openRecent(path) {
@@ -1184,7 +1271,10 @@
   let modelRunning = false;
 
   function updateDecisionRun() {
-    el.decisionRun.disabled = !(analysis && decision && decision.ready) || modelRunning;
+    const disabled = !(analysis && decision && decision.ready) || modelRunning;
+    if (el.decisionRun) el.decisionRun.disabled = disabled;
+    const winDecisionRun = $("win-menu-decision-run");
+    if (winDecisionRun) winDecisionRun.disabled = disabled;
   }
 
   function dmMessage(text, isError) {
@@ -1406,11 +1496,188 @@
       if (event.target.closest(".menu-item")) closeMenus();
     });
   }
+
+  let activeWinMenuBtn = null;
+  let isWinMenuOpen = false;
+
+  function closeWinMenus() {
+    isWinMenuOpen = false;
+    activeWinMenuBtn = null;
+    if (el.winMenubar) {
+      el.winMenubar.querySelectorAll(".menubar-dropdown").forEach((menu) => {
+        menu.hidden = true;
+      });
+      el.winMenubar.querySelectorAll(".menubar-btn").forEach((btn) => {
+        btn.setAttribute("aria-expanded", "false");
+      });
+    }
+  }
+
+  function openWinMenu(btn) {
+    closeWinMenus();
+    const dropdown = btn.parentElement ? btn.parentElement.querySelector(".menubar-dropdown") : null;
+    if (!dropdown) return;
+    dropdown.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    activeWinMenuBtn = btn;
+    isWinMenuOpen = true;
+  }
+
+  if (el.winMenubar) {
+    el.winMenubar.querySelectorAll(".menubar-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (isWinMenuOpen && activeWinMenuBtn === btn) {
+          closeWinMenus();
+        } else {
+          openWinMenu(btn);
+        }
+      });
+
+      btn.addEventListener("mouseenter", () => {
+        if (isWinMenuOpen && activeWinMenuBtn !== btn) {
+          openWinMenu(btn);
+        }
+      });
+    });
+
+    const recentParent = $("win-recent-parent");
+    if (recentParent) {
+      recentParent.addEventListener("mouseenter", () => {
+        if (el.winRecentMenu) el.winRecentMenu.hidden = false;
+      });
+      recentParent.addEventListener("mouseleave", () => {
+        if (el.winRecentMenu) el.winRecentMenu.hidden = true;
+      });
+    }
+
+    el.winMenubar.addEventListener("click", (e) => {
+      const actionBtn = e.target.closest("button.menu-action");
+      if (!actionBtn || actionBtn.disabled) return;
+      if (actionBtn.classList.contains("submenu-trigger")) return;
+      const action = actionBtn.dataset.action;
+      const path = actionBtn.dataset.path;
+      closeWinMenus();
+      if (path) {
+        openRecent(path);
+      } else if (action) {
+        handleMenuAction(action);
+      }
+    });
+  }
+
+  function handleMenuAction(action) {
+    switch (action) {
+      case "open":
+        open();
+        break;
+      case "combine":
+        combineMarkdowns();
+        break;
+      case "clear_recent":
+        invoke("clear_recent")
+          .then(loadRecent)
+          .catch((err) => setStatus(String(err), true));
+        break;
+      case "home":
+        if (analysis) goHome();
+        break;
+      case "reload":
+        if (analysis) refresh();
+        break;
+      case "export_html":
+        if (analysis) exportHtml();
+        break;
+      case "export_markdown":
+        if (analysis) exportMarkdown();
+        break;
+      case "export_pdf":
+        if (analysis) exportPdf();
+        break;
+      case "export_folder":
+        exportFolder();
+        break;
+      case "close_window":
+        if (window.__TAURI__?.window?.getCurrentWindow) {
+          window.__TAURI__.window.getCurrentWindow().close();
+        } else {
+          window.close();
+        }
+        break;
+      case "undo": {
+        const active = document.activeElement;
+        const typing = active && (/^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || "") || active.isContentEditable);
+        if (typing) {
+          document.execCommand("undo");
+        } else {
+          undoChange();
+        }
+        break;
+      }
+      case "redo": {
+        const active = document.activeElement;
+        const typing = active && (/^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || "") || active.isContentEditable);
+        if (typing) {
+          document.execCommand("redo");
+        } else {
+          redoChange();
+        }
+        break;
+      }
+      case "fix_markdown":
+        if (analysis) fixMarkdown();
+        break;
+      case "preview_toggle":
+        if (analysis) setPreviewOpen(!previewOpen);
+        break;
+      case "theme_toggle": {
+        const themeBtn = document.getElementById("theme-toggle");
+        if (themeBtn) themeBtn.click();
+        break;
+      }
+      case "guide":
+        showGuide("initial");
+        break;
+      case "decision":
+        showDecision();
+        break;
+      case "decision_run":
+        if (analysis && decision && decision.ready && !modelRunning) {
+          runDecision();
+        }
+        break;
+      case "scoring":
+        showConfig();
+        break;
+      case "toggle_render_math":
+        el.math.checked = !el.math.checked;
+        updateMenuToggles();
+        refresh();
+        break;
+      case "toggle_ai":
+        el.ai.checked = !el.ai.checked;
+        updateMenuToggles();
+        refresh();
+        break;
+      case "about":
+        if (el.aboutDialog && !el.aboutDialog.open) {
+          el.aboutDialog.showModal();
+        }
+        break;
+    }
+  }
+
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".menu-wrap")) closeMenus();
+    if (isWinMenuOpen && el.winMenubar && !el.winMenubar.contains(event.target)) {
+      closeWinMenus();
+    }
   });
   // A click in the preview frame never reaches this document.
-  window.addEventListener("blur", () => closeMenus());
+  window.addEventListener("blur", () => {
+    closeMenus();
+    closeWinMenus();
+  });
 
   function showGuide(mode) {
     if (mode) setPromptMode(mode);
@@ -1737,8 +2004,14 @@
   el.redo.addEventListener("click", () => redoChange());
   el.export.addEventListener("click", exportHtml);
   el.previewToggle.addEventListener("click", () => setPreviewOpen(!previewOpen));
-  el.ai.addEventListener("change", () => refresh());
-  el.math.addEventListener("change", () => refresh());
+  el.ai.addEventListener("change", () => {
+    updateMenuToggles();
+    refresh();
+  });
+  el.math.addEventListener("change", () => {
+    updateMenuToggles();
+    refresh();
+  });
   el.showText.addEventListener("change", renderBlocks);
   el.blocks.addEventListener("click", (event) => {
     const button = event.target.closest(".block");
@@ -1757,9 +2030,16 @@
   el.exportPdf.addEventListener("click", exportPdf);
   el.fixMarkdown.addEventListener("click", fixMarkdown);
 
+  if (el.aboutClose && el.aboutDialog) {
+    el.aboutClose.addEventListener("click", () => el.aboutDialog.close());
+  }
+
   window.addEventListener("keydown", (event) => {
-    if (el.guideDialog.open || el.configDialog.open) return;
-    if (event.key === "Escape") closeMenus();
+    if (el.guideDialog.open || el.configDialog.open || (el.aboutDialog && el.aboutDialog.open)) return;
+    if (event.key === "Escape") {
+      closeMenus();
+      closeWinMenus();
+    }
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
     const key = event.key.toLowerCase();
     // Text fields keep their own undo while the user is typing in them.
@@ -1823,6 +2103,13 @@
         el.loadingStage.textContent = data.stage;
       }
     }
+  });
+
+  listen("menu-action", (event) => {
+    handleMenuAction(event.payload);
+  });
+  listen("menu-open-recent", (event) => {
+    if (event.payload) openRecent(event.payload);
   });
 
   listen("tauri://drag-enter", () => { el.drop.hidden = false; });
