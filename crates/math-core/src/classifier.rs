@@ -22,6 +22,7 @@ use std::ops::Range;
 use serde::{Deserialize, Serialize};
 
 use crate::config::ScoringConfig;
+use crate::crf::CrfTagger;
 use crate::crossref;
 use crate::features::{Features, Lexicon, NodeFeatures};
 use crate::model::{
@@ -479,6 +480,7 @@ pub struct HeuristicClassifier {
     config: ScoringConfig,
     lexicon: Lexicon,
     tagger: HeuristicTagger,
+    crf: CrfTagger,
 }
 
 impl Default for HeuristicClassifier {
@@ -491,10 +493,12 @@ impl HeuristicClassifier {
     pub fn new(config: ScoringConfig) -> Self {
         let lexicon = Lexicon::new(&config);
         let tagger = HeuristicTagger::new(config.clone(), lexicon.clone());
+        let crf = CrfTagger::new();
         HeuristicClassifier {
             config,
             lexicon,
             tagger,
+            crf,
         }
     }
 
@@ -508,6 +512,15 @@ impl HeuristicClassifier {
 
     pub fn tagger(&self) -> &HeuristicTagger {
         &self.tagger
+    }
+
+    pub fn crf(&self) -> &CrfTagger {
+        &self.crf
+    }
+
+    /// Classifies nodes using the pure-Rust CRF Viterbi tagger.
+    pub fn classify_with_crf(&self, nodes: &[Node], overrides: &ScopeOverrides) -> Classification {
+        self.classify_with_tagger(nodes, overrides, &self.crf)
     }
 
     /// Score of `features` for one candidate type, in `[0, 1]`, by the
@@ -690,7 +703,11 @@ impl HeuristicClassifier {
                 } else if let Some(t) = tags.get(i)
                     && t.tag.is_begin()
                 {
-                    t.confidence
+                    if t.confidence <= 1.0 {
+                        t.confidence
+                    } else {
+                        scores[i].score_of(kind)
+                    }
                 } else {
                     scores[i].best.1
                 };
@@ -833,18 +850,77 @@ impl HeuristicClassifier {
         max_rounds: usize,
         initial: ScopeOverrides,
     ) -> JudgedClassification {
+        let resolved_initial = initial.resolve(nodes);
         let mut overrides = initial;
         let mut judged: BTreeSet<(usize, usize, BlockType)> = BTreeSet::new();
         let mut log = Vec::new();
-        let mut blocks = self.classify_with_overrides(nodes, &overrides);
         let mut rounds = 0;
+
+        // Step 1: Run EnvSpan bypass first, then CrfTagger across the document
+        let features: Vec<NodeFeatures> = nodes.iter().map(|n| self.lexicon.extract(n)).collect();
+        let crf_tags = self.crf.tag(nodes, &features);
+        let scores: Vec<NodeScore> = nodes
+            .iter()
+            .zip(&features)
+            .map(|(node, feat)| self.tagger.score_node_with_features(node, feat))
+            .collect();
+
+        let mut blocks = self
+            .tags_to_blocks(nodes, &crf_tags, &scores, &overrides)
+            .blocks;
 
         while rounds < max_rounds {
             let pending: Vec<&SemanticBlock> = blocks
                 .iter()
                 .filter(|b| b.kind.is_semantic())
                 .filter(|b| !judged.contains(&(b.span.start, b.span.end, b.kind)))
+                .filter(|b| {
+                    // EnvSpan bypass: LaTeX environments have score 1.0 and exact spans;
+                    // never escalate them to math-judge.
+                    if b.end == EndReason::Environment
+                        || nodes
+                            .get(b.span.start)
+                            .and_then(|n| n.env.as_ref())
+                            .is_some()
+                    {
+                        return false;
+                    }
+
+                    // ScopeOverrides always win over both CrfTagger and math-judge.
+                    // If an opener was manually overridden in initial by the user, do not escalate.
+                    if resolved_initial.end.contains_key(&b.span.start)
+                        || resolved_initial.retype.contains_key(&b.span.start)
+                        || resolved_initial.delta.contains_key(&b.span.start)
+                        || resolved_initial.suppressed.contains(&b.span.start)
+                    {
+                        return false;
+                    }
+
+                    // Confidence Gating:
+                    // 1. CrfTagger confidence margin falls below config.ml_confidence_threshold
+                    let low_confidence = (b.span.start..b.span.end.min(nodes.len())).any(|idx| {
+                        crf_tags
+                            .get(idx)
+                            .is_some_and(|t| t.confidence < self.config.ml_confidence_threshold)
+                    }) || crf_tags
+                        .get(b.span.end)
+                        .is_some_and(|t| t.confidence < self.config.ml_confidence_threshold);
+
+                    // 2. An Outside paragraph with high logic_density immediately follows a Theorem or Lemma
+                    let logic_after_thm = matches!(b.kind, BlockType::Theorem | BlockType::Lemma)
+                        && b.span.end < nodes.len()
+                        && matches!(nodes[b.span.end].kind, NodeKind::Paragraph)
+                        && crf_tags
+                            .get(b.span.end)
+                            .is_some_and(|t| t.tag == BioTag::Outside)
+                        && (crate::crf::bucket_logic_density(features[b.span.end].logic_density)
+                            == "high"
+                            || features[b.span.end].logic_density >= 0.75);
+
+                    low_confidence || logic_after_thm
+                })
                 .collect();
+
             if pending.is_empty() {
                 break;
             }
@@ -867,7 +943,9 @@ impl HeuristicClassifier {
             if !changed {
                 break;
             }
-            blocks = self.classify_with_overrides(nodes, &overrides);
+            blocks = self
+                .tags_to_blocks(nodes, &crf_tags, &scores, &overrides)
+                .blocks;
         }
         JudgedClassification {
             blocks,
@@ -1919,5 +1997,126 @@ mod tests {
         assert_eq!(res.blocks.len(), 2);
         assert_eq!(res.blocks[0].kind, BlockType::Theorem);
         assert_eq!(res.blocks[1].kind, BlockType::Proof);
+    }
+
+    struct CallCountJudge(std::sync::Mutex<usize>);
+    impl BlockJudge for CallCountJudge {
+        fn judge(&self, _: &SemanticBlock, _: &[Node]) -> Verdict {
+            *self.0.lock().unwrap() += 1;
+            Verdict::Accept
+        }
+    }
+
+    #[test]
+    fn clean_documents_never_trigger_math_judge() {
+        let c = HeuristicClassifier::default();
+
+        // 1. Explicit LaTeX environment is bypassed (0 judge calls)
+        let latex_nodes =
+            parse_markdown("\\begin{theorem}\nFor all $x$, $f(x) \\ge 0$.\n\\end{theorem}");
+        let judge1 = CallCountJudge(std::sync::Mutex::new(0));
+        let run1 =
+            c.classify_with_judge_detailed(&latex_nodes, &judge1, 4, ScopeOverrides::default());
+        assert_eq!(
+            *judge1.0.lock().unwrap(),
+            0,
+            "LaTeX EnvSpan must never trigger math-judge"
+        );
+        assert_eq!(run1.rounds, 0);
+
+        // 2. High-confidence clean Markdown document is bypassed (0 judge calls)
+        let clean_nodes = parse_markdown(
+            "# Section\n\n**Theorem 1.** Let $x \\in \\mathbb{R}$. Then $x^2 \\ge 0$.\n\nProof. Obvious. $\\blacksquare$",
+        );
+        let judge2 = CallCountJudge(std::sync::Mutex::new(0));
+        let run2 =
+            c.classify_with_judge_detailed(&clean_nodes, &judge2, 4, ScopeOverrides::default());
+        assert_eq!(
+            *judge2.0.lock().unwrap(),
+            0,
+            "Clean high-confidence doc must never trigger math-judge"
+        );
+        assert_eq!(run2.rounds, 0);
+    }
+
+    #[test]
+    fn scope_overrides_always_win_over_both_crf_and_judge() {
+        struct RejectAll;
+        impl BlockJudge for RejectAll {
+            fn judge(&self, _: &SemanticBlock, _: &[Node]) -> Verdict {
+                Verdict::Reject
+            }
+        }
+
+        let c = HeuristicClassifier::default();
+        let nodes = parse_markdown("Theorem 1. A.\n\nB.\n\nC.");
+
+        // User specifies a manual ScopeOverride in initial
+        let mut initial = ScopeOverrides::default();
+        initial
+            .retype
+            .insert(OverrideKey::index(0), BlockType::Lemma);
+        initial.end.insert(OverrideKey::index(0), 3);
+
+        let run = c.classify_with_judge_detailed(&nodes, &RejectAll, 4, initial);
+        // The block must retain the user's override and NOT be overridden by the judge
+        assert_eq!(run.blocks[0].kind, BlockType::Lemma);
+        assert_eq!(run.blocks[0].span, 0..3);
+    }
+
+    #[test]
+    fn confidence_gated_ambiguous_span_triggers_judge() {
+        let c = HeuristicClassifier::default();
+        let nodes = parse_markdown("Theorem 1. A.\n\nNote: this is just prose.");
+        let judge = CallCountJudge(std::sync::Mutex::new(0));
+        let run = c.classify_with_judge_detailed(&nodes, &judge, 4, ScopeOverrides::default());
+        assert!(
+            *judge.0.lock().unwrap() > 0,
+            "Ambiguous span must escalate to judge"
+        );
+        assert!(run.rounds > 0);
+    }
+
+    #[test]
+    fn outside_paragraph_with_high_logic_density_triggers_judge() {
+        let c = HeuristicClassifier::default();
+        // A theorem followed by an outside paragraph packed with logic implication symbols
+        let nodes = parse_markdown(
+            "**Theorem 1.** Main statement.\n\nSince $x > 0 \\implies x^2 > 0 \\implies x^3 > 0$, the claim holds.",
+        );
+        let judge = CallCountJudge(std::sync::Mutex::new(0));
+        let run = c.classify_with_judge_detailed(&nodes, &judge, 4, ScopeOverrides::default());
+        assert!(
+            *judge.0.lock().unwrap() > 0,
+            "Outside paragraph with high logic density must escalate"
+        );
+        assert!(run.rounds > 0);
+    }
+
+    #[test]
+    fn telemetry_generation_and_anonymization() {
+        let c = HeuristicClassifier::default();
+        let md = "**Theorem 1.** Sensitive user secrets $x = 1$:\n\nProof. Hidden details. $\\blacksquare$";
+        let mut ov = ScopeOverrides::default();
+        ov.retype
+            .insert(OverrideKey::index(0), BlockType::Proposition);
+
+        let tel = crate::features::create_override_telemetry(md, &c.config, &ov)
+            .expect("telemetry created");
+        assert!(tel.doc_id.starts_with("telemetry_"));
+        assert_eq!(tel.language, "en");
+        assert_eq!(tel.nodes[0].kind, "paragraph");
+        assert_eq!(tel.nodes[0].flat_text, ":"); // trailing colon preserved for CRF feature
+        assert!(!tel.nodes[0].flat_text.contains("Sensitive")); // sensitive prose redacted
+        assert_eq!(tel.nodes[1].flat_text, ""); // no colon -> empty flat_text
+        assert!(!tel.nodes[1].flat_text.contains("Hidden")); // sensitive prose redacted
+        assert!(tel.bio_tags.contains(&"B-PROPOSITION".to_string())); // corrected BIO tag
+
+        let tmp = std::env::temp_dir().join(format!("mathia-tel-{}.jsonl", std::process::id()));
+        crate::features::append_telemetry_entry(&tmp, &tel).unwrap();
+        let line = std::fs::read_to_string(&tmp).unwrap();
+        let parsed: crate::features::TelemetryEntry = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(parsed, tel);
+        std::fs::remove_file(&tmp).unwrap();
     }
 }

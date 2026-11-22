@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use math_core::{
     AiOptions, AiProvider, BlockType, CustomProvider, Document, HtmlOptions, MathAssets,
@@ -153,6 +154,7 @@ pub struct Session {
     recent: Vec<PathBuf>,
     preview: String,
     revision: u64,
+    current_content: Mutex<Option<String>>,
 }
 
 impl Session {
@@ -281,6 +283,9 @@ impl Session {
         source: &Source,
         content: &str,
     ) -> Result<math_core::Analysis, String> {
+        if let Ok(mut lock) = self.current_content.lock() {
+            *lock = Some(content.to_string());
+        }
         if self.is_html_source(source) || math_core::is_html(content) {
             let mut analysis = math_core::clean_html::analyze_html_detailed(content);
             math_core::clean_html::apply_overrides(&mut analysis.document, &self.overrides);
@@ -360,6 +365,29 @@ impl Session {
 
     pub fn set_overrides(&mut self, overrides: ScopeOverrides) {
         self.overrides = overrides;
+    }
+
+    pub fn current_content(&self) -> Option<String> {
+        self.current_content.lock().ok().and_then(|c| c.clone())
+    }
+
+    pub fn record_override_telemetry(
+        &self,
+        content: &str,
+        telemetry_path: &Path,
+    ) -> Result<bool, String> {
+        if !self.config.ml_telemetry || self.overrides.is_empty() {
+            return Ok(false);
+        }
+        if let Some(entry) =
+            math_core::create_override_telemetry(content, &self.config, &self.overrides)
+        {
+            math_core::append_telemetry_entry(telemetry_path, &entry)
+                .map_err(|e| format!("failed to record telemetry: {e}"))?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Compiles every Markdown file directly inside `dir` (not recursive)

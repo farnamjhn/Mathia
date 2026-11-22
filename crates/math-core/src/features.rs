@@ -147,6 +147,110 @@ pub fn dump_features_with_overrides(
     }
 }
 
+/// Anonymized telemetry record capturing human corrections for continuous CRF training.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TelemetryEntry {
+    pub doc_id: String,
+    pub language: String,
+    #[serde(default)]
+    pub title: String,
+    pub nodes: Vec<DumpNode>,
+    pub features: Vec<NodeFeatures>,
+    pub bio_tags: Vec<String>,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+}
+
+/// Anonymizes nodes by stripping prose text while preserving structural signals
+/// (`kind`, `char_len`, `env_span`, and trailing colon for relational features).
+pub fn anonymize_dump_nodes(mut nodes: Vec<DumpNode>) -> Vec<DumpNode> {
+    for node in &mut nodes {
+        let ends_with_colon =
+            node.flat_text.trim().ends_with(':') || node.flat_text.trim().ends_with('：');
+        node.flat_text = if ends_with_colon {
+            ":".to_string()
+        } else {
+            String::new()
+        };
+    }
+    nodes
+}
+
+/// Detects whether text is predominantly Persian or English.
+pub fn detect_language(text: &str) -> &'static str {
+    let persian_count = text
+        .chars()
+        .filter(|&c| {
+            ('\u{0600}'..='\u{06FF}').contains(&c)
+                || ('\u{FB50}'..='\u{FDFF}').contains(&c)
+                || ('\u{FE70}'..='\u{FEFF}').contains(&c)
+        })
+        .count();
+    let non_ws = text.chars().filter(|c| !c.is_whitespace()).count();
+    if persian_count >= 5 || (non_ws > 0 && (persian_count as f32 / non_ws as f32) > 0.05) {
+        "fa"
+    } else {
+        "en"
+    }
+}
+
+/// Creates an anonymized [`TelemetryEntry`] from user overrides on a document.
+pub fn create_override_telemetry(
+    markdown: &str,
+    config: &ScoringConfig,
+    overrides: &crate::classifier::ScopeOverrides,
+) -> Option<TelemetryEntry> {
+    if overrides.is_empty() {
+        return None;
+    }
+    let dump = dump_features_with_overrides(markdown, config, Some(overrides));
+    let bio_tags = dump.bio_tags?;
+    let nodes = anonymize_dump_nodes(dump.nodes);
+    let language = detect_language(markdown).to_string();
+
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for n in &nodes {
+        n.kind.hash(&mut hasher);
+        n.char_len.hash(&mut hasher);
+    }
+    for t in &bio_tags {
+        t.hash(&mut hasher);
+    }
+    let doc_id = format!("telemetry_{:016x}", hasher.finish());
+
+    Some(TelemetryEntry {
+        doc_id,
+        language,
+        title: String::new(),
+        nodes,
+        features: dump.features,
+        bio_tags,
+        metadata: serde_json::json!({
+            "source": "local_override_telemetry",
+        }),
+    })
+}
+
+/// Appends a [`TelemetryEntry`] as a JSON line to the target local JSONL file.
+pub fn append_telemetry_entry(
+    path: &std::path::Path,
+    entry: &TelemetryEntry,
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    use std::io::Write;
+    let json = serde_json::to_string(entry)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    writeln!(file, "{json}")?;
+    Ok(())
+}
+
 /// The [`ScoringConfig`] word lists, folded once for matching.
 #[derive(Debug, Clone)]
 pub struct Lexicon {

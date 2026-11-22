@@ -450,8 +450,26 @@ async fn source_stamp(state: State<'_, Shared>, source: Source) -> Result<Option
 
 /// Replaces the hand corrections for the open document.
 #[tauri::command]
-async fn set_overrides(state: State<'_, Shared>, overrides: ScopeOverrides) -> Result<(), String> {
-    lock(&state).set_overrides(overrides);
+async fn set_overrides(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    overrides: ScopeOverrides,
+) -> Result<(), String> {
+    let mut session = lock(&state);
+    session.set_overrides(overrides.clone());
+    if session.config().ml_telemetry && !overrides.is_empty() {
+        let Some(content) = session.current_content() else {
+            return Ok(());
+        };
+        if let Ok(dir) = data_dir(&app) {
+            let telemetry_path = dir.join("telemetry.jsonl");
+            let _ = session.record_override_telemetry(&content, &telemetry_path);
+        }
+        let ml_data = std::path::Path::new("ml/data/feedback.jsonl");
+        if ml_data.parent().map(|p| p.is_dir()).unwrap_or(false) {
+            let _ = session.record_override_telemetry(&content, ml_data);
+        }
+    }
     Ok(())
 }
 

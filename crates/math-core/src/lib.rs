@@ -36,7 +36,8 @@ pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, Scorer, ScoringConfig};
 pub use crf::{CrfModel, CrfTagger, RawCrfWeights};
 pub use error::{Error, Result};
 pub use features::{
-    DumpNode, FeatureDump, Features, Lexicon, NodeFeatures, dump_features,
+    DumpNode, FeatureDump, Features, Lexicon, NodeFeatures, TelemetryEntry, anonymize_dump_nodes,
+    append_telemetry_entry, create_override_telemetry, detect_language, dump_features,
     dump_features_with_overrides,
 };
 pub use html::{

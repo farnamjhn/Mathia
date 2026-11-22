@@ -38,6 +38,10 @@ pub struct ScoringConfig {
     /// Directly after a label these mean the sentence refers to the block
     /// rather than opening it ("Theorem 2 implies…").
     pub reference_cues: Vec<String>,
+    /// Margin below which a CRF-tagged node is considered ambiguous and escalated to the judge.
+    pub ml_confidence_threshold: f32,
+    /// Whether to log local override telemetry for CRF retraining (opt-in).
+    pub ml_telemetry: bool,
 }
 
 /// The scoring model. `weights.after_statement` (keyword-less proofs) and the
@@ -290,6 +294,8 @@ impl Default for ScoringConfig {
                 "can",
                 "does",
             ]),
+            ml_confidence_threshold: 5.0,
+            ml_telemetry: false,
         }
     }
 }
@@ -352,6 +358,12 @@ impl ScoringConfig {
             return fail(format!(
                 "threshold must be in [0, 1], got {}",
                 self.threshold
+            ));
+        }
+        if self.ml_confidence_threshold < 0.0 {
+            return fail(format!(
+                "ml_confidence_threshold must be non-negative, got {}",
+                self.ml_confidence_threshold
             ));
         }
         for (name, weight) in self.weights.named() {

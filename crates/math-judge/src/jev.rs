@@ -23,7 +23,7 @@ use crate::{JudgeResponse, with_delimiters};
 pub const QUESTIONS_VERSION: &str = "q1";
 
 /// How many paragraphs before the block are sent.
-const BEFORE_PARAGRAPHS: usize = 2;
+const BEFORE_PARAGRAPHS: usize = 3;
 
 /// Noul thresholds: above `YES` reads as yes, below `NO` as no, and the band
 /// between means the state does not settle the question.

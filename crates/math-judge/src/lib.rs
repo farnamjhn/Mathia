@@ -41,7 +41,7 @@ pub mod jev;
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// How many nodes of context are sent on each side of a block.
-const CONTEXT_NODES: usize = 2;
+const CONTEXT_NODES: usize = 3;
 
 /// A node's prose with every formula back inside `$…$` / `$$…$$`.
 /// (`Node::flat` splices the LaTeX in as ` latex `, in order.)
