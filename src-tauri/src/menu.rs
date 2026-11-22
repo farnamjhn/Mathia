@@ -125,6 +125,10 @@ pub fn build_app_menu<R: Runtime>(
         .item(&MenuItemBuilder::with_id("decision", "Decision Model…").build(app)?)
         .item(&MenuItemBuilder::with_id("scoring", "Detection Settings…").build(app)?)
         .separator()
+        .item(
+            &MenuItemBuilder::with_id("toggle_model", "Toggle CRF / Linear-Tree Model")
+                .build(app)?,
+        )
         .item(&MenuItemBuilder::with_id("toggle_render_math", "Render Formulas").build(app)?)
         .item(&MenuItemBuilder::with_id("toggle_ai", "Add AI Study Tools").build(app)?)
         .build()?;

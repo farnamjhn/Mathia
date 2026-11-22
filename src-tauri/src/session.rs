@@ -748,6 +748,18 @@ mod tests {
     }
 
     #[test]
+    fn session_switches_between_heuristic_and_crf_tagger() {
+        let mut session = Session::default();
+        assert_eq!(session.config().tagger, math_core::TaggerModel::Heuristic);
+        let mut config = session.config().clone();
+        config.tagger = math_core::TaggerModel::Crf;
+        session.set_config(config).unwrap();
+        assert_eq!(session.config().tagger, math_core::TaggerModel::Crf);
+        let view = session.analyze(&text()).unwrap();
+        assert!(!view.document.blocks.is_empty());
+    }
+
+    #[test]
     fn corrections_apply_to_analysis_and_preview() {
         let mut session = Session::default();
         let mut overrides = ScopeOverrides::default();

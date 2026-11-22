@@ -113,6 +113,10 @@
         <span>Detection Settings…</span>
       </button>
       <div class="menu-divider"></div>
+      <button type="button" class="menu-action menu-toggle" data-action="toggle_model" id="win-menu-model">
+        <span class="menu-check" aria-hidden="true" style="visibility: hidden;">✓</span>
+        <span>CRF Model for Detection</span>
+      </button>
       <button type="button" class="menu-action menu-toggle" data-action="toggle_render_math" id="win-menu-render-math">
         <span class="menu-check" aria-hidden="true">✓</span>
         <span>Render Formulas</span>
@@ -201,6 +205,13 @@
       </button>
       <div id="options-menu" class="menu menu-end" hidden>
         <label class="option">
+          <input id="opt-crf-model" type="checkbox">
+          <span class="option-text">
+            <span class="option-name">CRF model for detection</span>
+            <span class="option-hint">Switch from Linear / DecisionTree heuristics to the pure-Rust CRF sequence tagger.</span>
+          </span>
+        </label>
+        <label class="option">
           <input id="render-math" type="checkbox" checked>
           <span class="option-text">
             <span class="option-name">Render formulas</span>
@@ -226,6 +237,19 @@
           <span class="option-hint">Sends each detected block to the model and applies its corrections.</span>
         </button>
       </div>
+    </div>
+  </div>
+
+  <span class="bar-separator bar-separator-integrated" role="separator" aria-orientation="vertical"></span>
+
+  <div class="bar-group bar-group-model" role="group" aria-label="Block detection model">
+    <div class="model-toggle" id="model-toggle" role="radiogroup" aria-label="Block detection model" title="Choose model for block detection">
+      <button type="button" class="model-toggle-btn active" id="btn-model-heuristic" role="radio" aria-checked="true" data-model="heuristic" title="Linear / DecisionTree: Heuristic rules and feature scoring">
+        Linear / DecisionTree
+      </button>
+      <button type="button" class="model-toggle-btn" id="btn-model-crf" role="radio" aria-checked="false" data-model="crf" title="CRF model: Pure-Rust Linear-Chain Conditional Random Field">
+        CRF model
+      </button>
     </div>
   </div>
 
@@ -553,7 +577,13 @@ BEFORE YOU ANSWER, CHECK
   <form id="config-form" class="config-form" method="dialog">
     <fieldset>
       <legend>Method</legend>
-      <label>Score with
+      <label>Detection model
+        <select id="cfg-tagger">
+          <option value="heuristic">Linear / DecisionTree</option>
+          <option value="crf">CRF model</option>
+        </select>
+      </label>
+      <label id="cfg-scorer-wrap">Score with
         <select id="cfg-scorer">
           <option value="linear">Weighted sum</option>
           <option value="tree">Decision tree</option>

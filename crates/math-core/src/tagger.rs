@@ -114,7 +114,9 @@ impl HeuristicTagger {
     /// configured [`crate::config::Scorer`].
     pub fn score(&self, features: &Features, kind: BlockType) -> f32 {
         match &self.config.scorer {
-            crate::config::Scorer::Linear => self.linear_score(features, kind),
+            crate::config::Scorer::Linear | crate::config::Scorer::Crf => {
+                self.linear_score(features, kind)
+            }
             crate::config::Scorer::Tree(tree) => tree.score(features, kind),
         }
     }

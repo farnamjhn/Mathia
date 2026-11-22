@@ -20,6 +20,10 @@ pub struct ScoringConfig {
     pub schema_version: u32,
     /// A node opens a block when its best type score reaches this value.
     pub threshold: f32,
+    /// Which sequence tagger to use for block detection: heuristic
+    /// (Linear / DecisionTree) or pure-Rust CRF.
+    #[serde(default)]
+    pub tagger: TaggerModel,
     /// How features become type scores: the weighted sum of [`Weights`]
     /// (default) or a [`DecisionTree`].
     pub scorer: Scorer,
@@ -44,6 +48,19 @@ pub struct ScoringConfig {
     pub ml_telemetry: bool,
 }
 
+/// Which sequence tagger to use for block detection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaggerModel {
+    /// Heuristic tagger using linear feature scoring or decision tree.
+    #[default]
+    #[serde(alias = "linear_tree", alias = "heuristic")]
+    Heuristic,
+    /// Pure-Rust Linear-Chain CRF sequence tagger using embedded weights.
+    #[serde(alias = "crf_model")]
+    Crf,
+}
+
 /// The scoring model. `weights.after_statement` (keyword-less proofs) and the
 /// scope rules apply to both.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -54,6 +71,8 @@ pub enum Scorer {
     Linear,
     /// A static decision tree over the same features.
     Tree(DecisionTree),
+    /// Pure-Rust Linear-Chain CRF sequence tagger.
+    Crf,
 }
 
 /// Feature weights. Each feature is in `[0, 1]`; the weighted sum is the score.
@@ -138,6 +157,7 @@ impl Default for ScoringConfig {
         ScoringConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
             threshold: 0.5,
+            tagger: TaggerModel::default(),
             scorer: Scorer::Linear,
             weights: Weights::default(),
             scope: ScopeConfig::default(),
@@ -550,6 +570,26 @@ mod tests {
         assert!(message("[scorer]\nmodel = \"forest\"").contains("unknown variant"));
         let short = ScoringConfig::parse("[scorer]\nmodel = \"tree\"", ConfigFormat::Toml).unwrap();
         assert_eq!(short.scorer, Scorer::Tree(DecisionTree::default()));
+    }
+
+    #[test]
+    fn crf_tagger_model_and_scorer_round_trips() {
+        let config_tagger = ScoringConfig {
+            tagger: TaggerModel::Crf,
+            ..Default::default()
+        };
+        for format in [ConfigFormat::Toml, ConfigFormat::Json] {
+            let text = config_tagger.serialize(format).unwrap();
+            let parsed = ScoringConfig::parse(&text, format).unwrap();
+            assert_eq!(parsed.tagger, TaggerModel::Crf);
+        }
+
+        let parsed_tagger = ScoringConfig::parse("tagger = \"crf\"", ConfigFormat::Toml).unwrap();
+        assert_eq!(parsed_tagger.tagger, TaggerModel::Crf);
+
+        let parsed_scorer =
+            ScoringConfig::parse("[scorer]\nmodel = \"crf\"", ConfigFormat::Toml).unwrap();
+        assert_eq!(parsed_scorer.scorer, Scorer::Crf);
     }
 
     #[test]

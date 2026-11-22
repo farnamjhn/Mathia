@@ -553,7 +553,13 @@ impl HeuristicClassifier {
 
     /// [`Self::classify_with_overrides`], keeping the per-node scores.
     pub fn classify_detailed(&self, nodes: &[Node], overrides: &ScopeOverrides) -> Classification {
-        self.classify_with_tagger(nodes, overrides, &self.tagger)
+        if self.config.tagger == crate::config::TaggerModel::Crf
+            || self.config.scorer == crate::config::Scorer::Crf
+        {
+            self.classify_with_crf(nodes, overrides)
+        } else {
+            self.classify_with_tagger(nodes, overrides, &self.tagger)
+        }
     }
 
     /// Classifies nodes using an arbitrary [`SequenceTagger`] to predict BIO tags.
@@ -2118,5 +2124,38 @@ mod tests {
         let parsed: crate::features::TelemetryEntry = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(parsed, tel);
         std::fs::remove_file(&tmp).unwrap();
+    }
+
+    #[test]
+    fn crf_tagger_model_and_scorer_selection() {
+        use crate::config::TaggerModel;
+
+        let md = "Theorem 1. Let $x > 0$.\n\nProof. Obvious. QED\n";
+        let nodes = parse_markdown(md);
+
+        // 1. Default (Heuristic)
+        let c_default = HeuristicClassifier::default();
+        let class_default = c_default.classify_detailed(&nodes, &ScopeOverrides::default());
+        assert_eq!(class_default.blocks.len(), 2);
+
+        // 2. CRF via TaggerModel::Crf
+        let config_crf = ScoringConfig {
+            tagger: TaggerModel::Crf,
+            ..Default::default()
+        };
+        let c_crf = HeuristicClassifier::new(config_crf);
+        let class_crf = c_crf.classify_detailed(&nodes, &ScopeOverrides::default());
+        let class_crf_direct = c_default.classify_with_crf(&nodes, &ScopeOverrides::default());
+        assert_eq!(class_crf.blocks.len(), class_crf_direct.blocks.len());
+        assert_eq!(class_crf.blocks[0].kind, class_crf_direct.blocks[0].kind);
+
+        // 3. CRF via Scorer::Crf
+        let config_scorer_crf = ScoringConfig {
+            scorer: Scorer::Crf,
+            ..Default::default()
+        };
+        let c_scorer_crf = HeuristicClassifier::new(config_scorer_crf);
+        let class_scorer_crf = c_scorer_crf.classify_detailed(&nodes, &ScopeOverrides::default());
+        assert_eq!(class_scorer_crf.blocks.len(), class_crf.blocks.len());
     }
 }

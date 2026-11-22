@@ -75,9 +75,13 @@
     fixKind: $("fix-kind"), fixShorter: $("fix-shorter"), fixLonger: $("fix-longer"),
     fixReject: $("fix-reject"), fixReset: $("fix-reset"),
     scoring: $("scoring"), configDialog: $("config-dialog"), configForm: $("config-form"),
+    cfgTagger: $("cfg-tagger"), cfgScorerWrap: $("cfg-scorer-wrap"),
     cfgScorer: $("cfg-scorer"), cfgThreshold: $("cfg-threshold"), cfgWeights: $("cfg-weights"),
     cfgScope: $("cfg-scope"), cfgKeywords: $("cfg-keywords"), cfgCues: $("cfg-cues"),
     configError: $("config-error"), configLoad: $("config-load"), configSave: $("config-save"),
+    modelToggle: $("model-toggle"), btnModelHeuristic: $("btn-model-heuristic"),
+    btnModelCrf: $("btn-model-crf"), optCrfModel: $("opt-crf-model"),
+    winMenuModel: $("win-menu-model"),
     decision: $("decision"), decisionRun: $("decision-run"), decisionDialog: $("decision-dialog"),
     dmProvider: $("dm-provider"), dmModel: $("dm-model"), dmUrl: $("dm-url"), dmKey: $("dm-key"),
     dmKeyHint: $("dm-key-hint"), dmRemoveKey: $("dm-remove-key"), dmTest: $("dm-test"),
@@ -253,6 +257,11 @@
   }
 
   function updateMenuToggles() {
+    const modelBtn = $("win-menu-model");
+    if (modelBtn) {
+      const check = modelBtn.querySelector(".menu-check");
+      if (check) check.style.visibility = (currentConfig?.tagger === "crf") ? "visible" : "hidden";
+    }
     const mathBtn = $("win-menu-render-math");
     if (mathBtn) {
       const check = mathBtn.querySelector(".menu-check");
@@ -1132,6 +1141,70 @@
 
   // ── Detection settings dialog ────────────────────────────────────────────────────
 
+  let currentConfig = null;
+
+  function updateModelUI(tagger) {
+    const isCrf = tagger === "crf";
+    if (el.btnModelHeuristic) {
+      el.btnModelHeuristic.classList.toggle("active", !isCrf);
+      el.btnModelHeuristic.setAttribute("aria-checked", String(!isCrf));
+    }
+    if (el.btnModelCrf) {
+      el.btnModelCrf.classList.toggle("active", isCrf);
+      el.btnModelCrf.setAttribute("aria-checked", String(isCrf));
+    }
+    if (el.optCrfModel) {
+      el.optCrfModel.checked = isCrf;
+    }
+    const winModel = $("win-menu-model");
+    if (winModel) {
+      const check = winModel.querySelector(".menu-check");
+      if (check) check.style.visibility = isCrf ? "visible" : "hidden";
+    }
+    if (el.cfgTagger) {
+      el.cfgTagger.value = isCrf ? "crf" : "heuristic";
+    }
+    if (el.cfgScorerWrap) {
+      el.cfgScorerWrap.style.opacity = isCrf ? "0.5" : "1";
+    }
+  }
+
+  async function loadConfig() {
+    try {
+      currentConfig = await invoke("get_config");
+      updateModelUI(currentConfig.tagger);
+    } catch (_) {}
+  }
+
+  async function setDetectionModel(model) {
+    const nextModel = model === "crf" ? "crf" : "heuristic";
+    if (!currentConfig) {
+      try {
+        currentConfig = await invoke("get_config");
+      } catch (_) {
+        currentConfig = {};
+      }
+    }
+    if (currentConfig.tagger === nextModel) return;
+    currentConfig.tagger = nextModel;
+    updateModelUI(nextModel);
+    try {
+      await invoke("set_config", { config: currentConfig });
+      if (source) {
+        revision = 0;
+        analysis = null;
+        await refresh();
+      }
+      setStatus(
+        nextModel === "crf"
+          ? "Switched block detection to CRF model"
+          : "Switched block detection to Linear / DecisionTree"
+      );
+    } catch (err) {
+      setStatus("Failed to change detection model: " + err, true);
+    }
+  }
+
   function numberField(container, label, value, attrs) {
     const input = node("input");
     input.type = "number";
@@ -1146,7 +1219,9 @@
 
   function fillConfig(config) {
     editing = config;
+    currentConfig = config;
     el.configError.hidden = true;
+    updateModelUI(config.tagger);
     el.cfgScorer.value = config.scorer && config.scorer.model === "tree" ? "tree" : "linear";
     el.cfgThreshold.value = String(config.threshold);
     el.cfgWeights.replaceChildren();
@@ -1185,6 +1260,9 @@
 
   function readConfig() {
     const config = JSON.parse(JSON.stringify(editing));
+    if (el.cfgTagger) {
+      config.tagger = el.cfgTagger.value === "crf" ? "crf" : "heuristic";
+    }
     const scorer = el.cfgScorer.value;
     if (scorer === "linear") config.scorer = { model: "linear" };
     else if (!editing.scorer || editing.scorer.model !== "tree") config.scorer = { model: "tree" };
@@ -1222,9 +1300,16 @@
   async function applyConfig() {
     if (!el.configForm.reportValidity()) return;
     try {
-      await invoke("set_config", { config: readConfig() });
+      const cfg = readConfig();
+      await invoke("set_config", { config: cfg });
+      currentConfig = cfg;
+      updateModelUI(cfg.tagger);
       el.configDialog.close();
-      await refresh();
+      if (source) {
+        revision = 0;
+        analysis = null;
+        await refresh();
+      }
     } catch (error) {
       configFailed(error);
     }
@@ -1254,6 +1339,15 @@
       refresh(true);
     } catch (error) {
       configFailed(error);
+    }
+  });
+
+  el.btnModelHeuristic?.addEventListener("click", () => setDetectionModel("heuristic"));
+  el.btnModelCrf?.addEventListener("click", () => setDetectionModel("crf"));
+  el.optCrfModel?.addEventListener("change", (e) => setDetectionModel(e.target.checked ? "crf" : "heuristic"));
+  el.cfgTagger?.addEventListener("change", (e) => {
+    if (el.cfgScorerWrap) {
+      el.cfgScorerWrap.style.opacity = e.target.value === "crf" ? "0.5" : "1";
     }
   });
 
@@ -1398,6 +1492,7 @@
     el.dmRemoveKey.hidden = true;
   });
   loadDecision();
+  loadConfig();
 
   async function exportFolder() {
     try {
@@ -1649,6 +1744,11 @@
       case "scoring":
         showConfig();
         break;
+      case "toggle_model": {
+        const current = currentConfig?.tagger === "crf" ? "crf" : "heuristic";
+        setDetectionModel(current === "crf" ? "heuristic" : "crf");
+        break;
+      }
       case "toggle_render_math":
         el.math.checked = !el.math.checked;
         updateMenuToggles();
