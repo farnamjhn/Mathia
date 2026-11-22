@@ -1,10 +1,10 @@
 """Shared Feature Window Specification for Mathia Lightweight ML (Slice 2, Task 1).
 
 Extracts joint opener and scoping features over a sliding window [i-1, i, i+1] for each node i:
-- Static node features (node_kind, lead_kind, labelled, emphasized, body_empty, qed,
+- Static node features (node_kind, lead, labelled, emphasized, body_empty, qed,
   math_density bucketed, logic_density bucketed, cues, mentions, ends_colon).
-- Relational / delta features (math_density_delta: up/down/flat, after_display_math,
-  prev_ends_with_colon, is_first_node, is_last_node, bias).
+- Relational / delta features (math_density_delta: up/down/flat,
+  is_first_node, is_last_node, bias).
 
 This specification is shared identically between Python training (sklearn-crfsuite)
 and the pure-Rust Viterbi inference engine (crates/math-core/src/crf.rs).
@@ -140,10 +140,8 @@ def extract_node_base_features(
         if lead_kind:
             lk = str(lead_kind).lower().strip()
             feats[f"{p}lead={lk}"] = 1.0
-            feats[f"{p}lead_kind={lk}"] = 1.0
 
         if _get_attr_or_item(lead, "labelled", False):
-            feats[f"{p}lead_labelled=true"] = 1.0
             feats[f"{p}labelled=true"] = 1.0
 
         if _get_attr_or_item(lead, "body_empty", False):
@@ -244,15 +242,6 @@ def extract_node_features(
         feats["0:is_last_node=true"] = 1.0
 
     if i > 0:
-        prev_node = nodes[i - 1]
-        prev_kind = _get_attr_or_item(prev_node, "kind", "other")
-        if isinstance(prev_kind, str) and prev_kind.lower().strip() == "display_math":
-            feats["0:after_display_math=true"] = 1.0
-
-        prev_flat = _get_attr_or_item(prev_node, "flat_text", "")
-        if node_ends_with_colon(prev_flat):
-            feats["0:prev_ends_with_colon=true"] = 1.0
-
         curr_math = float(_get_attr_or_item(features[i], "math_density", 0.0) or 0.0)
         prev_math = float(_get_attr_or_item(features[i - 1], "math_density", 0.0) or 0.0)
         feats[f"0:math_density_delta={get_math_density_delta(curr_math, prev_math)}"] = 1.0

@@ -490,6 +490,15 @@ def evaluate_dataset(
             qed_less_heur.append(pred_h)
             qed_less_crf.append(pred_c)
 
+    # Write Python CRF predictions on test.jsonl for Rust-to-Python parity verification
+    expected_path = test_path.parent / "test_viterbi_expected.json"
+    try:
+        with open(expected_path, "w", encoding="utf-8") as f:
+            json.dump(y_crf, f, indent=2)
+        logger.info("Saved Viterbi expected predictions to %s", expected_path)
+    except Exception as e:
+        logger.warning("Could not write test_viterbi_expected.json: %s", e)
+
     # Compute overall metrics
     overall_heur = compute_metrics(y_true, y_heur)
     overall_crf = compute_metrics(y_true, y_crf)

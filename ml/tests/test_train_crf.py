@@ -145,9 +145,22 @@ class TestTrainCRF(unittest.TestCase):
 
         labels = data["labels"]
         self.assertIn("O", labels)
-        self.assertIn("B-THEOREM", labels)
-        self.assertIn("I-THEOREM", labels)
-        self.assertIn("B-PROOF", labels)
+        expected_b_labels = [
+            "B-THEOREM",
+            "B-LEMMA",
+            "B-PROPOSITION",
+            "B-COROLLARY",
+            "B-DEFINITION",
+            "B-PROOF",
+            "B-EXAMPLE",
+            "B-REMARK",
+            "B-EXERCISE",
+            "B-SOLUTION",
+            "B-CLAIM",
+            "B-NOTATION",
+        ]
+        for b_label in expected_b_labels:
+            self.assertIn(b_label, labels, f"Missing {b_label} in crf_weights.json")
 
         # File size must be under 100 KB
         file_size_kb = weights_path.stat().st_size / 1024

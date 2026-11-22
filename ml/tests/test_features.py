@@ -130,7 +130,7 @@ class TestFeatureExtraction(unittest.TestCase):
         self.assertIn("-1:node_kind=heading", seq_feats[1])
         self.assertIn("0:node_kind=paragraph", seq_feats[1])
         self.assertIn("0:lead=theorem", seq_feats[1])
-        self.assertIn("0:lead_kind=theorem", seq_feats[1])
+        self.assertNotIn("0:lead_kind=theorem", seq_feats[1])
         self.assertIn("0:labelled=true", seq_feats[1])
         self.assertIn("0:lead_has_number=true", seq_feats[1])
         self.assertIn("0:emphasized=true", seq_feats[1])
@@ -144,7 +144,7 @@ class TestFeatureExtraction(unittest.TestCase):
         self.assertIn("0:node_kind=display_math", seq_feats[2])
         self.assertIn("-1:node_kind=paragraph", seq_feats[2])
         self.assertIn("-1:ends_colon=true", seq_feats[2])
-        self.assertIn("0:prev_ends_with_colon=true", seq_feats[2])
+        self.assertNotIn("0:prev_ends_with_colon=true", seq_feats[2])
         self.assertIn("0:math_density_delta=up", seq_feats[2])
         for key in seq_feats[2]:
             self.assertFalse(key.startswith("+1:"))
@@ -177,9 +177,9 @@ class TestFeatureExtraction(unittest.TestCase):
         self.assertIn("0:node_kind=paragraph", extracted)
         self.assertIn("0:has_lead=true", extracted)
         self.assertIn("0:lead=proof", extracted)
-        self.assertIn("0:lead_kind=proof", extracted)
+        self.assertNotIn("0:lead_kind=proof", extracted)
         self.assertIn("0:labelled=true", extracted)
-        self.assertIn("0:lead_labelled=true", extracted)
+        self.assertNotIn("0:lead_labelled=true", extracted)
         self.assertIn("0:body_empty=true", extracted)
         self.assertIn("0:lead_reference=true", extracted)
         self.assertIn("0:lead_has_name=true", extracted)
@@ -206,7 +206,8 @@ class TestFeatureExtraction(unittest.TestCase):
         ]
 
         seq_feats = extract_sequence_features(nodes, feats)
-        self.assertIn("0:after_display_math=true", seq_feats[1])
+        self.assertIn("-1:node_kind=display_math", seq_feats[1])
+        self.assertNotIn("0:after_display_math=true", seq_feats[1])
         self.assertIn("0:continuation=true", seq_feats[1])
         self.assertIn("0:math_density_delta=down", seq_feats[1])
 
@@ -240,7 +241,9 @@ class TestFeatureExtraction(unittest.TestCase):
     def test_real_dataset_compatibility(self) -> None:
         train_path = Path("ml/data/train.jsonl")
         if not train_path.exists():
-            self.skipTest("ml/data/train.jsonl does not exist")
+            train_path = Path("data/train.jsonl")
+        if not train_path.exists():
+            self.skipTest("train.jsonl does not exist")
 
         docs = []
         with open(train_path, "r", encoding="utf-8") as f:
@@ -269,7 +272,9 @@ class TestFeatureExtraction(unittest.TestCase):
         """Verify sklearn_crfsuite can train and predict on extracted features."""
         train_path = Path("ml/data/train.jsonl")
         if not train_path.exists():
-            self.skipTest("ml/data/train.jsonl does not exist")
+            train_path = Path("data/train.jsonl")
+        if not train_path.exists():
+            self.skipTest("train.jsonl does not exist")
 
         docs = []
         with open(train_path, "r", encoding="utf-8") as f:

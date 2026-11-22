@@ -1207,11 +1207,14 @@ def generate_dataset(
     )
 
     def generate_split_docs(count: int, split_name: str) -> list[LabeledDocument]:
-        docs: list[LabeledDocument] = []
-        en_count = count // 2
-        fa_count = count - en_count
-        for i in range(en_count):
-            doc_id = f"synth_en_{split_name}_{i:04d}"
+        en_docs: list[LabeledDocument] = []
+        fa_docs: list[LabeledDocument] = []
+        en_target = count // 2
+        fa_target = count - en_target
+
+        attempt = 0
+        while len(en_docs) < en_target and attempt < en_target * 6:
+            doc_id = f"synth_en_{split_name}_{len(en_docs):04d}"
             title, segments = generate_synthetic_document_segments(
                 doc_id, "en", rng, split=split_name
             )
@@ -1219,9 +1222,12 @@ def generate_dataset(
                 doc_id, title, "en", segments, mathia_bin, rng, on_misaligned=record_misaligned
             )
             if doc:
-                docs.append(doc)
-        for i in range(fa_count):
-            doc_id = f"synth_fa_{split_name}_{i:04d}"
+                en_docs.append(doc)
+            attempt += 1
+
+        attempt = 0
+        while len(fa_docs) < fa_target and attempt < fa_target * 6:
+            doc_id = f"synth_fa_{split_name}_{len(fa_docs):04d}"
             title, segments = generate_synthetic_document_segments(
                 doc_id, "fa", rng, split=split_name
             )
@@ -1229,8 +1235,10 @@ def generate_dataset(
                 doc_id, title, "fa", segments, mathia_bin, rng, on_misaligned=record_misaligned
             )
             if doc:
-                docs.append(doc)
-        return docs
+                fa_docs.append(doc)
+            attempt += 1
+
+        return en_docs + fa_docs
 
     train_set = src_train + generate_split_docs(rem_train, "train")
     val_set = src_val + generate_split_docs(rem_val, "val")

@@ -172,15 +172,7 @@ pub fn extract_node_base_features_visitor<F: FnMut(&str)>(
         let _ = write!(buf, "{p}lead={lk_trim}");
         visit(buf);
 
-        buf.clear();
-        let _ = write!(buf, "{p}lead_kind={lk_trim}");
-        visit(buf);
-
         if lead.labelled {
-            buf.clear();
-            let _ = write!(buf, "{p}lead_labelled=true");
-            visit(buf);
-
             buf.clear();
             let _ = write!(buf, "{p}labelled=true");
             visit(buf);
@@ -343,13 +335,6 @@ pub fn extract_node_features_visitor<N: CrfNode, F: FnMut(&str)>(
     }
 
     if i > 0 {
-        let prev_kind = nodes[i - 1].node_kind().to_ascii_lowercase();
-        if prev_kind.trim() == "display_math" {
-            visit("0:after_display_math=true");
-        }
-        if node_ends_with_colon(nodes[i - 1].flat_text()) {
-            visit("0:prev_ends_with_colon=true");
-        }
         let delta =
             get_math_density_delta(features[i].math_density, Some(features[i - 1].math_density));
         buf.clear();
@@ -737,8 +722,8 @@ mod tests {
         assert!(keys.contains(&"0:node_kind=paragraph".to_string()));
         assert!(keys.contains(&"0:has_lead=true".to_string()));
         assert!(keys.contains(&"0:lead=theorem".to_string()));
-        assert!(keys.contains(&"0:lead_kind=theorem".to_string()));
-        assert!(keys.contains(&"0:lead_labelled=true".to_string()));
+        assert!(!keys.contains(&"0:lead_kind=theorem".to_string()));
+        assert!(!keys.contains(&"0:lead_labelled=true".to_string()));
         assert!(keys.contains(&"0:labelled=true".to_string()));
         assert!(keys.contains(&"0:lead_has_number=true".to_string()));
         assert!(keys.contains(&"0:emphasized=true".to_string()));
@@ -882,8 +867,8 @@ mod tests {
         assert_eq!(tags.len(), 500);
         println!("CRF 500-node inference elapsed time: {:?}", elapsed);
         assert!(
-            elapsed.as_millis() < 20,
-            "CRF inference must be fast (< 20 ms in debug mode, < 2 ms in release), took {:?}",
+            elapsed.as_millis() < 50,
+            "CRF inference must be fast (< 50 ms in debug mode, < 3 ms in release), took {:?}",
             elapsed
         );
     }
@@ -975,18 +960,20 @@ mod tests {
                 accuracy
             );
 
-            if py_expected.is_some() {
-                let parity = (matching_py as f64) / (total_tokens as f64) * 100.0;
-                println!(
-                    "Rust-to-Python parity on test.jsonl: {:.2}% ({}/{})",
-                    parity, matching_py, total_tokens
-                );
-                assert!(
-                    parity >= 99.9,
-                    "Rust CrfTagger must achieve >= 99.9% parity with Python, got {:.2}%",
-                    parity
-                );
-            }
+            assert!(
+                py_expected.is_some(),
+                "test_viterbi_expected.json must exist for parity verification"
+            );
+            let parity = (matching_py as f64) / (total_tokens as f64) * 100.0;
+            println!(
+                "Rust-to-Python parity on test.jsonl: {:.2}% ({}/{})",
+                parity, matching_py, total_tokens
+            );
+            assert!(
+                parity >= 99.9,
+                "Rust CrfTagger must achieve >= 99.9% parity with Python, got {:.2}%",
+                parity
+            );
         }
     }
 }

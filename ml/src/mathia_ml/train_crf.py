@@ -354,6 +354,20 @@ def train_and_export(
     export_crf_weights_json(weights, output_path, compact=compact)
     file_size_kb = output_path.stat().st_size / 1024
 
+    # Write expected predictions on test.jsonl for Rust Viterbi parity verification
+    test_path = train_path.parent / "test.jsonl"
+    if test_path.exists():
+        test_docs = load_jsonl_dataset(test_path)
+        X_test, _ = extract_dataset(test_docs)
+        test_preds = [viterbi_decode(seq, weights) for seq in X_test]
+        expected_path = test_path.parent / "test_viterbi_expected.json"
+        try:
+            with open(expected_path, "w", encoding="utf-8") as f:
+                json.dump(test_preds, f, indent=2)
+            logger.info("Saved Viterbi expected test predictions to %s", expected_path)
+        except Exception as e:
+            logger.warning("Could not write test_viterbi_expected.json: %s", e)
+
     # Parity verification
     parity, matches, total_tokens = verify_viterbi_parity(crf, weights, X_val)
     logger.info(
