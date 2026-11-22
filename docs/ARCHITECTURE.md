@@ -10,21 +10,21 @@ This document serves as the authoritative architectural blueprint for both human
 
 Mathia is designed around strict architectural invariants to guarantee determinism, zero-dependency deployment, and client-side security:
 
-1. **Pure, Deterministic Core (`crates/math-core`)**:
+1. **Pure, Deterministic Core ([`crates/math-core`](../crates/math-core/src/lib.rs))**:
    - The core compilation engine contains **no network calls, no asynchronous runtimes, no local server daemons, and no direct LLM integrations**.
    - Identical inputs with the same configuration always yield byte-identical abstract structures.
    - External decision models interact exclusively through explicit, optional trait boundaries ([`BlockJudge`](../crates/math-core/src/classifier.rs)).
 2. **Zero-Inference Runtime Bloat**:
-   - Machine learning is applied via a Linear-Chain Conditional Random Field (CRF).
-   - Ingestion and inference run 100% in pure Rust using Viterbi dynamic programming. Model weights (`crf_weights.json`, ~50 KB) are embedded at compile time using `include_str!`.
+   - Machine learning is applied via a Linear-Chain Conditional Random Field (CRF) implemented in pure Rust ([`crates/math-core/src/crf.rs`](../crates/math-core/src/crf.rs)) and trained offline in Python ([`ml/src/mathia_ml/train_crf.py`](../ml/src/mathia_ml/train_crf.py)).
+   - Ingestion and inference run 100% in pure Rust using Viterbi dynamic programming. Model weights ([`crf_weights.json`](../crates/math-core/src/crf_weights.json), ~50 KB) are embedded at compile time using `include_str!`.
    - The desktop app bundles no ONNX runtime, no Python runtime, no PyTorch binaries, and no local LLM weights.
 3. **Hard Security & Isolation Boundary**:
-   - Compiled HTML study guides enforce a strict Content Security Policy (CSP). Only scripts embedded by Mathia itself are permitted, matched via SHA-256 hashes (`'sha256-...'`).
+   - Compiled HTML study guides enforce a strict Content Security Policy (CSP) generated in [`crates/math-core/src/html.rs`](../crates/math-core/src/html.rs). Only scripts embedded by Mathia itself are permitted, matched via SHA-256 hashes (`'sha256-...'`) computed with the zero-dependency SHA-256 implementation in [`crates/math-core/src/sha256.rs`](../crates/math-core/src/sha256.rs).
    - Network access is blocked by default (`connect-src 'none'`). When `--ai` features are explicitly requested, `connect-src` is strictly scoped to designated provider origins.
-   - Interactive LLM interactions (Ask & Illustrate) occur purely client-side in the reader's browser via [`assets/ai.js`](../crates/math-core/assets/ai.js). API keys are stored in the client browser's `localStorage` and are never embedded into compiled files or sent to Mathia binaries.
+   - Interactive LLM interactions (Ask & Illustrate) occur purely client-side in the reader's browser via [`crates/math-core/assets/ai.js`](../crates/math-core/assets/ai.js). API keys are stored in the client browser's `localStorage` and are never embedded into compiled files or sent to Mathia binaries.
 4. **Resilient Edit Invariance**:
    - User overrides and model corrections do not bind to volatile absolute line numbers or raw node array indices.
-   - Overrides bind via 64-bit content-anchored hashes (`ContentAnchor`: hash of normalized text + occurrence index), allowing manual annotations to survive upstream document editing.
+   - Overrides bind via 64-bit content-anchored hashes ([`ContentAnchor`](../crates/math-core/src/classifier.rs): hash of normalized text + occurrence index via [`compute_node_anchor`](../crates/math-core/src/classifier.rs)), allowing manual annotations to survive upstream document editing.
 
 ---
 
@@ -124,18 +124,108 @@ flowchart TD
     ExportMD --> OutMD["Standardized .md File (**Theorem 1.** + LaTeX envs)"]
 ```
 
+#### Pipeline Stages & Code References
+
+1. **Document Ingestion & Sanitization**:
+   - **HTML Import**: [`clean_html::clean_html()`](../crates/math-core/src/clean_html.rs) and [`clean_html::analyze_html_detailed()`](../crates/math-core/src/clean_html.rs) strip scripts, normalize document structure, and delegate to the DOM sanitizer in [`crates/math-core/src/dom.rs`](../crates/math-core/src/dom.rs).
+   - **Markdown Normalization**: [`normalize::normalize_markdown()`](../crates/math-core/src/normalize.rs) cleans CRLF line endings, strips extraneous running headers, unrolls full-file code fences, and standardizes math delimiters.
+   - **OCR Defect Repair**: [`repair::wrap_bare_math()`](../crates/math-core/src/repair.rs) and [`repair::repair_markdown()`](../crates/math-core/src/repair.rs) wrap bare formulas in `$ ... $` or `$$ ... $$` and balance open delimiters.
+2. **Parsing & AST Construction**:
+   - [`parser::parse_markdown()`](../crates/math-core/src/parser.rs) uses `pulldown-cmark` to produce flat top-level [`Node`](../crates/math-core/src/model.rs) structures with delimited [`MathSpan`](../crates/math-core/src/model.rs) items and optional [`EnvSpan`](../crates/math-core/src/model.rs) markers.
+3. **Feature Extraction**:
+   - [`features::Lexicon::extract()`](../crates/math-core/src/features.rs) extracts multilingual opener keywords, labels, proof targets, mathematical character densities, logic symbol frequencies, and QED markers into [`NodeFeatures`](../crates/math-core/src/features.rs).
+4. **Sequence Tagging**:
+   - **Heuristic Path**: [`tagger::HeuristicTagger::tag()`](../crates/math-core/src/tagger.rs) computes scoring via linear weights or the decision tree in [`crates/math-core/src/tree.rs`](../crates/math-core/src/tree.rs).
+   - **CRF Path**: [`crf::CrfTagger::decode_nodes()`](../crates/math-core/src/crf.rs) performs dynamic programming Viterbi trellis decoding using embedded compile-time weights from [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json).
+   - Tagging produces a sequence of [`TaggedNode`](../crates/math-core/src/tagger.rs) containing [`BioTag`](../crates/math-core/src/tagger.rs) annotations and confidence scores.
+5. **Scoping & Block Classification**:
+   - [`classifier::HeuristicClassifier::tags_to_blocks()`](../crates/math-core/src/classifier.rs) aggregates consecutive tagged nodes into bounded [`SemanticBlock`](../crates/math-core/src/model.rs) units.
+   - Resolves manual and learned overrides via [`classifier::ScopeOverrides::resolve()`](../crates/math-core/src/classifier.rs) with content-based anchoring ([`ContentAnchor`](../crates/math-core/src/classifier.rs)).
+   - Resolves internal prose cross-references using [`crates/math-core/src/crossref.rs`](../crates/math-core/src/crossref.rs).
+6. **Judge Seam & Escalation**:
+   - Ambiguous boundary regions or unlabelled proofs trigger escalation to [`math_judge::BlockJudge::judge_batch()`](../crates/math-judge/src/lib.rs).
+   - Subprocess execution is managed by [`CommandJudge`](../crates/math-judge/src/lib.rs), remote HTTP calls by [`ApiJudge`](../crates/math-judge/src/lib.rs) and [`crates/math-judge/src/jev.rs`](../crates/math-judge/src/jev.rs), and deduplication by [`CachedJudge`](../crates/math-judge/src/lib.rs).
+   - Construct the validated [`model::Document`](../crates/math-core/src/model.rs).
+7. **Rendering & Export**:
+   - **HTML Document**: [`html::render()`](../crates/math-core/src/html.rs) compiles the Askama template in [`crates/math-core/templates/document.html`](../crates/math-core/templates/document.html), inlining fonts ([`crates/math-core/assets/fonts/`](../crates/math-core/assets/fonts/)), KaTeX ([`crates/math-core/assets/katex/`](../crates/math-core/assets/katex/)), runtime scripts ([`crates/math-core/assets/runtime.js`](../crates/math-core/assets/runtime.js), [`crates/math-core/assets/mindmap.js`](../crates/math-core/assets/mindmap.js), [`crates/math-core/assets/ai.js`](../crates/math-core/assets/ai.js)), and computing exact SHA-256 CSP hashes ([`crates/math-core/src/sha256.rs`](../crates/math-core/src/sha256.rs)).
+   - **Markdown Export**: [`markdown::render()`](../crates/math-core/src/markdown.rs) reproduces standardized Markdown with canonical LaTeX environment tags and bold badges.
+
 ---
 
 ## 3. Directory & Module Map
 
 | Path | Primary Ownership | Permitted Dependencies | Forbidden Dependencies |
 |---|---|---|---|
-| `crates/math-core` | Parsing, AST representation, feature extraction, sequence classification, HTML/Markdown generation, mindmap tree extraction. | Standard library, `pulldown-cmark`, `askama`, `serde`, `serde_json`, `thiserror`, `regex`, `html5ever`. | `crates/math-judge`, `crates/mathia-cli`, `src-tauri`, networking libraries (`reqwest`), async runtimes (`tokio`), UI code. |
-| `crates/math-judge` | External model contract (`JudgeRequest`/`JudgeResponse`), subprocess execution (`CommandJudge`), API judge (`ApiJudge`), caching (`CachedJudge`), replay logs. | Standard library, `crates/math-core`, `serde`, `serde_json`. | `src-tauri`, `crates/mathia-cli`, UI code, internal webview bindings. |
-| `crates/mathia-cli` | Command-line binary (`mathia`), argument parsing, directory batching, `--watch` polling loop, `--dump-features` CLI. | `crates/math-core`, `crates/math-judge`, standard CLI dependencies. | `src-tauri`, webview libraries. |
-| `src-tauri` | Desktop application lifecycle, window management, native file pickers, sandboxed preview protocol (`mathia-preview://`), session cache. | `crates/math-core`, `crates/math-judge`, `tauri`, `tauri-plugin-dialog`, `serde`. | Direct network client logic outside of `math-judge`. |
-| `ui/` | Desktop UI frontend (Vanilla JS/CSS/HTML), block list inspector, manual correction tool, preview iframe coordinator. | Browser DOM APIs, Tauri IPC (`window.__TAURI__.core.invoke`). | Direct Node.js / OS filesystem access. |
-| `ml/` | Dev-only Python flywheel for synthetic OCR data generation, L-BFGS CRF model training, validation tuning, and evaluation benchmarks. | Python 3.11+, `sklearn-crfsuite`, `scikit-learn`, `seqeval`, `pydantic`, `numpy`, `uv`. | Must never be bundled into release binaries or required at runtime. |
+| [`crates/math-core`](../crates/math-core/src/lib.rs) | Parsing, AST representation, feature extraction, sequence classification, HTML/Markdown generation, mindmap tree extraction. | Standard library, `pulldown-cmark`, `askama`, `serde`, `serde_json`, `thiserror`, `regex`, `html5ever`. | `crates/math-judge`, `crates/mathia-cli`, `src-tauri`, networking libraries (`reqwest`), async runtimes (`tokio`), UI code. |
+| [`crates/math-judge`](../crates/math-judge/src/lib.rs) | External model contract (`JudgeRequest`/`JudgeResponse`), subprocess execution (`CommandJudge`), API judge (`ApiJudge`), caching (`CachedJudge`), replay logs. | Standard library, `crates/math-core`, `serde`, `serde_json`. | `src-tauri`, `crates/mathia-cli`, UI code, internal webview bindings. |
+| [`crates/mathia-cli`](../crates/mathia-cli/src/main.rs) | Command-line binary (`mathia`), argument parsing, directory batching, `--watch` polling loop, `--dump-features` CLI. | `crates/math-core`, `crates/math-judge`, standard CLI dependencies. | `src-tauri`, webview libraries. |
+| [`src-tauri`](../src-tauri/src/main.rs) | Desktop application lifecycle, window management, native file pickers, sandboxed preview protocol (`mathia-preview://`), session cache. | `crates/math-core`, `crates/math-judge`, `tauri`, `tauri-plugin-dialog`, `serde`. | Direct network client logic outside of `math-judge`. |
+| [`ui/`](../ui/index.html) | Desktop UI frontend (Vanilla JS/CSS/HTML), block list inspector, manual correction tool, preview iframe coordinator. | Browser DOM APIs, Tauri IPC (`window.__TAURI__.core.invoke`). | Direct Node.js / OS filesystem access. |
+| [`ml/`](../ml/pyproject.toml) | Dev-only Python flywheel for synthetic OCR data generation, L-BFGS CRF model training, validation tuning, and evaluation benchmarks. | Python 3.11+, `sklearn-crfsuite`, `scikit-learn`, `seqeval`, `pydantic`, `numpy`, `uv`. | Must never be bundled into release binaries or required at runtime. |
+
+### Complete Source File Reference
+
+#### Pure Core Engine (`crates/math-core`)
+- [`src/lib.rs`](../crates/math-core/src/lib.rs): Crate entrypoint, public exports, high-level [`Analysis`](../crates/math-core/src/lib.rs) pipeline wrapper.
+- [`src/model.rs`](../crates/math-core/src/model.rs): Flat AST definitions ([`Node`](../crates/math-core/src/model.rs), [`NodeKind`](../crates/math-core/src/model.rs), [`MathSpan`](../crates/math-core/src/model.rs), [`SemanticBlock`](../crates/math-core/src/model.rs), [`BlockType`](../crates/math-core/src/model.rs), [`Document`](../crates/math-core/src/model.rs)).
+- [`src/parser.rs`](../crates/math-core/src/parser.rs): Event-based Markdown parser wrapping `pulldown-cmark`.
+- [`src/normalize.rs`](../crates/math-core/src/normalize.rs): Idempotent Markdown normalizer (stripping headers/footers, fence unrolling, delimiter standardizing).
+- [`src/repair.rs`](../crates/math-core/src/repair.rs): OCR transcription defect repair and bare math formula auto-wrapping ([`wrap_bare_math`](../crates/math-core/src/repair.rs)).
+- [`src/features.rs`](../crates/math-core/src/features.rs): Lexicon and feature extractor producing [`NodeFeatures`](../crates/math-core/src/features.rs) vectors.
+- [`src/tagger.rs`](../crates/math-core/src/tagger.rs): Sequence tagging abstractions ([`SequenceTagger`](../crates/math-core/src/tagger.rs), [`TaggedNode`](../crates/math-core/src/tagger.rs), [`BioTag`](../crates/math-core/src/tagger.rs), [`HeuristicTagger`](../crates/math-core/src/tagger.rs)).
+- [`src/crf.rs`](../crates/math-core/src/crf.rs): Pure-Rust Linear-Chain CRF Viterbi trellis dynamic programming decoder and weights loader.
+- [`src/crf_weights.json`](../crates/math-core/src/crf_weights.json): Embedded compile-time CRF transition and state feature weights (~50 KB).
+- [`src/classifier.rs`](../crates/math-core/src/classifier.rs): Scope absorption, block boundary construction, [`ScopeOverrides`](../crates/math-core/src/classifier.rs), [`ContentAnchor`](../crates/math-core/src/classifier.rs), and [`BlockJudge`](../crates/math-core/src/classifier.rs) trait seam.
+- [`src/crossref.rs`](../crates/math-core/src/crossref.rs): Prose cross-reference parser and linker (connecting textual mentions to block HTML anchors).
+- [`src/tree.rs`](../crates/math-core/src/tree.rs): Static decision tree evaluation engine ([`DecisionTree`](../crates/math-core/src/tree.rs), [`TreeNode`](../crates/math-core/src/tree.rs), [`Test`](../crates/math-core/src/tree.rs)).
+- [`src/html.rs`](../crates/math-core/src/html.rs): Askama-based HTML5 document renderer with automatic SHA-256 CSP computation.
+- [`templates/document.html`](../crates/math-core/templates/document.html): Standalone HTML5 template embedding styles, scripts, fonts, and KaTeX.
+- [`src/markdown.rs`](../crates/math-core/src/markdown.rs): Standardized Markdown document exporter.
+- [`src/clean_html.rs`](../crates/math-core/src/clean_html.rs) & [`src/dom.rs`](../crates/math-core/src/dom.rs): HTML importer and `html5ever` DOM sanitizer.
+- [`src/mindmap.rs`](../crates/math-core/src/mindmap.rs): Mindmap tree builder generating hierarchical node trees and dependency edges.
+- [`src/sha256.rs`](../crates/math-core/src/sha256.rs): Zero-dependency pure-Rust SHA-256 implementation.
+- [`src/config.rs`](../crates/math-core/src/config.rs): TOML/JSON scoring and scope configuration schemas ([`ScoringConfig`](../crates/math-core/src/config.rs)).
+- [`assets/runtime.js`](../crates/math-core/assets/runtime.js): Micro-runtime for reading mode, sidebar navigation, keyboard shortcuts, and KaTeX rendering.
+- [`assets/mindmap.js`](../crates/math-core/assets/mindmap.js): Client-side SVG/HTML canvas renderer for interactive mindmap exploration.
+- [`assets/ai.js`](../crates/math-core/assets/ai.js): In-browser client-side LLM streaming runtime for Ask and Illustrate features.
+- [`assets/style.css`](../crates/math-core/assets/style.css), [`assets/mindmap.css`](../crates/math-core/assets/mindmap.css), [`assets/ai.css`](../crates/math-core/assets/ai.css): Inlined styling for standalone documents.
+- [`assets/fonts/`](../crates/math-core/assets/fonts/): Inlined Vazirmatn variable fonts in WOFF2 format.
+- [`assets/katex/`](../crates/math-core/assets/katex/): Embedded KaTeX JavaScript and CSS distribution.
+
+#### Decision Models & Escalation Seam (`crates/math-judge`)
+- [`src/lib.rs`](../crates/math-judge/src/lib.rs): Implementations of [`BlockJudge`](../crates/math-core/src/classifier.rs) ([`CommandJudge`](../crates/math-judge/src/lib.rs), [`ApiJudge`](../crates/math-judge/src/lib.rs), [`CachedJudge`](../crates/math-judge/src/lib.rs)), request/response JSON contracts ([`JudgeRequest`](../crates/math-judge/src/lib.rs), [`JudgeResponse`](../crates/math-judge/src/lib.rs)), and replay logs ([`Replay`](../crates/math-judge/src/lib.rs)).
+- [`src/jev.rs`](../crates/math-judge/src/jev.rs): Direct REST API client integrations for TypeSafe Jev, Anthropic Messages API, and OpenAI Chat Completions.
+
+#### CLI Front-End (`crates/mathia-cli`)
+- [`src/main.rs`](../crates/mathia-cli/src/main.rs): Command-line driver supporting `compile`, `--watch` hot-reloading, `--fix` OCR repair, and `dump-features`.
+
+#### Desktop Application Backend (`src-tauri`)
+- [`src/main.rs`](../src-tauri/src/main.rs): Tauri v2 application initialization, window lifecycle, IPC command handlers (`analyze`, `compile`, `export`, `fix`), and `mathia-preview://` custom URI scheme protocol.
+- [`src/session.rs`](../src-tauri/src/session.rs): In-memory document session cache, compilation options, and active source file tracker.
+- [`src/decision.rs`](../src-tauri/src/decision.rs): Decision model configuration and external model runner integration.
+- [`src/theme.rs`](../src-tauri/src/theme.rs): Native window and OS light/dark theme synchronizer.
+- [`src/dock.rs`](../src-tauri/src/dock.rs): Platform dock icon and menu integration.
+- [`src/menu.rs`](../src-tauri/src/menu.rs): Native application menu definitions and recent file actions.
+
+#### Desktop UI Frontend (`ui/`)
+- [`index.html`](../ui/index.html): Desktop UI structure, block list inspector, manual correction drawer, and preview iframe container.
+- [`main.js`](../ui/main.js): Desktop frontend coordinator, Tauri IPC bridge invocations (`invoke('analyze')`, `invoke('compile')`), and block inspection management.
+- [`theme.js`](../ui/theme.js): Dark mode and UI theme toggle engine.
+- [`style.css`](../ui/style.css): Desktop UI styling, split views, typography, and responsive panels.
+
+#### Dev-Only Machine Learning Flywheel (`ml/`)
+- [`src/mathia_ml/dataset_gen.py`](../ml/src/mathia_ml/dataset_gen.py): Synthetic OCR noise generator and ground-truth LaTeX environment extractor.
+- [`src/mathia_ml/features.py`](../ml/src/mathia_ml/features.py): Python feature extraction pipeline aligned with Rust's `features.rs`.
+- [`src/mathia_ml/train_crf.py`](../ml/src/mathia_ml/train_crf.py): L-BFGS CRF model trainer using `sklearn-crfsuite` with hyperparameter tuning and export to `crf_weights.json`.
+- [`src/mathia_ml/evaluate.py`](../ml/src/mathia_ml/evaluate.py): Exact-span sequence labeling benchmark using `seqeval`.
+- [`src/mathia_ml/split.py`](../ml/src/mathia_ml/split.py): Document-stratified dataset splitter with zero document leakage.
+- [`src/mathia_ml/export_feedback.py`](../ml/src/mathia_ml/export_feedback.py): Pipeline converting manual user corrections into labeled training instances.
+- [`src/mathia_ml/schema.py`](../ml/src/mathia_ml/schema.py): Pydantic data models for feature dumps and labeled tokens.
+
+#### Automated Testing Suites (`tests/`)
+- [`tests/js/runtime.test.mjs`](../tests/js/runtime.test.mjs): Playwright end-to-end test suite verifying client-side runtime JS and KaTeX rendering.
+- [`tests/js/mindmap-interactions.test.mjs`](../tests/js/mindmap-interactions.test.mjs): Playwright test suite for mindmap SVG interaction, pan, and zoom.
+- [`tests/js/harness.mjs`](../tests/js/harness.mjs): Browser test runner harness.
 
 ---
 
@@ -143,9 +233,9 @@ flowchart TD
 
 The AST in Mathia is deliberately flat rather than deeply nested. This design allows sequence tagging algorithms (CRF Viterbi, greedy BIO) to operate over sequential node atoms without tree-traversal overhead.
 
-### AST Node Definition (`crates/math-core/src/model.rs`)
+### AST Node Definition ([`crates/math-core/src/model.rs`](../crates/math-core/src/model.rs))
 The document consists of a top-level `Vec<Node>`:
-- `kind: NodeKind`: Discriminates the structural role:
+- `kind: NodeKind`: Discriminates the structural role defined in [`NodeKind`](../crates/math-core/src/model.rs):
   - `Paragraph`: Ordinary running text.
   - `DisplayMath`: Paragraphs consisting exclusively of `$$ ... $$` math blocks.
   - `List` & `ListItem`: Top-level bulleted or numbered items. Lists are split into individual `ListItem` nodes by the parser so that an item like `- **Theorem 1.** ...` can open a block without absorbing sibling items.
@@ -153,15 +243,15 @@ The document consists of a top-level `Vec<Node>`:
   - `Quote`, `Code`, `Table`, `Rule`, `Other`.
 - `text: String`: Raw prose stripped of LaTeX formulas, used for language detection and linguistic cues.
 - `flat: String`: Prose with LaTeX formula sources spliced in at their original positions (delimited by spaces).
-- `math: Vec<MathSpan>`: Isolated LaTeX mathematical expressions, recording the raw string and whether it was `display` (`$$`) or `inline` (`$`).
+- `math: Vec<MathSpan>`: Isolated LaTeX mathematical expressions ([`MathSpan`](../crates/math-core/src/model.rs)), recording the raw string and whether it was `display` (`$$`) or `inline` (`$`).
 - `leading_emphasis: bool`: True if the node opens with `**...**` or `*...*` (the canonical format for OCR labels like `**Theorem 1.**`).
 - `source: Range<usize>`: Exact byte offsets in the normalized Markdown source text.
-- `env: Option<EnvSpan>`: Populated when the node originated from a LaTeX environment (`\begin{theorem} ... \end{theorem}`).
+- `env: Option<EnvSpan>`: Populated when the node originated from a LaTeX environment (`\begin{theorem} ... \end{theorem}`) via [`EnvSpan`](../crates/math-core/src/model.rs).
 
-### Content Anchoring (`crates/math-core/src/classifier.rs`)
+### Content Anchoring ([`crates/math-core/src/classifier.rs`](../crates/math-core/src/classifier.rs))
 Manual overrides and decision verdicts must remain valid even when a user inserts paragraphs earlier in the document. Mathia implements **Content-Based Anchoring**:
 1. When a block opener is identified, [`compute_node_anchor`](../crates/math-core/src/classifier.rs) extracts the first 64 characters of normalized prose from `node.flat`.
-2. It computes a 64-bit deterministic hash using the internal pure-Rust SHA-256 implementation:
+2. It computes a 64-bit deterministic hash using the internal pure-Rust SHA-256 implementation in [`crates/math-core/src/sha256.rs`](../crates/math-core/src/sha256.rs):
    $$\text{hash} = \text{u64::from\_be\_bytes}(\text{SHA256}(\text{normalized}[0..64])[0..8])$$
 3. It tracks the occurrence index of that identical hash across prior nodes:
    $$\text{ContentAnchor} = \{ \text{hash: u64}, \text{occurrence: usize} \}$$
@@ -174,9 +264,9 @@ Manual overrides and decision verdicts must remain valid even when a user insert
 
 Block detection operates across four modular stages:
 
-### Stage 1: Input Normalization & OCR Repair (`normalize.rs`, `repair.rs`)
+### Stage 1: Input Normalization & OCR Repair ([`normalize.rs`](../crates/math-core/src/normalize.rs), [`repair.rs`](../crates/math-core/src/repair.rs))
 Before parsing, OCR transcription defects are rectified idempotently:
-- Strip running headers and footers (page numbers like `12`, `۱۲`, or repeated header strings) that would break blocks across page boundaries.
+- Strip running headers and footers (page numbers like `12`, `۱۲`, or repeated header strings) that would break blocks across page boundaries via [`normalize::normalize_markdown`](../crates/math-core/src/normalize.rs).
 - Unwrap full-document code fences (frequently produced by LLM OCR prompts).
 - Convert `\( ... \)` and `\[ ... \]` to standard `$ ... $` and `$$ ... $$`.
 - Wrap bare LaTeX display environments (`equation`, `align`, `alignat`, `gather`) in `$$`.
@@ -184,7 +274,7 @@ Before parsing, OCR transcription defects are rectified idempotently:
 - Balance unclosed `$` delimiters.
 - In [`repair::wrap_bare_math`](../crates/math-core/src/repair.rs), identify bare mathematical expressions lacking delimiters (e.g., `اگر P(B) \neq 0 آن‌گاه`) and wrap them in `$ ... $`.
 
-### Stage 2: Feature Extraction (`features.rs`)
+### Stage 2: Feature Extraction ([`features.rs`](../crates/math-core/src/features.rs))
 For every AST node, [`Lexicon::extract`](../crates/math-core/src/features.rs) extracts a static [`NodeFeatures`](../crates/math-core/src/features.rs) vector:
 - `lead: Option<KeywordHit>`: Checks if the node begins with an opener keyword (Persian or English) matching any [`BlockType::SEMANTIC`](../crates/math-core/src/model.rs). Extracts:
   - `number`: Parsed identifier (e.g., `3.2`, `۳-۱`).
@@ -200,23 +290,23 @@ For every AST node, [`Lexicon::extract`](../crates/math-core/src/features.rs) ex
 
 ### Stage 3: Opener Scoring & Sequence Tagging
 The document is tagged using one of two sequence taggers implementing [`SequenceTagger`](../crates/math-core/src/tagger.rs):
-- **HeuristicTagger**: Evaluates linear weights or the decision tree. If $\text{score} \ge \text{threshold}$ (default `0.50`), the node is tagged as `Begin(BlockType)`.
-- **CrfTagger**: Runs the trained linear-chain CRF model via Viterbi decoding, assigning global optimal `Begin(BlockType)`, `Inside(BlockType)`, or `Outside` tags.
+- **[`HeuristicTagger`](../crates/math-core/src/tagger.rs)**: Evaluates linear weights from [`ScoringConfig`](../crates/math-core/src/config.rs) or the decision tree in [`crates/math-core/src/tree.rs`](../crates/math-core/src/tree.rs). If $\text{score} \ge \text{threshold}$ (default `0.50`), the node is tagged as `Begin(BlockType)`.
+- **[`CrfTagger`](../crates/math-core/src/crf.rs)**: Runs the trained linear-chain CRF model via Viterbi decoding over embedded weights in [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json), assigning global optimal `Begin(BlockType)`, `Inside(BlockType)`, or `Outside` tags.
 
-### Stage 4: Scoping & Block Construction (`classifier.rs`)
+### Stage 4: Scoping & Block Construction ([`classifier.rs`](../crates/math-core/src/classifier.rs))
 In [`tags_to_blocks`](../crates/math-core/src/classifier.rs):
-1. **LaTeX Environment Bypass**: Any `EnvSpan` (`\begin{theorem}`) automatically commands score `1.0` and exact boundary coverage, overriding heuristic or CRF decisions unless explicitly suppressed by a user override.
+1. **LaTeX Environment Bypass**: Any [`EnvSpan`](../crates/math-core/src/model.rs) (`\begin{theorem}`) automatically commands score `1.0` and exact boundary coverage, overriding heuristic or CRF decisions unless explicitly suppressed by a user override.
 2. **Greedy Scope Absorption**:
    - For statements (Theorems, Lemmas, Propositions, Corollaries, Definitions), the scope absorbs subsequent `DisplayMath`, `List`, `Table`, and continuation paragraphs until encountering a new opener, a heading, a non-continuation paragraph, or hitting [`scope.statement_max_nodes`](../crates/math-core/src/config.rs) (default 6).
    - For arguments (Proofs, Solutions), the scope extends until encountering a `qed` marker, a structural heading, or hitting [`scope.proof_max_nodes`](../crates/math-core/src/config.rs) (default 12).
-3. **Argument Linking**: Proofs and Solutions are linked to their corresponding statements (`SemanticBlock.proves`) by explicit reference first (`refers_to`), falling back to the nearest preceding unlinked statement.
-4. **Cross-Referencing (`crossref.rs`)**: Textual references in prose (e.g., "by Theorem 3.2", "طبق لم ۱") are converted to internal hyperlinks pointing to the target block's HTML id (`#block-theorem-1`).
+3. **Argument Linking**: Proofs and Solutions are linked to their corresponding statements ([`SemanticBlock.proves`](../crates/math-core/src/model.rs)) by explicit reference first (`refers_to`), falling back to the nearest preceding unlinked statement.
+4. **Cross-Referencing ([`crossref.rs`](../crates/math-core/src/crossref.rs))**: Textual references in prose (e.g., "by Theorem 3.2", "طبق لم ۱") are converted to internal hyperlinks pointing to the target block's HTML id (`#block-theorem-1`).
 
 ---
 
-## 6. Heuristic Decision Tree (`crates/math-core/src/tree.rs`)
+## 6. Heuristic Decision Tree ([`crates/math-core/src/tree.rs`](../crates/math-core/src/tree.rs))
 
-As an alternative to linear weighted summation, users can configure a static decision tree via `[scorer] model = "tree"` in `scoring.toml`.
+As an alternative to linear weighted summation, users can configure a static decision tree via `[scorer] model = "tree"` in `scoring.toml` loaded through [`crates/math-core/src/config.rs`](../crates/math-core/src/config.rs).
 
 ### Data Model
 ```rust
@@ -233,7 +323,7 @@ pub enum TreeNode {
 ```
 
 ### Tree Evaluation Mechanics
-The tree is evaluated once per `(NodeFeatures, candidate BlockType)`. Each [`Test`](../crates/math-core/src/tree.rs) asks a contextual question relative to the candidate type:
+The tree ([`DecisionTree`](../crates/math-core/src/tree.rs)) is evaluated once per `(NodeFeatures, candidate BlockType)`. Each [`Test`](../crates/math-core/src/tree.rs) asks a contextual question relative to the candidate type:
 - `Lead`: Does the node open with a keyword matching this candidate type without being an active reference?
 - `Labelled`: Is that keyword formatted as a label?
 - `Emphasized`: Does the node start with bold or italic emphasis?
@@ -248,20 +338,20 @@ The tree is strictly validated on load: maximum recursion depth is capped at 32 
 
 ---
 
-## 7. Machine Learning: Linear-Chain CRF (`crf.rs` & `ml/`)
+## 7. Machine Learning: Linear-Chain CRF ([`crf.rs`](../crates/math-core/src/crf.rs) & [`ml/`](../ml/pyproject.toml))
 
 The CRF treats block detection as joint sequence labeling, directly predicting transitions between block openers, body paragraphs, and outside text.
 
 ### The Sequence Labeling Formulation
-Given a sequence of AST nodes $X = (x_1, x_2, \dots, x_N)$, the model predicts an optimal tag sequence $Y = (y_1, y_2, \dots, y_N)$ where each $y_t \in \mathcal{Y}$ is a BIO tag:
+Given a sequence of AST nodes $X = (x_1, x_2, \dots, x_N)$, the model predicts an optimal tag sequence $Y = (y_1, y_2, \dots, y_N)$ where each $y_t \in \mathcal{Y}$ is a BIO tag ([`BioTag`](../crates/math-core/src/tagger.rs)):
 - `O`: Outside any block (regular prose, headings, unassigned tables).
-- `B-<TYPE>`: Opener of a block (12 semantic types: `B-THEOREM`, `B-LEMMA`, `B-PROOF`, etc.).
+- `B-<TYPE>`: Opener of a block (12 semantic types: `B-THEOREM`, `B-LEMMA`, `B-PROOF`, etc. from [`BlockType`](../crates/math-core/src/model.rs)).
 - `I-<TYPE>`: Inside/continuation of an open block.
 
 Total label space $|\mathcal{Y}| = 1 + 12 \times 2 = 25$ states.
 
 ### Feature Space & Sliding Window
-Features for node $t$ incorporate context from window $[t-1, t, t+1]$:
+Features for node $t$ incorporate context from window $[t-1, t, t+1]$, aligned identically between pure Rust ([`crates/math-core/src/crf.rs`](../crates/math-core/src/crf.rs)) and Python ([`ml/src/mathia_ml/features.py`](../ml/src/mathia_ml/features.py)):
 - Prefixes indicate position relative to $t$: `"-1:"`, `"0:"`, `"+1:"`.
 - `node_kind`: `paragraph`, `display_math`, `list_item`, `heading`, `quote`, etc.
 - `ends_colon`: True if node text ends with `:` or `：`.
@@ -305,7 +395,7 @@ graph LR
     O_prev -. "Heavy Penalty (Invalid BIO)" .-> I_THM_curr
 ```
 
-### Pure-Rust Viterbi Decoder (`crates/math-core/src/crf.rs`)
+### Pure-Rust Viterbi Decoder ([`crates/math-core/src/crf.rs`](../crates/math-core/src/crf.rs))
 1. **Emission Matrix**: For node $t \in [0, N-1]$ and label $j \in [0, K-1]$:
    $$\text{emissions}[t][j] = \sum_{f \in \text{features}(t)} \text{weight}(f, j)$$
 2. **Forward Dynamic Programming**:
@@ -314,11 +404,18 @@ graph LR
    $$\text{backpointer}[t][j] = \arg\max_{i \in [0, K-1]} \left( V[t-1][i] + \text{transitions}[i][j] \right)$$
 3. **Backtracking**: Recovers the globally optimal sequence path $y^*$.
 4. **Max-Marginal Confidence Margin**:
-   The decoder computes backward pass $B[t][j]$. For each node $t$, the margin between the best path score and second-best alternative path score determines `TaggedNode.confidence`. Low confidence flags ambiguous boundaries for human review or judge escalation.
+   The decoder computes backward pass $B[t][j]$. For each node $t$, the margin between the best path score and second-best alternative path score determines [`TaggedNode.confidence`](../crates/math-core/src/tagger.rs). Low confidence flags ambiguous boundaries for human review or judge escalation.
+
+### Offline ML Flywheel ([`ml/`](../ml/pyproject.toml))
+- **Data Generation**: [`ml/src/mathia_ml/dataset_gen.py`](../ml/src/mathia_ml/dataset_gen.py) strips ground truth LaTeX environments and synthesizes noisy OCR variants.
+- **Data Splitting**: [`ml/src/mathia_ml/split.py`](../ml/src/mathia_ml/split.py) produces document-stratified 80/10/10 splits with zero cross-document data leakage.
+- **Model Training**: [`ml/src/mathia_ml/train_crf.py`](../ml/src/mathia_ml/train_crf.py) fits L-BFGS CRF parameters using `sklearn-crfsuite`, searches L1/L2 penalties, and serializes optimized weights to [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json).
+- **Exact-Span Evaluation**: [`ml/src/mathia_ml/evaluate.py`](../ml/src/mathia_ml/evaluate.py) evaluates F1 exact span performance using `seqeval`.
+- **User Feedback Loop**: [`ml/src/mathia_ml/export_feedback.py`](../ml/src/mathia_ml/export_feedback.py) translates manual overrides collected in the desktop app into new training instances.
 
 ---
 
-## 8. Block Judge & LLM Wiring (`crates/math-judge`)
+## 8. Block Judge & LLM Wiring ([`crates/math-judge`](../crates/math-judge/src/lib.rs))
 
 When heuristics or the CRF encounter ambiguity, `math-core` escalates blocks to `math-judge`.
 
@@ -328,7 +425,7 @@ Confidence gating triggers escalation under two specific conditions:
 2. An `Outside` paragraph exhibiting high logic density ($\ge 0.50$) immediately follows a `Theorem` or `Lemma` statement (suspected unlabelled proof).
 
 ### The JSON Protocol Contract
-`math-judge` communicates with external processes via line-delimited JSON:
+`math-judge` communicates with external processes via line-delimited JSON using [`JudgeRequest`](../crates/math-judge/src/lib.rs) and [`JudgeResponse`](../crates/math-judge/src/lib.rs):
 
 #### `JudgeRequest` (sent to model):
 ```json
@@ -366,24 +463,25 @@ Possible verdicts:
 - `{"start_at": <node_index>}`: Explicitly move start boundary.
 
 ### Judge Backends
-1. **`CommandJudge`**: Launches an external binary or script (e.g., local model wrappers like Jev, Clef, or Laya) via child process `stdin`/`stdout`. Writing occurs on a dedicated background thread to prevent deadlocks on full stdout pipes.
-2. **`ApiJudge`**: Direct HTTP calls to hosted decision models:
+1. **[`CommandJudge`](../crates/math-judge/src/lib.rs)**: Launches an external binary or script (e.g., local model wrappers like Jev, Clef, or Laya) via child process `stdin`/`stdout`. Writing occurs on a dedicated background thread to prevent deadlocks on full stdout pipes.
+2. **[`ApiJudge`](../crates/math-judge/src/lib.rs)**: Direct HTTP calls to hosted decision models:
    - TypeSafe Jev (`POST /v1/systemone`)
    - Anthropic (`POST https://api.anthropic.com/v1/messages`)
    - OpenAI / Compatible (`POST https://api.openai.com/v1/chat/completions`)
    Constructs standardized multiple-choice and probability questions (`is_block`, `kind`, `next_continues`, `last_belongs`) and resolves responses against a strict truth table in [`crates/math-judge/src/jev.rs`](../crates/math-judge/src/jev.rs).
-3. **`CachedJudge`**: Hashes `(block_text, block_type, model_version)` into SHA-256 keys. Cached verdicts bypass re-querying unchanged documents.
-4. **`Replay`**: Records applied verdicts into a JSON log (`--judge-log`). Passing the log to `--overrides` reproduces the exact reviewed document offline without calling the model.
+3. **[`CachedJudge`](../crates/math-judge/src/lib.rs)**: Hashes `(block_text, block_type, model_version)` into SHA-256 keys. Cached verdicts bypass re-querying unchanged documents.
+4. **[`Replay`](../crates/math-judge/src/lib.rs)**: Records applied verdicts into a JSON log (`--judge-log`). Passing the log to `--overrides` reproduces the exact reviewed document offline without calling the model.
+5. **Desktop Integration ([`src-tauri/src/decision.rs`](../src-tauri/src/decision.rs))**: Desktop UI controls configure external judges and invoke test runs over IPC.
 
 ---
 
 ## 9. Compilation Pipelines & Security Model
 
-### HTML5 Document Compilation (`crates/math-core/src/html.rs`)
-The HTML renderer compiles [`Document`](../crates/math-core/src/model.rs) into a single standalone HTML5 file using Askama (`templates/document.html`).
+### HTML5 Document Compilation ([`crates/math-core/src/html.rs`](../crates/math-core/src/html.rs))
+The HTML renderer compiles [`Document`](../crates/math-core/src/model.rs) into a single standalone HTML5 file using Askama ([`templates/document.html`](../crates/math-core/templates/document.html)).
 - **Asset Inlining**:
-  - Fonts: Vazirmatn variable font (weights 100–900) is embedded as a WOFF2 `data:font/woff2;base64,...` URI.
-  - KaTeX: Pre-processed CSS with fonts inlined as data URIs and `katex.min.js` are inlined directly into `<style>` and `<script>` tags.
+  - Fonts: Vazirmatn variable font (weights 100–900) from [`crates/math-core/assets/fonts/`](../crates/math-core/assets/fonts/) is embedded as a WOFF2 `data:font/woff2;base64,...` URI.
+  - KaTeX: Pre-processed CSS with fonts inlined as data URIs and `katex.min.js` from [`crates/math-core/assets/katex/`](../crates/math-core/assets/katex/) are inlined directly into `<style>` and `<script>` tags.
   - Runtime: Vanilla JS navigation runtime ([`assets/runtime.js`](../crates/math-core/assets/runtime.js)) and hierarchical mindmap navigator ([`assets/mindmap.js`](../crates/math-core/assets/mindmap.js)) are concatenated and embedded.
 - **Content Security Policy (CSP)**:
   Mathia generates a strict CSP meta header:
@@ -396,18 +494,44 @@ The HTML renderer compiles [`Document`](../crates/math-core/src/model.rs) into a
   connect-src <ALLOWED_AI_ORIGINS>;
   ```
   - Scripts execute **only** if their exact SHA-256 hash matches the header. Injected `<script>` tags, inline `onload` attributes, or `javascript:` links from raw Markdown are completely neutralized.
-  - Script strings are normalized to LF (`normalize_newlines`) before hashing to prevent CRLF line-ending mismatches on Windows.
+  - Hashes are calculated with the standalone SHA-256 implementation in [`crates/math-core/src/sha256.rs`](../crates/math-core/src/sha256.rs). Script strings are normalized to LF (`normalize_newlines`) before hashing to prevent CRLF line-ending mismatches on Windows.
 
-### Interactive Client-Side AI (`assets/ai.js`)
+### Interactive Client-Side AI ([`crates/math-core/assets/ai.js`](../crates/math-core/assets/ai.js))
 When compiled with `--ai` or specific `--ai-provider` flags:
-1. `crates/math-core/assets/ai.js` and `ai.css` are embedded into the document.
+1. [`crates/math-core/assets/ai.js`](../crates/math-core/assets/ai.js) and [`crates/math-core/assets/ai.css`](../crates/math-core/assets/ai.css) are embedded into the document.
 2. Every semantic block renders **Ask** and **Illustrate** action buttons.
 3. The reader inputs their API key into the in-document settings dialog.
 4. Key storage: Saved strictly in `window.localStorage["mathia-ai"]`. The key never leaves the client browser and is transmitted only to the designated provider endpoint.
 5. Zero Server Requirement: Streaming responses use client-side Server-Sent Events (`fetch` with `ReadableStream`). LaTeX in responses is rendered client-side via the embedded `katex.renderToString()`. SVG figures generated by **Illustrate** are validated and injected directly into the DOM using `createElementNS`.
 
 ### Markdown Export & HTML Import
-- **Markdown Export (`crates/math-core/src/markdown.rs`)**:
+- **Markdown Export ([`crates/math-core/src/markdown.rs`](../crates/math-core/src/markdown.rs))**:
   Renders a classified `Document` back to standardized Markdown. If compiled from source Markdown, untouched nodes preserve exact original formatting. Block openers receive standardized bold badges (`**Theorem 1.**`), and LaTeX environments restore `\begin{theorem}...\end{theorem}` syntax.
-- **HTML Import & Cleaning (`crates/math-core/src/clean_html.rs`)**:
-  Accepts external or legacy HTML documents, strips foreign scripts, ads, and stale navigation chrome, extracts mathematical spans and headers, and normalizes the content back into Mathia's AST for clean recompilation.
+- **HTML Import & Cleaning ([`crates/math-core/src/clean_html.rs`](../crates/math-core/src/clean_html.rs))**:
+  Accepts external or legacy HTML documents, strips foreign scripts, ads, and stale navigation chrome via [`crates/math-core/src/dom.rs`](../crates/math-core/src/dom.rs), extracts mathematical spans and headers, and normalizes the content back into Mathia's AST for clean recompilation.
+
+---
+
+## 10. Desktop Application & IPC Integration ([`src-tauri`](../src-tauri/src/main.rs) & [`ui/`](../ui/index.html))
+
+The desktop frontend is an unbundled, frameworkless vanilla ES6/HTML5 application designed for high security and performance:
+
+### IPC Command Surface
+The frontend communicates with the Tauri core via `window.__TAURI__.core.invoke`:
+- `invoke("analyze", { path, ... })`: Invokes [`math_core::Analysis`](../crates/math-core/src/lib.rs) via [`src-tauri/src/main.rs`](../src-tauri/src/main.rs), populating the interactive block inspector in [`ui/main.js`](../ui/main.js).
+- `invoke("compile", { path, options })`: Triggers a full compilation cycle into the in-memory [`session::Session`](../src-tauri/src/session.rs) state, incrementing the preview revision.
+- `invoke("export", { path, format, ... })`: Exports the compiled study guide to standalone HTML or Markdown on disk.
+- `invoke("fix_markdown", { path })`: Performs automated OCR defect repair using [`repair::repair_markdown`](../crates/math-core/src/repair.rs).
+- `invoke("save_overrides", { path, overrides })` / `invoke("load_overrides", { path })`: Persists user-adjusted block classifications as content-anchored JSON overrides.
+
+### Isolated Sandboxed Preview Frame
+To preserve security and isolate the desktop application context:
+1. The rendered HTML preview runs inside an `<iframe>` loaded via the custom Tauri URI scheme `mathia-preview://` registered in [`src-tauri/src/main.rs`](../src-tauri/src/main.rs).
+2. The preview iframe is completely separated from the host UI window's origin, ensuring the strict Content Security Policy (CSP) of the compiled document is enforced independently.
+3. Live document preview refreshes are coordinated in [`ui/main.js`](../ui/main.js) by updating the iframe's URL with revision query stamps generated by `convertFileSrc`.
+
+### Automated End-to-End Browser Testing
+Frontend runtime behaviors and client-side interactions are verified via Playwright integration suites:
+- [`tests/js/runtime.test.mjs`](../tests/js/runtime.test.mjs): Verifies client-side reading controls, TOC navigation, reading mode toggles, and KaTeX formula typesetting.
+- [`tests/js/mindmap-interactions.test.mjs`](../tests/js/mindmap-interactions.test.mjs): Validates mindmap pan/zoom canvas interactions, node collapsing, card positioning, and dependency edge overlays.
+- [`tests/js/harness.mjs`](../tests/js/harness.mjs): Headless browser lifecycle and test harness orchestration.
