@@ -89,6 +89,20 @@ pub fn dump_features(markdown: &str, config: &ScoringConfig) -> FeatureDump {
     dump_features_with_overrides(markdown, config, None)
 }
 
+/// Dumps AST nodes and extracted static features for an HTML document.
+///
+/// The cleaned HTML document is rendered back to Markdown first, so the
+/// dumped `nodes` and `features` describe the same AST the CRF sees.
+pub fn dump_features_from_html(
+    html: &str,
+    config: &ScoringConfig,
+    overrides: Option<&crate::classifier::ScopeOverrides>,
+) -> FeatureDump {
+    let analysis = crate::clean_html::analyze_html_detailed(html);
+    let markdown = crate::markdown::render(&analysis.document, None);
+    dump_features_with_overrides(&markdown, config, overrides)
+}
+
 /// Dumps AST nodes, extracted static features, and optionally resolved BIO tags
 /// with [`crate::classifier::ScopeOverrides`] applied.
 pub fn dump_features_with_overrides(
@@ -693,5 +707,25 @@ mod tests {
         assert_eq!(tags[0], "O");
         assert_eq!(tags[1], "B-LEMMA");
         assert_eq!(tags[2], "I-LEMMA");
+    }
+
+    #[test]
+    fn dump_features_from_html_produces_valid_nodes_and_features() {
+        let html = "<html><body><h1>Groups</h1>\
+                    <p><strong>Theorem 1.</strong> Let $G$ be a finite group.</p>\
+                    <p>$$|G| = \\sum_{g \\in G} 1$$</p>\
+                    <p><strong>Proof.</strong> Count the elements.</p></body></html>";
+        let dump = dump_features_from_html(html, &ScoringConfig::default(), None);
+        assert!(!dump.nodes.is_empty());
+        assert_eq!(dump.nodes.len(), dump.features.len());
+        for (index, node) in dump.nodes.iter().enumerate() {
+            assert_eq!(node.index, index);
+            assert!(!node.kind.is_empty());
+            assert_eq!(node.char_len, node.flat_text.chars().count());
+        }
+        assert!(dump.nodes.iter().any(|n| n.kind == "heading"));
+        assert!(dump.nodes.iter().any(|n| n.kind == "display_math"));
+        assert!(dump.features.iter().any(|f| f.lead.is_some()));
+        assert!(dump.bio_tags.is_none());
     }
 }

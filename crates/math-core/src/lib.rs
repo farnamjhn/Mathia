@@ -39,7 +39,7 @@ pub use error::{Error, Result};
 pub use features::{
     DumpNode, FeatureDump, Features, Lexicon, NodeFeatures, TelemetryEntry, anonymize_dump_nodes,
     append_telemetry_entry, create_override_telemetry, detect_language, dump_features,
-    dump_features_with_overrides,
+    dump_features_from_html, dump_features_with_overrides,
 };
 pub use html::{
     AiOptions, AiProvider, CustomProvider, EmbeddedFont, HtmlOptions, KatexAssets, MathAssets,

@@ -140,14 +140,20 @@ def find_mathia_binary() -> Path:
 
 
 def run_dump_features(
-    mathia_bin: Path, content: str, overrides_path: Optional[Path] = None
+    mathia_bin: Path,
+    content: str,
+    overrides_path: Optional[Path] = None,
+    suffix: str = ".md",
+    config_path: Optional[Path] = None,
 ) -> FeatureDump:
     """Run `mathia dump-features` on string content and return parsed JSON."""
-    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
+    with tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False, encoding="utf-8") as f:
         f.write(content)
         tmp_path = f.name
     try:
         cmd = [str(mathia_bin), "dump-features", tmp_path]
+        if config_path is not None:
+            cmd.extend(["--config", str(config_path)])
         if overrides_path is not None:
             cmd.extend(["--overrides", str(overrides_path)])
         proc = subprocess.run(

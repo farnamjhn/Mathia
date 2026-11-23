@@ -63,3 +63,15 @@ class LabeledDocument(BaseModel):
     features: list[NodeFeatures]
     bio_tags: list[str]
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class UnlabeledDocument(BaseModel):
+    """A document extracted from real notes, before BIO labeling."""
+
+    doc_id: str
+    language: str  # "en" or "fa"
+    title: str = ""
+    nodes: list[DumpNode]
+    features: list[NodeFeatures]
+    bio_tags: Optional[list[str]] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)

@@ -37,7 +37,11 @@ ml/
 │   ├── split.py                # Document-level stratified train/val/test partitioner
 │   ├── train_crf.py            # L-BFGS CRF trainer, c1/c2 tuner, & crf_weights.json exporter
 │   ├── evaluate.py             # seqeval exact-span F1 evaluation harness
-│   └── export_feedback.py      # Telemetry & UI ScopeOverrides ingestion
+│   ├── export_feedback.py      # Telemetry & UI ScopeOverrides ingestion
+│   ├── prepare_unlabeled.py    # Real Markdown/HTML notes → unlabeled JSONL + compact LLM input
+│   └── import_labeled.py       # Validates LLM BIO labels and merges them into LabeledDocument JSONL
+├── prompts/
+│   └── label_bio_tags.md       # Ready-to-use LLM labeling prompt
 └── tests/                      # Pytest suite verifying feature parity, training, and metrics
 ```
 
@@ -110,6 +114,39 @@ uv run python -m mathia_ml.evaluate \
     --test-path data/test.jsonl \
     --weights-path ../crates/math-core/src/crf_weights.json
 ```
+
+### Labeling Real Notes with an LLM
+
+Real Markdown or HTML notes can be labeled with an LLM and folded into the same
+CRF pipeline. The extractor runs `mathia dump-features` (HTML is cleaned and
+rendered to Markdown first), so `nodes` and `features` match the CRF schema
+exactly.
+
+```bash
+# 1. Extract unlabeled documents (full JSONL + compact LLM input)
+uv run python -m mathia_ml.prepare_unlabeled ../sample-data/notes \
+    --output data/unlabeled.jsonl \
+    --llm-input data/unlabeled_for_llm.jsonl \
+    --config ../scoring.toml
+
+# 2. Give prompts/label_bio_tags.md plus data/unlabeled_for_llm.jsonl to an LLM
+#    and save its JSONL reply as data/llm_labels.jsonl
+
+# 3. Validate the labels and merge them back onto the full documents
+uv run python -m mathia_ml.import_labeled \
+    --unlabeled data/unlabeled.jsonl \
+    --labels data/llm_labels.jsonl \
+    --output data/real_labeled.jsonl
+
+# 4. Feed the result into the normal split → train → evaluate pipeline
+uv run python -m mathia_ml.split --input data/real_labeled.jsonl --output-dir data/
+uv run python -m mathia_ml.train_crf --train-path data/train.jsonl --val-path data/val.jsonl
+uv run python -m mathia_ml.evaluate --test-path data/test.jsonl
+```
+
+`import_labeled` enforces tag vocabulary, length alignment, legal BIO
+transitions, and the "no `B-*` on non-openable nodes" rule before writing
+anything; pass `--skip-invalid` to drop bad documents instead of aborting.
 
 ---
 

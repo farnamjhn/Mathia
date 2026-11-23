@@ -21,7 +21,7 @@ use math_judge::{CachedJudge, CommandJudge, Policy, Replay};
 const KATEX_CDN_VERSION: &str = "0.16.22";
 
 const USAGE: &str = "usage: mathia <input.md | input.html | folder> [options]
-       mathia dump-features <input.md> [-o output.json] [--config scoring.toml] [--overrides file.json]
+       mathia dump-features <input.md | input.html> [-o output.json] [--config scoring.toml] [--overrides file.json]
 
   -o, --output FILE     where to write the HTML (default: input with .html, or .clean.html for HTML);
                         for a folder input, the output folder (default: the input folder);
@@ -30,7 +30,7 @@ const USAGE: &str = "usage: mathia <input.md | input.html | folder> [options]
       --fix             write repaired Markdown instead of HTML: inline formulas that
                         lost their $ $, \\( \\) delimiters, bare environments, unbalanced $
                         (default output: input with .fixed.md; -o may name the input itself)
-      --dump-features   dump AST nodes and extracted NodeFeatures as JSON (or subcommand: mathia dump-features <input.md>)
+      --dump-features   dump AST nodes and extracted NodeFeatures as JSON (or subcommand: mathia dump-features <input.md | input.html>)
       --config FILE     scoring configuration (.toml or .json)
       --dump-config     print the default scoring configuration as TOML and exit
       --explain         print every node's BIO tag and why each block ended
@@ -221,7 +221,7 @@ fn run() -> Result<(), String> {
             return Err("dump-features does not go with --watch, --judge or --fix".into());
         }
         if input.is_dir() {
-            return Err("dump-features takes a Markdown file, not a folder".into());
+            return Err("dump-features takes a Markdown or HTML file, not a folder".into());
         }
         let config = match config_path {
             Some(path) => ScoringConfig::load(path).map_err(|e| e.to_string())?,
@@ -231,10 +231,7 @@ fn run() -> Result<(), String> {
             Some(path) => Some(load_overrides(&path)?),
             None => None,
         };
-        let content =
-            std::fs::read_to_string(&input).map_err(|e| format!("{}: {e}", input.display()))?;
-        let dump = math_core::dump_features_with_overrides(&content, &config, overrides.as_ref());
-        let json = serde_json::to_string_pretty(&dump).map_err(|e| e.to_string())?;
+        let json = dump_features_json(&input, &config, overrides.as_ref())?;
         if let Some(out) = output {
             std::fs::write(&out, json).map_err(|e| format!("{}: {e}", out.display()))?;
         } else {
@@ -363,6 +360,22 @@ fn is_html(path: &Path) -> bool {
 
 fn is_supported(path: &Path) -> bool {
     is_markdown(path) || is_html(path)
+}
+
+/// `dump-features` for one Markdown or HTML file, as pretty JSON.
+fn dump_features_json(
+    input: &Path,
+    config: &ScoringConfig,
+    overrides: Option<&ScopeOverrides>,
+) -> Result<String, String> {
+    let content =
+        std::fs::read_to_string(input).map_err(|e| format!("{}: {e}", input.display()))?;
+    let dump = if is_html(input) || math_core::is_html(&content) {
+        math_core::dump_features_from_html(&content, config, overrides)
+    } else {
+        math_core::dump_features_with_overrides(&content, config, overrides)
+    };
+    serde_json::to_string_pretty(&dump).map_err(|e| e.to_string())
 }
 
 /// `(input, output)` pairs: one for a file, one per Markdown or HTML file (sorted,
@@ -599,5 +612,36 @@ fn main() -> ExitCode {
             eprintln!("error: {message}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dump_features_on_html_input_produces_valid_nodes_and_features() {
+        let path =
+            std::env::temp_dir().join(format!("mathia-dump-features-{}.html", std::process::id()));
+        let html = "<html><body><h1>Groups</h1>\
+                    <p><strong>Theorem 1.</strong> Let $G$ be a finite group.</p>\
+                    <p>$$|G| = \\sum_{g \\in G} 1$$</p></body></html>";
+        std::fs::write(&path, html).expect("writes the fixture");
+        let json =
+            dump_features_json(&path, &ScoringConfig::default(), None).expect("dumps features");
+        let _ = std::fs::remove_file(&path);
+
+        let dump: math_core::FeatureDump = serde_json::from_str(&json).expect("valid JSON");
+        assert!(!dump.nodes.is_empty());
+        assert_eq!(dump.nodes.len(), dump.features.len());
+        for (index, node) in dump.nodes.iter().enumerate() {
+            assert_eq!(node.index, index);
+            assert!(!node.kind.is_empty());
+            assert_eq!(node.char_len, node.flat_text.chars().count());
+        }
+        assert!(dump.nodes.iter().any(|n| n.kind == "heading"));
+        assert!(dump.nodes.iter().any(|n| n.kind == "display_math"));
+        assert!(dump.features.iter().any(|f| f.lead.is_some()));
+        assert!(dump.bio_tags.is_none());
     }
 }
