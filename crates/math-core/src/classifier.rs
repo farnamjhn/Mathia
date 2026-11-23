@@ -593,6 +593,20 @@ impl HeuristicClassifier {
         overrides: &ScopeOverrides,
     ) -> Classification {
         let n = nodes.len();
+        // An explicit, labelled lead ("برهان (Proof):", "Theorem 2.") names the
+        // block outright, so it is a hard anchor: neither a tagger nor the
+        // demotion pass below may move it to another type or fold it into the
+        // previous block.
+        let anchored = anchor_labelled_leads(tags, scores);
+        // A node that merely mentions a block ("Theorem 18-5 should not be
+        // used…", "قضیهٔ ۱۸-۵ را نباید…") is prose, not a new block of that type.
+        let dereferenced = demote_reference_openers(&anchored, scores);
+        // A proof or solution argues about the block that precedes it. CRF tags
+        // occasionally open an argument in the middle of exposition; demote such
+        // an opener to plain text unless the node itself carries an explicit
+        // proof lead or QED marker.
+        let sanitized = sanitize_argument_openers(&dereferenced, scores);
+        let tags: &[TaggedNode] = &sanitized;
         let resolved = overrides.resolve(nodes);
 
         // LaTeX environments: `env_first` opens, `covered` belongs to one.
@@ -719,10 +733,24 @@ impl HeuristicClassifier {
                 };
 
                 let original_kind = tags.get(i).and_then(|t| t.tag.block_type());
-                let (natural, reason) = if retype(i).is_some()
-                    && (tags.get(i).is_none_or(|t| !t.tag.is_begin())
-                        || original_kind != Some(kind))
-                {
+                // A strongly labelled opener names the block outright, so its
+                // body is delimited structurally (the heuristic rules) rather
+                // than by the tagger's `I-` run. Without this the CRF leaves
+                // every body paragraph as separate text, because its emission
+                // model rarely predicts `I-` states on real notes.
+                let strong_lead = scores[i].features.lead.as_ref().is_some_and(|lead| {
+                    !lead.reference
+                        && lead.kind == kind
+                        // A proof/solution keyword at the start of an argument
+                        // means the argument follows, even when the label is
+                        // not punctuated ("برهان دقیق (Proof) …").
+                        && (lead.labelled || lead.number.is_some() || kind.is_argument())
+                });
+                let structural = strong_lead
+                    || (retype(i).is_some()
+                        && (tags.get(i).is_none_or(|t| !t.tag.is_begin())
+                            || original_kind != Some(kind)));
+                let (natural, reason) = if structural {
                     match kind {
                         BlockType::Proof => {
                             self.tagger
@@ -960,6 +988,151 @@ impl HeuristicClassifier {
             rounds,
         }
     }
+}
+
+/// Demote an opener whose keyword is a *reference* rather than a label.
+///
+/// "Theorem 18-5 should not be used…" and "قضیهٔ ۱۸-۵ را نباید…" mention a block;
+/// they do not start one. A reference is recognised by the lexicon (a verb or
+/// object marker directly after the keyword), so this is deterministic evidence
+/// that the node is prose. The tagger can still be wrong about a low-confidence
+/// mention, so the demotion runs before the argument pass.
+fn demote_reference_openers(tags: &[TaggedNode], scores: &[NodeScore]) -> Vec<TaggedNode> {
+    let mut out = tags.to_vec();
+    let mut demoting: Option<BlockType> = None;
+
+    for (tagged, score) in out.iter_mut().zip(scores) {
+        if let Some(kind) = demoting {
+            match tagged.tag {
+                BioTag::Inside(inner) if inner == kind => {
+                    tagged.tag = BioTag::Outside;
+                    continue;
+                }
+                _ => demoting = None,
+            }
+        }
+
+        if let BioTag::Begin(kind) = tagged.tag
+            && score
+                .features
+                .lead
+                .as_ref()
+                .is_some_and(|lead| lead.reference)
+        {
+            tagged.tag = BioTag::Outside;
+            demoting = Some(kind);
+        }
+    }
+
+    out
+}
+
+/// Force every node that opens with a labelled block keyword to begin that
+/// block.
+///
+/// A labelled lead ("Theorem 2.", "برهان (Proof):", "Definition 3.1") or a
+/// numbered one ("قضیه ۳-۱") names the block outright, so it is deterministic
+/// evidence: the block starts here, and its type is the keyword's type. The CRF
+/// emission model is trained on a small synthetic corpus and can score `O`
+/// marginally above `B-PROOF` on a genuine proof opener; anchoring the lead
+/// keeps that decision out of the tagger's hands. Mentions and references
+/// ("Theorem 2 implies…", "by Lemma 3") are not labelled openers and are left
+/// alone.
+fn anchor_labelled_leads(tags: &[TaggedNode], scores: &[NodeScore]) -> Vec<TaggedNode> {
+    let mut out = tags.to_vec();
+    for (tagged, score) in out.iter_mut().zip(scores) {
+        let Some(lead) = score.features.lead.as_ref() else {
+            continue;
+        };
+        // A number after the keyword ("Theorem 2", "قضیه ۳-۱") is itself a
+        // label, even when an unusual separator keeps `labelled` false (e.g.
+        // the dual label "لم / قضیه ۱-۲"). References such as "Theorem 2
+        // implies…" are excluded above.
+        if lead.reference || !lead.kind.is_semantic() {
+            continue;
+        }
+        if !lead.labelled && lead.number.is_none() {
+            continue;
+        }
+        let kind = lead.kind;
+        if tagged.tag != BioTag::Begin(kind) {
+            tagged.tag = BioTag::Begin(kind);
+        }
+    }
+    out
+}
+
+/// Demote `B-PROOF` / `B-SOLUTION` openers that do not follow the statement they
+/// argue about. A proof may open after a theorem-like statement; a solution may
+/// open after a statement, an example, or an exercise. An explicit proof lead
+/// ("برهان", "Proof") or a QED marker is always honoured, so a labelled proof
+/// that the tagger placed in an unusual spot survives.
+fn sanitize_argument_openers(tags: &[TaggedNode], scores: &[NodeScore]) -> Vec<TaggedNode> {
+    let mut out = tags.to_vec();
+    let mut last_begin: Option<BlockType> = None;
+    let mut last_emitted: Option<BioTag> = None;
+    let mut demoting: Option<BlockType> = None;
+
+    for (i, tagged) in out.iter_mut().enumerate() {
+        if let Some(kind) = demoting {
+            match tagged.tag {
+                BioTag::Inside(inner) if inner == kind => {
+                    tagged.tag = BioTag::Outside;
+                    last_emitted = Some(BioTag::Outside);
+                    continue;
+                }
+                _ => demoting = None,
+            }
+        }
+
+        match tagged.tag {
+            BioTag::Begin(kind) if kind.is_argument() => {
+                let score = scores.get(i);
+                let has_lead = score.is_some_and(|score| {
+                    score
+                        .features
+                        .lead
+                        .as_ref()
+                        .is_some_and(|lead| lead.kind == kind)
+                });
+                let has_qed = score.is_some_and(|score| score.features.qed);
+                let anchored = match last_begin {
+                    Some(prev) if kind == BlockType::Solution => {
+                        prev.is_statement()
+                            || matches!(prev, BlockType::Example | BlockType::Exercise)
+                    }
+                    Some(prev) => prev.is_statement(),
+                    None => false,
+                };
+                // A claim is only argued with a *mathematical* paragraph; an
+                // unlabelled, math-free paragraph after a theorem is prose.
+                let substantive = score.is_some_and(|score| {
+                    score.features.math_density > 0.05 || score.features.proof_cue
+                });
+                // A second argument opener with no statement in between is a
+                // continuation of the previous argument, not a new block.
+                let continues = last_emitted
+                    .and_then(|tag| tag.block_type())
+                    .is_some_and(|prev| prev == kind);
+
+                if has_lead {
+                    last_begin = Some(kind);
+                } else if continues && !anchored {
+                    tagged.tag = BioTag::Inside(kind);
+                } else if (anchored && substantive) || has_qed {
+                    last_begin = Some(kind);
+                } else {
+                    tagged.tag = BioTag::Outside;
+                    demoting = Some(kind);
+                }
+            }
+            BioTag::Begin(kind) => last_begin = Some(kind),
+            _ => {}
+        }
+        last_emitted = Some(tagged.tag);
+    }
+
+    out
 }
 
 /// Turns one verdict into overrides. Returns whether it could be applied.
@@ -2088,7 +2261,7 @@ mod tests {
         let c = HeuristicClassifier::default();
         // A theorem followed by an outside paragraph packed with logic implication symbols
         let nodes = parse_markdown(
-            "**Theorem 1.** Main statement.\n\nSince $x > 0 \\implies x^2 > 0 \\implies x^3 > 0$, the claim holds.",
+            "**Theorem 1.** Main statement.\n\nSince $x > 0 \\implies x^2 > 0 \\implies x^3 > 0 \\implies x^4 > 0$, the claim holds.",
         );
         let judge = CallCountJudge(std::sync::Mutex::new(0));
         let run = c.classify_with_judge_detailed(&nodes, &judge, 4, ScopeOverrides::default());

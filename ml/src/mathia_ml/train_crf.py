@@ -31,6 +31,14 @@ DEFAULT_OUTPUT_WEIGHTS = Path("crates/math-core/src/crf_weights.json")
 DEFAULT_C1_CANDIDATES: tuple[float, ...] = (0.05, 0.1, 0.2, 0.3)
 DEFAULT_C2_CANDIDATES: tuple[float, ...] = (0.05, 0.1, 0.2, 0.3)
 
+# Transition temperature. The corpus is small and synthetic, so the learned
+# transition prior is overconfident: a proof self-loop of +5 dwarfs the
+# emission evidence and Viterbi never leaves a proof once it enters one. Damping
+# the transition matrix lets the (lexically and structurally grounded) emission
+# model decide block boundaries. 0.4 keeps held-out exact-span F1 high while
+# keeping proof spans bounded on real compiled notes.
+TRANSITION_TEMPERATURE: float = 0.4
+
 
 def load_jsonl_dataset(path: Path) -> list[dict[str, Any]]:
     """Load JSONL dataset as list of raw document dictionaries."""
@@ -216,17 +224,24 @@ def export_crf_weights_json(
 def viterbi_decode(
     sequence_features: Sequence[Mapping[str, float]],
     weights: Mapping[str, Any],
+    transition_temperature: float = TRANSITION_TEMPERATURE,
 ) -> list[str]:
     """Pure Python reference implementation of Viterbi decoder using exported weights.
 
     Validates that Rust Viterbi inference will produce identical results to Python CRFsuite.
+
+    ``transition_temperature`` damps the (overconfident) learned transition
+    prior; see [`TRANSITION_TEMPERATURE`]. Pass ``1.0`` to reproduce the raw
+    sklearn-crfsuite model exactly.
     """
     labels: list[str] = weights["labels"]
     K = len(labels)
     if K == 0 or len(sequence_features) == 0:
         return []
 
-    transitions = np.array(weights["transitions"], dtype=float)  # shape (K, K)
+    transitions = (
+        np.array(weights["transitions"], dtype=float) * transition_temperature
+    )  # shape (K, K)
     state_features: Mapping[str, Mapping[str, float]] = weights["state_features"]
 
     N = len(sequence_features)
@@ -270,7 +285,12 @@ def verify_viterbi_parity(
         Tuple of (parity_percentage, num_matches, total_tokens).
     """
     crf_preds = crf.predict(X_val)
-    viterbi_preds = [viterbi_decode(seq, weights) for seq in X_val]
+    # Compare against the *uncalibrated* decoder: this check verifies that the
+    # exported weights and the Python reference decoder reproduce sklearn-
+    # crfsuite exactly, independent of the inference-time temperature.
+    viterbi_preds = [
+        viterbi_decode(seq, weights, transition_temperature=1.0) for seq in X_val
+    ]
 
     total_tokens = sum(len(seq) for seq in X_val)
     matches = 0

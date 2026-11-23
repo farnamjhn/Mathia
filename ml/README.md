@@ -53,7 +53,9 @@ Mathematical textbooks with LaTeX theorem-like environments (`\begin{theorem}...
    - Drops bolding or trailing colons on 20% of openers.
    - Drops QED symbols ($\blacksquare$, □, `چ.ب.ح`) on 25% of proofs.
    - Splits single-paragraph statements across multiple paragraphs.
-4. Produces aligned `(nodes, features, bio_tags)` JSONL sequences.
+4. Mixes in math-dense exposition (`O`) and multi-paragraph proofs so the model
+   cannot learn "math-dense paragraph = proof".
+5. Produces aligned `(nodes, features, bio_tags)` JSONL sequences.
 
 ```bash
 uv run python -m mathia_ml.dataset_gen \
@@ -84,6 +86,21 @@ uv run python -m mathia_ml.train_crf \
     --val-path data/val.jsonl \
     --output-weights ../crates/math-core/src/crf_weights.json
 ```
+
+#### Transition temperature
+
+The synthetic corpus is small, so the learned transition prior is overconfident:
+a proof self-loop can dwarf the emission evidence and Viterbi then never leaves
+`I-PROOF`. `train_crf.py` therefore damps every transition weight by
+`TRANSITION_TEMPERATURE = 0.4` during decoding, and `crates/math-core/src/crf.rs`
+applies the same constant in both its forward and confidence Viterbi passes.
+Keep the two values in sync. The raw `sklearn-crfsuite` parity check still runs
+at temperature `1.0`, so it compares unmodified transition weights.
+
+Because damped transitions let the emission model decide boundaries, explicit
+openers are anchored deterministically in Rust: a labelled or numbered lead
+("Theorem 2.", "برهان (Proof):", "قضیه ۳-۱") always starts its block, and its
+body span follows the structural rules rather than the CRF's `I-` run.
 
 ### Step 4: Model Evaluation (`evaluate.py`)
 Benchmarks the trained CRF against the baseline HeuristicTagger using `seqeval` exact-span F1, precision, and recall metrics, broken down by language and BlockType:

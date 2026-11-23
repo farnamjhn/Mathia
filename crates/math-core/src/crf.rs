@@ -34,6 +34,15 @@ pub const LOGIC_MED_THRESHOLD: f32 = 0.70;
 /// Math density change threshold for delta feature.
 pub const MATH_DELTA_THRESHOLD: f32 = 0.05;
 
+/// Damping factor applied to every learned transition weight.
+///
+/// The training corpus is small and synthetic, so the learned transition prior
+/// is overconfident: a proof self-loop of `+5` dwarfs the emission evidence and
+/// Viterbi never leaves a proof once it enters one. Damping the transitions
+/// lets the (lexically and structurally grounded) emission model decide block
+/// boundaries. Mirrors `TRANSITION_TEMPERATURE` in `ml/src/mathia_ml/train_crf.py`.
+pub const TRANSITION_TEMPERATURE: f32 = 0.4;
+
 /// View trait abstracting over parsed AST [`Node`] and deserialized [`DumpNode`].
 pub trait CrfNode {
     fn node_kind(&self) -> &str;
@@ -539,7 +548,7 @@ impl CrfTagger {
                 let mut best_prev = 0;
                 let mut best_score = f32::NEG_INFINITY;
                 for (prev, &prev_dp) in dp[t - 1].iter().enumerate().take(k) {
-                    let score = prev_dp + self.model.transitions[prev][j];
+                    let score = prev_dp + self.model.transitions[prev][j] * TRANSITION_TEMPERATURE;
                     if score > best_score {
                         best_score = score;
                         best_prev = prev;
@@ -572,7 +581,7 @@ impl CrfTagger {
             for j in 0..k {
                 let mut max_b = f32::NEG_INFINITY;
                 for next_j in 0..k {
-                    let score = self.model.transitions[j][next_j]
+                    let score = self.model.transitions[j][next_j] * TRANSITION_TEMPERATURE
                         + emissions[t + 1][next_j]
                         + b[t + 1][next_j];
                     if score > max_b {

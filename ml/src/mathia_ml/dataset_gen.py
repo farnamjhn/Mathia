@@ -805,7 +805,10 @@ def inject_noise_and_strip(
         drop_bold = rng.random() < 0.20
         drop_qed = rng.random() < 0.25
         split_statement = (btype != "proof") and (len(atomic_chunks) == 1) and (rng.random() < 0.35)
-        is_implicit_proof = (btype == "proof") and (rng.random() < 0.15)
+        # Implicit proofs (no "برهان"/"Proof" opener) are the hard case on real
+        # notes. Keep a healthy share so the CRF learns that a math-dense
+        # paragraph right after a statement is usually a proof.
+        is_implicit_proof = (btype == "proof") and (rng.random() < 0.45)
 
         # Split single-paragraph statement if requested (Step C)
         if split_statement and len(atomic_chunks) == 1:
@@ -857,6 +860,46 @@ def inject_noise_and_strip(
 # Synthetic Bilingual Document Generator
 # -----------------------------------------------------------------------------
 
+# Math-dense exposition that is *not* a proof. Real compiled notes are full of
+# prose paragraphs saturated with inline math that still belong to the narrative
+# (label O). Without these the CRF learns "math-dense paragraph == proof" and
+# runs away on real documents.
+EXPOSITION_EN = [
+    "This observation shows that the structure of $V$ is preserved under every linear map, so for all $v \\in V$ we have $T(v) = 0$. It therefore follows that $\\dim V = n$; the argument is purely structural and does not establish the claim.",
+    "Suppose $T$ is self-adjoint. Then $V$ decomposes into eigenspaces, and this decomposition is used throughout the chapter. Hence the notation $V = \\bigoplus_\\lambda E_\\lambda$ is convenient, although no proof is given here.",
+    "We write $A = (a_{ij})_{m \\times n}$ and note that the entries $a_{ij} \\in \\mathbb{F}$ determine the map completely. In particular $A x = 0$ whenever $x \\in \\ker A$, which motivates the next definition.",
+    "For $\\lambda \\in \\mathbb{F}$ the set $E_\\lambda = \\{v \\in V \\mid T(v) = \\lambda v\\}$ is a subspace. This is a useful bookkeeping device: it lets us compare $\\dim E_\\lambda$ with $\\dim V$ without assuming anything about the spectrum.",
+    "The reader should keep in mind that $\\langle u, v \\rangle$ is linear in the first slot and conjugate-linear in the second. Consequently $\\|u + v\\|^2 = \\|u\\|^2 + 2\\,\\mathrm{Re}\\langle u, v\\rangle + \\|v\\|^2$, a formula we will reuse repeatedly.",
+    "Throughout, $\\mathcal{L}(V, W)$ denotes the space of linear maps and $\\mathrm{im}\\,T \\subseteq W$ its image. Thus $\\dim \\mathrm{im}\\,T \\le \\dim W$, and equality holds exactly when $T$ is surjective.",
+]
+
+EXPOSITION_FA = [
+    "این نتیجه نشان می‌دهد که ساختار $V$ تحت هر نگاشت خطی پایدار می‌ماند، پس برای هر $v \\in V$ رابطه $T(v) = 0$ برقرار است. بنابراین $\\dim V = n$؛ این استدلال صرفاً ساختاری است و حکم را اثبات نمی‌کند.",
+    "فرض کنید $T$ خودالحاقی باشد. در این صورت $V$ به زیرفضاهای ویژه تجزیه می‌شود و از این تجزیه در سراسر فصل استفاده می‌کنیم. از این رو نماد $V = \\bigoplus_\\lambda E_\\lambda$ مناسب است، هرچند در اینجا برهانی ارائه نمی‌شود.",
+    "می‌نویسیم $A = (a_{ij})_{m \\times n}$ و توجه می‌کنیم که درایه‌های $a_{ij} \\in \\mathbb{F}$ نگاشت را کاملاً مشخص می‌کنند. به‌ویژه $A x = 0$ هرگاه $x \\in \\ker A$، و همین انگیزه تعریف بعدی است.",
+    "برای $\\lambda \\in \\mathbb{F}$ مجموعه $E_\\lambda = \\{v \\in V \\mid T(v) = \\lambda v\\}$ یک زیرفضاست. این یک ابزار ثبت‌کننده سودمند است که امکان مقایسه $\\dim E_\\lambda$ با $\\dim V$ را بدون فرضی درباره طیف فراهم می‌کند.",
+    "باید در نظر داشت که $\\langle u, v \\rangle$ در مؤلفه اول خطی و در مؤلفه دوم مزدوج-خطی است. در نتیجه $\\|u + v\\|^2 = \\|u\\|^2 + 2\\,\\mathrm{Re}\\langle u, v\\rangle + \\|v\\|^2$، فرمولی که بارها به کار می‌بریم.",
+    "در سراسر متن $\\mathcal{L}(V, W)$ فضای نگاشت‌های خطی و $\\mathrm{im}\\,T \\subseteq W$ تصویر آن است. بنابراین $\\dim \\mathrm{im}\\,T \\le \\dim W$، و تساوی دقیقاً هنگامی برقرار است که $T$ پوشا باشد.",
+]
+
+
+def split_proof_paragraphs(text: str, rng: random.Random) -> list[str]:
+    """Split a single-paragraph proof into 2-4 paragraphs at sentence boundaries.
+
+    Multi-paragraph proofs are the norm in real notes. Training only on
+    one-paragraph proofs leaves the CRF with no evidence for when an ``I-PROOF``
+    run should end, which produces unbounded proof spans at inference time.
+    """
+    sentences = [s for s in re.split(r"(?<=[.!?؟])\s+", text.strip()) if s]
+    if len(sentences) < 2:
+        return [text]
+    parts = min(rng.randint(2, 4), len(sentences))
+    groups: list[list[str]] = [[] for _ in range(parts)]
+    for idx, sentence in enumerate(sentences):
+        groups[idx % parts].append(sentence)
+    return [" ".join(group) for group in groups if group]
+
+
 def generate_synthetic_document_segments(
     doc_id: str,
     language: str,
@@ -891,8 +934,21 @@ def generate_synthetic_document_segments(
         is_env=False,
     ))
 
-    # Generate 2-5 semantic environment blocks covering all 12 BlockTypes
-    num_blocks = rng.randint(2, 5)
+    exposition_pool = EXPOSITION_FA if language == "fa" else EXPOSITION_EN
+
+    def add_exposition() -> None:
+        """Insert math-dense narrative prose (label O) between blocks."""
+        segments.append(DocumentSegment(
+            block_type=None,
+            name=None,
+            number=None,
+            paragraphs=[rng.choice(exposition_pool)],
+            language=language,
+            is_env=False,
+        ))
+
+    # Generate 3-7 semantic environment blocks covering all 12 BlockTypes
+    num_blocks = rng.randint(3, 7)
     for _ in range(num_blocks):
         choice = rng.random()
         if choice < 0.20:
@@ -906,15 +962,17 @@ def generate_synthetic_document_segments(
                 language=language,
                 is_env=True,
             ))
-            if "proof" in thm_data and rng.random() < 0.75:
+            if "proof" in thm_data and rng.random() < 0.55:
                 segments.append(DocumentSegment(
                     block_type="proof",
                     name=None,
                     number=None,
-                    paragraphs=[thm_data["proof"]],
+                    paragraphs=split_proof_paragraphs(thm_data["proof"], rng),
                     language=language,
                     is_env=True,
                 ))
+            else:
+                add_exposition()
         elif choice < 0.32:
             # Proposition (+ optional proof in 70%)
             prop_data = rng.choice(domain["propositions"])
@@ -926,15 +984,17 @@ def generate_synthetic_document_segments(
                 language=language,
                 is_env=True,
             ))
-            if "proof" in prop_data and rng.random() < 0.70:
+            if "proof" in prop_data and rng.random() < 0.50:
                 segments.append(DocumentSegment(
                     block_type="proof",
                     name=None,
                     number=None,
-                    paragraphs=[prop_data["proof"]],
+                    paragraphs=split_proof_paragraphs(prop_data["proof"], rng),
                     language=language,
                     is_env=True,
                 ))
+            else:
+                add_exposition()
         elif choice < 0.44:
             # Lemma (+ optional proof in 70%)
             lem_data = rng.choice(domain["lemmas"])
@@ -946,15 +1006,17 @@ def generate_synthetic_document_segments(
                 language=language,
                 is_env=True,
             ))
-            if "proof" in lem_data and rng.random() < 0.70:
+            if "proof" in lem_data and rng.random() < 0.50:
                 segments.append(DocumentSegment(
                     block_type="proof",
                     name=None,
                     number=None,
-                    paragraphs=[lem_data["proof"]],
+                    paragraphs=split_proof_paragraphs(lem_data["proof"], rng),
                     language=language,
                     is_env=True,
                 ))
+            else:
+                add_exposition()
         elif choice < 0.54:
             # Corollary (+ optional proof in 60%)
             cor_data = rng.choice(domain["corollaries"])
@@ -966,15 +1028,17 @@ def generate_synthetic_document_segments(
                 language=language,
                 is_env=True,
             ))
-            if "proof" in cor_data and rng.random() < 0.60:
+            if "proof" in cor_data and rng.random() < 0.45:
                 segments.append(DocumentSegment(
                     block_type="proof",
                     name=None,
                     number=None,
-                    paragraphs=[cor_data["proof"]],
+                    paragraphs=split_proof_paragraphs(cor_data["proof"], rng),
                     language=language,
                     is_env=True,
                 ))
+            else:
+                add_exposition()
         elif choice < 0.64:
             # Definition
             defn_data = rng.choice(domain["definitions"])
@@ -997,15 +1061,17 @@ def generate_synthetic_document_segments(
                 language=language,
                 is_env=True,
             ))
-            if "solution" in ex_data and rng.random() < 0.65:
+            if "solution" in ex_data and rng.random() < 0.50:
                 segments.append(DocumentSegment(
                     block_type="solution",
                     name=None,
                     number=None,
-                    paragraphs=[ex_data["solution"]],
+                    paragraphs=split_proof_paragraphs(ex_data["solution"], rng),
                     language=language,
                     is_env=True,
                 ))
+            else:
+                add_exposition()
         elif choice < 0.82:
             # Claim (+ optional proof in 65%)
             claim_data = rng.choice(domain["claims"])
@@ -1017,15 +1083,17 @@ def generate_synthetic_document_segments(
                 language=language,
                 is_env=True,
             ))
-            if "proof" in claim_data and rng.random() < 0.65:
+            if "proof" in claim_data and rng.random() < 0.45:
                 segments.append(DocumentSegment(
                     block_type="proof",
                     name=None,
                     number=None,
-                    paragraphs=[claim_data["proof"]],
+                    paragraphs=split_proof_paragraphs(claim_data["proof"], rng),
                     language=language,
                     is_env=True,
                 ))
+            else:
+                add_exposition()
         elif choice < 0.90:
             # Remark
             rem = rng.choice(domain["remarks"])
@@ -1060,21 +1128,11 @@ def generate_synthetic_document_segments(
                 is_env=True,
             ))
 
-        # Occasionally add connective prose
-        if rng.random() < 0.40:
-            connective = (
-                "این نتایج ساختار کلی فضا را روشن می‌سازند."
-                if language == "fa"
-                else "These preliminary observations motivate the subsequent development."
-            )
-            segments.append(DocumentSegment(
-                block_type=None,
-                name=None,
-                number=None,
-                paragraphs=[connective],
-                language=language,
-                is_env=False,
-            ))
+        # Often continue with math-dense narrative prose. This teaches the CRF
+        # that a proof (or any statement) is usually followed by exposition, so
+        # an ``I-PROOF`` run must be able to end.
+        if rng.random() < 0.55:
+            add_exposition()
 
     return title, segments
 
