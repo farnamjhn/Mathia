@@ -107,8 +107,20 @@ function setup(customTree) {
   return { body, main, targets, viewport, fire, click, control, node, position, camera, zoom, drag, api: window.Mathia.mindmap };
 }
 
+test("branches start collapsed so only the root is visible", () => {
+  const s = setup();
+  assert.equal(s.node("root").style.display, "");
+  assert.equal(s.node("section").style.display, "none");
+  assert.equal(s.node("definition").style.display, "none");
+  const fold = s.node("root").querySelector(".mx-map-fold");
+  assert.equal(fold.attributes["aria-expanded"], "false");
+  s.click(s.control("Expand all"));
+  assert.equal(s.node("definition").style.display, "");
+});
+
 test("card dragging respects zoom, follows the pointer, and suppresses navigation", () => {
   const s = setup();
+  s.click(s.control("Expand all"));
   s.click(s.control("Zoom in"));
   const before = s.position("definition"), camera = s.camera(), scale = s.zoom();
   s.drag("definition", 96, -48);
@@ -129,7 +141,9 @@ test("card dragging respects zoom, follows the pointer, and suppresses navigatio
 });
 
 test("manual positions survive folding and view changes; reset restores automatic layout", () => {
-  const s = setup(), initial = s.position("definition");
+  const s = setup();
+  s.click(s.control("Expand all"));
+  const expanded = s.position("definition");
   s.drag("definition", -1400, -800);
   const moved = s.position("definition");
   assert.ok(moved.x < 0 && moved.y < 0);
@@ -143,11 +157,13 @@ test("manual positions survive folding and view changes; reset restores automati
   assert.ok(tx + moved.x * s.zoom() >= 23.9);
   assert.ok(ty + moved.y * s.zoom() >= 23.9);
   s.click(s.control("Reset layout"));
-  assert.deepEqual(s.position("definition"), initial);
+  assert.deepEqual(s.position("definition"), expanded);
 });
 
 test("click threshold, fold buttons, keyboard movement, and pointer cancellation", () => {
-  const s = setup(), initial = s.position("definition"), section = s.position("section");
+  const s = setup();
+  s.click(s.control("Expand all"));
+  const initial = s.position("definition"), section = s.position("section");
   const label = s.node("definition").querySelector(".mx-map-label");
   s.drag("definition", 2, 1);
   assert.deepEqual(s.position("definition"), initial);
@@ -170,7 +186,9 @@ test("click threshold, fold buttons, keyboard movement, and pointer cancellation
 });
 
 test("background dragging still pans the camera without moving cards", () => {
-  const s = setup(), before = s.position("definition"), camera = s.camera();
+  const s = setup();
+  s.click(s.control("Expand all"));
+  const before = s.position("definition"), camera = s.camera();
   s.fire(s.viewport, "pointerdown");
   s.fire(s.viewport, "pointermove", { clientX: 100, clientY: 50 });
   s.fire(s.viewport, "pointerup", { clientX: 100, clientY: 50 });
@@ -188,6 +206,7 @@ test("initial layout separates columns and groups unequal section subtrees", () 
     section("long", [leaf("two"), leaf("three"), leaf("four")]),
     section("last", [leaf("five")]),
   ] });
+  s.click(s.control("Expand all"));
   const height = (id) => parseFloat(s.node(id).style.height);
   const bottom = (id) => s.position(id).y + height(id);
   assert.ok(s.position("short").x - s.position("root").x - 280 >= 140, "columns leave room for connectors");
@@ -229,6 +248,7 @@ test("mind map data container with proof_id, key_terms, and dependency edges", (
   };
 
   const s = setup(data);
+  s.click(s.control("Expand all"));
   // Verify key_terms rendered
   const secNode = s.node("sec-1");
   const terms = secNode.querySelectorAll(".mx-map-term");

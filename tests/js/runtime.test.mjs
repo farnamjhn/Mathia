@@ -1098,6 +1098,8 @@ describe("deterministic mind map", () => {
     assert.equal(initial.proof, false);
     await s.page.getByRole("button", { name: "Split view", exact: true }).click();
     const visible = () => s.page.locator(".mx-map-node:visible").count();
+    assert.equal(await visible(), 1, "branches start collapsed");
+    await s.page.getByRole("button", { name: "Expand all", exact: true }).click();
     assert.equal(await visible(), initial.total);
     const canvas = s.page.locator(".mx-map-world");
     const beforeZoom = await canvas.getAttribute("style");
@@ -1118,6 +1120,7 @@ describe("deterministic mind map", () => {
   test("Persian cards isolate KaTeX and fit their measured height", async () => {
     const s = await open(pages.mindmap);
     await s.page.getByRole("button", { name: "نمای دوگانه", exact: true }).click();
+    await s.page.getByRole("button", { name: "باز کردن همه", exact: true }).click();
     assert.equal(await s.page.locator(".mx-map-card[dir=auto]").count() > 0, true);
     assert.ok(await s.page.locator(".mx-map-card .katex").count() > 0);
     assert.deepEqual(await s.page.locator(".mx-map-card .katex").evaluateAll((math) => math.map((el) => {
@@ -1137,6 +1140,7 @@ describe("deterministic mind map", () => {
       const s = await open(url);
       const rtl = url === pages.mindmap;
       await s.page.getByRole("button", { name: rtl ? "نقشه ذهنی" : "Mind map", exact: true }).click();
+      await s.page.getByRole("button", { name: rtl ? "باز کردن همه" : "Expand all", exact: true }).click();
       async function assertGeometry() {
         // Wait until card position transitions finish before comparing screen
         // coordinates, including the shared HTML camera and SVG edge matrix.
@@ -1176,6 +1180,7 @@ describe("deterministic mind map", () => {
   test("dragging moves one card at the current zoom without navigating or panning", async () => {
     const s = await open(pages.plain);
     await s.page.getByRole("button", { name: "Mind map", exact: true }).click();
+    await s.page.getByRole("button", { name: "Expand all", exact: true }).click();
     await s.page.getByRole("button", { name: "Zoom in", exact: true }).click();
     const node = s.page.locator('[data-map-id="sec-1"]');
     const state = () => node.evaluate((el) => ({ x: parseFloat(el.style.left), y: parseFloat(el.style.top),
