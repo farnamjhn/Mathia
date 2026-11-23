@@ -290,6 +290,7 @@ Comprehensive architecture, design, and extension documentation is available in 
 - [**System Overview & Architecture (`docs/ARCHITECTURE.md`)**](docs/ARCHITECTURE.md) — Authoritative blueprint covering the compiler pipeline, AST representation, block detection stages, Linear-Chain CRF model with Viterbi decoding, deterministic guardrails, external judge wiring, and the client-side interactive AI security model.
 - [**Extension Guide (`docs/EXTENDING.md`)**](docs/EXTENDING.md) — Step-by-step developer recipes for adding new semantic block types, adding feature signals, retraining & deploying CRF weights, adding CLI options, adding Tauri IPC commands, and integrating new AI providers.
 - [**Known Issues & Technical Debt (`docs/KNOWN_ISSUES.md`)**](docs/KNOWN_ISSUES.md) — Detailed catalog of grounded architectural constraints, implicit assumptions, fragile couplings, and edge cases.
+- [**Real-Notes LLM Labeling (`docs/REAL_NOTES_LABELING.md`)**](docs/REAL_NOTES_LABELING.md) — End-to-end guide to extracting real Markdown/HTML notes, labeling BIO tags with an LLM, validating the output, and feeding it into CRF training.
 - [**ML Flywheel Developer Guide (`ml/README.md`)**](ml/README.md) — Guide to the offline Python workspace: synthetic OCR dataset generation, hyperparameter tuning, exact-span F1 evaluation, and weight export.
 
 <!-- DEVELOPMENT -->

@@ -193,7 +193,7 @@ flowchart TD
 - [`src/jev.rs`](../crates/math-judge/src/jev.rs): Direct REST API client integrations for TypeSafe Jev, Anthropic Messages API, and OpenAI Chat Completions.
 
 #### CLI Front-End (`crates/mathia-cli`)
-- [`src/main.rs`](../crates/mathia-cli/src/main.rs): Command-line driver supporting `compile`, `--watch` hot-reloading, `--fix` OCR repair, and `dump-features`.
+- [`src/main.rs`](../crates/mathia-cli/src/main.rs): Command-line driver supporting `compile`, `--watch` hot-reloading, `--fix` OCR repair, and `dump-features` for Markdown or HTML inputs.
 
 #### Desktop Application Backend (`src-tauri`)
 - [`src/main.rs`](../src-tauri/src/main.rs): Tauri v2 application initialization, window lifecycle, IPC command handlers (`analyze`, `compile`, `export`, `fix`), and `mathia-preview://` custom URI scheme protocol.
@@ -216,6 +216,9 @@ flowchart TD
 - [`src/mathia_ml/evaluate.py`](../ml/src/mathia_ml/evaluate.py): Exact-span sequence labeling benchmark using `seqeval`.
 - [`src/mathia_ml/split.py`](../ml/src/mathia_ml/split.py): Document-stratified dataset splitter with zero document leakage.
 - [`src/mathia_ml/export_feedback.py`](../ml/src/mathia_ml/export_feedback.py): Pipeline converting manual user corrections into labeled training instances.
+- [`src/mathia_ml/prepare_unlabeled.py`](../ml/src/mathia_ml/prepare_unlabeled.py): Extracts real Markdown/HTML notes into full and compact unlabeled JSONL.
+- [`src/mathia_ml/import_labeled.py`](../ml/src/mathia_ml/import_labeled.py): Validates LLM BIO labels and merges them into `LabeledDocument` JSONL.
+- [`prompts/label_bio_tags.md`](../ml/prompts/label_bio_tags.md): Self-contained LLM prompt for labeling real notes.
 - [`src/mathia_ml/schema.py`](../ml/src/mathia_ml/schema.py): Pydantic data models for feature dumps and labeled tokens.
 
 #### Automated Testing Suites (`tests/`)
@@ -373,6 +376,7 @@ graph LR
 - **Model Training**: [`ml/src/mathia_ml/train_crf.py`](../ml/src/mathia_ml/train_crf.py) fits L-BFGS CRF parameters using `sklearn-crfsuite`, searches L1/L2 penalties, and serializes optimized weights to [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json).
 - **Exact-Span Evaluation**: [`ml/src/mathia_ml/evaluate.py`](../ml/src/mathia_ml/evaluate.py) evaluates F1 exact span performance using `seqeval`.
 - **User Feedback Loop**: [`ml/src/mathia_ml/export_feedback.py`](../ml/src/mathia_ml/export_feedback.py) translates manual overrides collected in the desktop app into new training instances.
+- **Real-Notes LLM Labeling**: [`ml/src/mathia_ml/prepare_unlabeled.py`](../ml/src/mathia_ml/prepare_unlabeled.py) extracts AST nodes and features from real Markdown/HTML notes, [`ml/prompts/label_bio_tags.md`](../ml/prompts/label_bio_tags.md) provides the labeling prompt, and [`ml/src/mathia_ml/import_labeled.py`](../ml/src/mathia_ml/import_labeled.py) validates and merges the LLM's BIO tags back into `LabeledDocument` JSONL. See [`docs/REAL_NOTES_LABELING.md`](REAL_NOTES_LABELING.md).
 
 ---
 
