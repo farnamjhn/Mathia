@@ -1224,3 +1224,36 @@ describe("deterministic mind map", () => {
     await finish(s);
   });
 });
+
+describe("obsidian-style graph", () => {
+  test("renders every node, filters, and navigates into the document", async () => {
+    const s = await open(pages.plain);
+    const total = await s.page.evaluate(() => {
+      const walk = (node) => [node, ...node.children.flatMap(walk)];
+      return walk(window.Mathia.mindmap.tree).length;
+    });
+    await s.page.getByRole("button", { name: "Graph", exact: true }).click();
+    assert.equal(await s.page.locator("#mx-main").isVisible(), false);
+    assert.equal(await s.page.locator(".mx-graph-panel").isVisible(), true);
+    assert.equal(await s.page.locator(".mx-graph-node").count(), total);
+    assert.ok(await s.page.locator(".mx-graph-link").count() >= total - 1);
+    assert.ok(await s.page.locator(".mx-graph-link.mx-graph-ref").count() >= 1, "cross-references stay distinct");
+    const positions = await s.page.locator(".mx-graph-node").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("transform")));
+    assert.equal(new Set(positions).size, total, "force layout separates every node");
+
+    await s.page.locator(".mx-graph-search").fill("Lagrange");
+    assert.ok(await s.page.locator(".mx-graph-node.mx-graph-search-match").count() >= 1);
+    await s.page.locator(".mx-graph-search").fill("");
+
+    const sections = s.page.getByRole("checkbox", { name: "Sections", exact: true });
+    await sections.uncheck();
+    assert.equal(await s.page.locator('.mx-graph-node[data-graph-id="sec-1"]').isVisible(), false);
+    await sections.check();
+    assert.equal(await s.page.locator('.mx-graph-node[data-graph-id="sec-1"]').isVisible(), true);
+
+    await s.page.locator('.mx-graph-node[data-graph-id="block-theorem-1"]').dispatchEvent("click");
+    assert.equal(await s.page.locator("#mx-main").isVisible(), true);
+    assert.equal(await s.page.locator("#block-theorem-1").evaluate((el) => el.classList.contains("mathia-scroll-highlight")), true);
+    await finish(s);
+  });
+});

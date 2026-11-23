@@ -14,6 +14,7 @@
     var htmlNs = "http:" + "//www.w3.org/1999/xhtml";
     var mode = "document", scale = 1, tx = 24, ty = 24;
     var collapsed = new Set(), entries = new Map(), bounds = { x: 0, y: 0, width: 1, height: 1 }, connections = [];
+    var extraViews = {};
     var showDependencies = false;
     var say = function (en, fa) { return rtl ? fa : en; };
     function element(tag, cls, text) {
@@ -39,6 +40,13 @@
     [["document", "Document", "سند"], ["split", "Split view", "نمای دوگانه"], ["map", "Mind map", "نقشه ذهنی"]].forEach(function (item) {
       modes[item[0]] = button(switcher, say(item[1], item[2]), function () { setMode(item[0]); });
     });
+    // Other views (the graph) plug into the same switcher instead of
+    // duplicating the document/split/map state machine.
+    function registerView(id, en, fa, viewPanel, onShow, onHide) {
+      extraViews[id] = { panel: viewPanel, onShow: onShow, onHide: onHide };
+      modes[id] = button(switcher, say(en, fa), function () { setMode(id); });
+      modes[id].setAttribute("aria-pressed", "false");
+    }
     document.body.appendChild(switcher);
     var panel = element("section", "mx-map-panel");
     panel.hidden = true;
@@ -300,7 +308,7 @@
     var observer;
     function watchDocument() {
       if (observer) observer.disconnect();
-      if (!window.IntersectionObserver || mode === "map") return;
+      if (!window.IntersectionObserver || (mode !== "document" && mode !== "split")) return;
       observer = new IntersectionObserver(function (changes) {
         var visible = changes.filter(function (e) { return e.isIntersecting; });
         if (visible.length) select(visible[0].target.id);
@@ -314,15 +322,22 @@
       });
     }
     function setMode(next) {
+      var previous = mode, extra = extraViews[next];
       mode = next; document.body.dataset.mxView = mode;
-      panel.hidden = mode === "document";
-      main.hidden = mode === "map";
+      panel.hidden = mode === "document" || !!extra;
+      main.hidden = mode !== "document" && mode !== "split";
+      Object.keys(extraViews).forEach(function (id) { extraViews[id].panel.hidden = id !== mode; });
+      if (previous !== mode) {
+        var leaving = extraViews[previous];
+        if (leaving && leaving.onHide) leaving.onHide();
+        if (extra && extra.onShow) extra.onShow();
+      }
       Object.keys(modes).forEach(function (key) { modes[key].setAttribute("aria-pressed", String(key === mode)); });
-      if (mode !== "document") { layout(); fit(); }
+      if (mode === "split" || mode === "map") { layout(); fit(); }
       watchDocument();
     }
     function navigate(id) {
-      if (mode === "map") setMode("split");
+      if (mode !== "document" && mode !== "split") setMode("split");
       var target = document.getElementById(id);
       if (!target) return;
       target.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -467,7 +482,7 @@
         }, "image/png");
       } catch (_) { status.textContent = say("Export failed. Try SVG.", "خروجی ناموفق بود؛ SVG را امتحان کنید."); }
     }
-    window.Mathia.mindmap = { tree: tree, data: raw, setMode: setMode, updateDependencies: updateDependencies };
+    window.Mathia.mindmap = { tree: tree, data: raw, setMode: setMode, navigate: navigate, registerView: registerView, updateDependencies: updateDependencies };
     setMode("document");
     if (document.fonts) document.fonts.ready.then(function () { if (!panel.hidden) { layout(); fit(); } });
   }

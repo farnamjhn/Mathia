@@ -147,7 +147,7 @@ flowchart TD
    - Subprocess execution is managed by [`CommandJudge`](../crates/math-judge/src/lib.rs), remote HTTP calls by [`ApiJudge`](../crates/math-judge/src/lib.rs) and [`crates/math-judge/src/jev.rs`](../crates/math-judge/src/jev.rs), and deduplication by [`CachedJudge`](../crates/math-judge/src/lib.rs).
    - Construct the validated [`model::Document`](../crates/math-core/src/model.rs).
 7. **Rendering & Export**:
-   - **HTML Document**: [`html::render()`](../crates/math-core/src/html.rs) compiles the Askama template in [`crates/math-core/templates/document.html`](../crates/math-core/templates/document.html), inlining fonts ([`crates/math-core/assets/fonts/`](../crates/math-core/assets/fonts/)), KaTeX ([`crates/math-core/assets/katex/`](../crates/math-core/assets/katex/)), runtime scripts ([`crates/math-core/assets/runtime.js`](../crates/math-core/assets/runtime.js), [`crates/math-core/assets/mindmap.js`](../crates/math-core/assets/mindmap.js), [`crates/math-core/assets/ai.js`](../crates/math-core/assets/ai.js)), and computing exact SHA-256 CSP hashes ([`crates/math-core/src/sha256.rs`](../crates/math-core/src/sha256.rs)).
+   - **HTML Document**: [`html::render()`](../crates/math-core/src/html.rs) compiles the Askama template in [`crates/math-core/templates/document.html`](../crates/math-core/templates/document.html), inlining fonts ([`crates/math-core/assets/fonts/`](../crates/math-core/assets/fonts/)), KaTeX ([`crates/math-core/assets/katex/`](../crates/math-core/assets/katex/)), runtime scripts ([`crates/math-core/assets/runtime.js`](../crates/math-core/assets/runtime.js), [`crates/math-core/assets/mindmap.js`](../crates/math-core/assets/mindmap.js), [`crates/math-core/assets/graph.js`](../crates/math-core/assets/graph.js), [`crates/math-core/assets/ai.js`](../crates/math-core/assets/ai.js)), and computing exact SHA-256 CSP hashes ([`crates/math-core/src/sha256.rs`](../crates/math-core/src/sha256.rs)).
    - **Markdown Export**: [`markdown::render()`](../crates/math-core/src/markdown.rs) reproduces standardized Markdown with canonical LaTeX environment tags and bold badges.
 
 ---
@@ -186,9 +186,10 @@ flowchart TD
 - [`src/sha256.rs`](../crates/math-core/src/sha256.rs): Zero-dependency pure-Rust SHA-256 implementation.
 - [`src/config.rs`](../crates/math-core/src/config.rs): TOML/JSON scoring and scope configuration schemas ([`ScoringConfig`](../crates/math-core/src/config.rs)).
 - [`assets/runtime.js`](../crates/math-core/assets/runtime.js): Micro-runtime for reading mode, sidebar navigation, keyboard shortcuts, and KaTeX rendering.
-- [`assets/mindmap.js`](../crates/math-core/assets/mindmap.js): Client-side SVG/HTML canvas renderer for interactive mindmap exploration.
+- [`assets/mindmap.js`](../crates/math-core/assets/mindmap.js): Client-side SVG/HTML canvas renderer for interactive mindmap exploration; owns the shared Document/Split/Mind map/Graph view switcher.
+- [`assets/graph.js`](../crates/math-core/assets/graph.js): Obsidian-style force-directed graph over the same mindmap nodes and dependency edges, with pan, zoom, drag, search, and type filters.
 - [`assets/ai.js`](../crates/math-core/assets/ai.js): In-browser client-side LLM streaming runtime for Ask and Illustrate features.
-- [`assets/style.css`](../crates/math-core/assets/style.css), [`assets/mindmap.css`](../crates/math-core/assets/mindmap.css), [`assets/ai.css`](../crates/math-core/assets/ai.css): Inlined styling for standalone documents.
+- [`assets/style.css`](../crates/math-core/assets/style.css), [`assets/mindmap.css`](../crates/math-core/assets/mindmap.css), [`assets/graph.css`](../crates/math-core/assets/graph.css), [`assets/ai.css`](../crates/math-core/assets/ai.css): Inlined styling for standalone documents.
 - [`assets/fonts/`](../crates/math-core/assets/fonts/): Inlined Vazirmatn variable fonts in WOFF2 format.
 - [`assets/katex/`](../crates/math-core/assets/katex/): Embedded KaTeX JavaScript and CSS distribution.
 
@@ -482,7 +483,7 @@ The HTML renderer compiles [`Document`](../crates/math-core/src/model.rs) into a
 - **Asset Inlining**:
   - Fonts: Vazirmatn variable font (weights 100–900) from [`crates/math-core/assets/fonts/`](../crates/math-core/assets/fonts/) is embedded as a WOFF2 `data:font/woff2;base64,...` URI.
   - KaTeX: Pre-processed CSS with fonts inlined as data URIs and `katex.min.js` from [`crates/math-core/assets/katex/`](../crates/math-core/assets/katex/) are inlined directly into `<style>` and `<script>` tags.
-  - Runtime: Vanilla JS navigation runtime ([`assets/runtime.js`](../crates/math-core/assets/runtime.js)) and hierarchical mindmap navigator ([`assets/mindmap.js`](../crates/math-core/assets/mindmap.js)) are concatenated and embedded.
+  - Runtime: Vanilla JS navigation runtime ([`assets/runtime.js`](../crates/math-core/assets/runtime.js)), hierarchical mindmap navigator ([`assets/mindmap.js`](../crates/math-core/assets/mindmap.js)), and force-directed graph ([`assets/graph.js`](../crates/math-core/assets/graph.js)) are concatenated and embedded.
 - **Content Security Policy (CSP)**:
   Mathia generates a strict CSP meta header:
   ```text
@@ -532,6 +533,6 @@ To preserve security and isolate the desktop application context:
 
 ### Automated End-to-End Browser Testing
 Frontend runtime behaviors and client-side interactions are verified via Playwright integration suites:
-- [`tests/js/runtime.test.mjs`](../tests/js/runtime.test.mjs): Verifies client-side reading controls, TOC navigation, reading mode toggles, and KaTeX formula typesetting.
+- [`tests/js/runtime.test.mjs`](../tests/js/runtime.test.mjs): Verifies client-side reading controls, TOC navigation, reading mode toggles, KaTeX formula typesetting, mindmap interactions, and the Obsidian-style graph view.
 - [`tests/js/mindmap-interactions.test.mjs`](../tests/js/mindmap-interactions.test.mjs): Validates mindmap pan/zoom canvas interactions, node collapsing, card positioning, and dependency edge overlays.
 - [`tests/js/harness.mjs`](../tests/js/harness.mjs): Headless browser lifecycle and test harness orchestration.

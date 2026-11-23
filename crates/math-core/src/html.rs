@@ -299,9 +299,10 @@ pub fn render_with_raw_content(
         .unwrap_or(if rtl { "جزوه" } else { "Study guide" });
 
     let runtime_js = normalize_newlines(&format!(
-        "{}\n{}",
+        "{}\n{}\n{}",
         RUNTIME_JS,
-        include_str!("../assets/mindmap.js")
+        include_str!("../assets/mindmap.js"),
+        include_str!("../assets/graph.js")
     ))
     .replace("</script", "<\\/script");
     let katex = match &options.math {
@@ -355,6 +356,7 @@ pub fn render_with_raw_content(
     let mut css = font_css(&options.fonts);
     css.push_str(STYLE_CSS);
     css.push_str(include_str!("../assets/mindmap.css"));
+    css.push_str(include_str!("../assets/graph.css"));
     if has_ai {
         css.push_str(AI_CSS);
     }
@@ -679,6 +681,9 @@ mod tests {
                 .all(|&id| dom.element(id).is_none())
         );
         assert!(html.contains("foreignObject"));
+        assert!(html.contains("mx-graph-panel"));
+        assert!(html.contains("mx-graph-node"));
+        assert!(html.contains("registerView"));
     }
 
     #[test]

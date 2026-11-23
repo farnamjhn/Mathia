@@ -1,0 +1,47 @@
+/* Obsidian-style graph view. Shared by exported documents and the desktop preview. */
+.mx-graph-panel { position:fixed; inset-block:66px 0; inset-inline:0; z-index:4; display:flex; flex-direction:column; background:var(--mx-bg-secondary); }
+.mx-graph-panel[hidden] { display:none; }
+.mx-graph-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:10px; border-bottom:1px solid var(--mx-border); }
+.mx-graph-toolbar button { font:500 12px var(--mx-font-sans); padding:5px 8px; border:1px solid transparent; border-radius:4px; background:var(--mx-bg); color:var(--mx-text); cursor:pointer; }
+.mx-graph-toolbar button:hover { border-color:var(--mx-gray-500); }
+.mx-graph-toolbar button.mx-graph-btn-active, .mx-graph-toolbar button[aria-pressed="true"] { background:var(--mx-text); color:var(--mx-bg); }
+.mx-graph-toolbar button:focus-visible, .mx-graph-search:focus-visible, .mx-graph-legend input:focus-visible { outline:2px solid var(--mx-text); outline-offset:-2px; }
+.mx-graph-search { width:160px; padding:5px 9px; border:1px solid var(--mx-border); border-radius:4px; background:var(--mx-bg); color:var(--mx-text); font:500 12px var(--mx-font-sans); }
+.mx-graph-legend { display:inline-flex; align-items:center; gap:4px; font:500 11.5px var(--mx-font-sans); color:var(--mx-text); cursor:pointer; white-space:nowrap; }
+.mx-graph-legend input { margin:0; accent-color:var(--mx-text); }
+.mx-graph-swatch { display:inline-block; width:9px; height:9px; border-radius:50%; }
+.mx-graph-status { margin-inline-start:auto; font:500 11.5px var(--mx-font-sans); color:var(--mx-gray-500); }
+.mx-graph-canvas { position:relative; flex:1; min-height:0; overflow:hidden; direction:ltr; touch-action:none; cursor:grab; background-image:radial-gradient(var(--mx-gray-200) 1px, transparent 1px); background-size:24px 24px; }
+.mx-graph-canvas:active, .mx-graph-drag-active { cursor:grabbing; }
+.mx-graph-svg { display:block; width:100%; height:100%; }
+.mx-graph-link { stroke:var(--mx-gray-400); stroke-width:1; opacity:.5; }
+.mx-graph-link.mx-graph-ref { stroke:#f59e0b; stroke-dasharray:5,4; opacity:.75; }
+.mx-graph-link.mx-graph-dim { opacity:.07; }
+.mx-graph-link.mx-graph-hot { stroke:var(--mx-text); opacity:.9; }
+.mx-graph-node { cursor:pointer; }
+.mx-graph-node circle { stroke:var(--mx-bg-secondary); stroke-width:1.5; }
+.mx-graph-node text { fill:var(--mx-text); font:10px var(--mx-font-sans); text-anchor:middle; pointer-events:none; paint-order:stroke; stroke:var(--mx-bg-secondary); stroke-width:2.5px; stroke-linejoin:round; }
+.mx-graph-node.mx-graph-dim { opacity:.16; }
+.mx-graph-node.mx-graph-hot circle { stroke:var(--mx-text); stroke-width:2.5; }
+.mx-graph-node:focus { outline:none; }
+.mx-graph-node:focus-visible circle { stroke:var(--mx-text); stroke-width:3; }
+.mx-graph-node.mx-graph-search-dim { opacity:.12; }
+.mx-graph-node.mx-graph-search-match circle { stroke:var(--mx-text); stroke-width:2.5; }
+.mx-graph-hide-labels .mx-graph-node text { display:none; }
+.mx-graph-hide-labels .mx-graph-node.mx-graph-hot text, .mx-graph-hide-labels .mx-graph-node.mx-graph-search-match text { display:block; }
+.mx-graph-root circle { fill:var(--mx-text); }
+.mx-graph-root text { font-weight:650; }
+.mx-graph-heading circle { fill:#64748b; }
+.mx-graph-definition circle { fill:#3b82f6; }
+.mx-graph-theorem circle, .mx-graph-lemma circle, .mx-graph-corollary circle, .mx-graph-proposition circle { fill:#a78bfa; }
+.mx-graph-example circle { fill:#10b981; }
+.mx-graph-formula circle { fill:#f59e0b; }
+.mx-graph-note circle { fill:#94a3b8; }
+body[data-mx-view="graph"] .mx-toc, body[data-mx-view="graph"] .mx-toc-toggle { display:none; }
+@media (max-width:640px) {
+  .mx-graph-toolbar { gap:4px; }
+  .mx-graph-search { width:100%; }
+  .mx-graph-status { margin-inline-start:0; }
+}
+@media (prefers-reduced-motion:reduce) { .mx-graph-node { transition:none; } }
+@media print { .mx-graph-panel { display:none !important; } }
