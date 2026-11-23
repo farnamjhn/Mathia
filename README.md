@@ -53,7 +53,7 @@
       <a href="#usage">Usage</a>
       <ul>
         <li><a href="#cli-options">CLI Options</a></li>
-        <li><a href="#decision-models">Decision Models</a></li>
+        <li><a href="#decision-pipeline">Decision Pipeline</a></li>
         <li><a href="#interactive-ai">Interactive AI</a></li>
         <li><a href="#desktop-app">Desktop App</a></li>
       </ul>
@@ -186,9 +186,8 @@ interval. English words and parenthesised glosses are never touched.
 ### CLI Options
 
 - `--config scoring.toml` — scoring configuration (TOML or JSON); `--dump-config` prints the
-  defaults. `[scorer] model = "tree"` switches from the weighted sum to a static decision tree
-  over the same features.
-- `--explain` — print every node's scores and why each block ended where it did.
+  defaults.
+- `--explain` — print every node's BIO tag and confidence, and why each block ended where it did.
 - `--font F.woff2` — embed this WOFF2 text font instead of the bundled Vazirmatn; `--no-font`
   embeds none.
 - `--katex-dir DIR` — inline a local KaTeX distribution; `--no-math` leaves LaTeX unrendered.
@@ -199,14 +198,14 @@ interval. English words and parenthesised glosses are never touched.
 - `--ai-custom [NAME=]URL` — pin a custom OpenAI-compatible provider to one endpoint
   (repeatable: e.g. `https://api.deepseek.com/v1`, `ollama=http://localhost:11434/v1`).
 
-### Decision Models
+### Decision Pipeline
 
-Mathia supports multiple decision models to detect block openers and their scopes:
+Block detection runs one pipeline:
 
-1. **Linear Weighted Sum (Default)**: Evaluates weighted features per candidate block type against a configurable threshold (`--config scoring.toml`).
-2. **Static Decision Tree (`[scorer] model = "tree"`)**: A deterministic binary test tree evaluated over node features.
-3. **Linear-Chain Conditional Random Field (CRF)**: A joint BIO sequence labeling model trained with `sklearn-crfsuite` on bilingual textbook datasets and decoded in pure Rust via Viterbi dynamic programming with embedded compile-time weights (`crf_weights.json`).
-4. **External Judge (`--judge CMD`)**: Lets an external model review proposed blocks. `CMD` reads one JSON request per line on stdin (block text with LaTeX, neighbours, proposed type and scope) and answers one verdict per line (`accept`, `incomplete`, `overreach`, `reject`, `{"retype": "lemma"}`, `{"end_at": 7}`, `{"start_at": 3}`, optionally with a `confidence`).
+1. **Static lexical features** — [`Lexicon`](crates/math-core/src/features.rs) extracts a feature record per node.
+2. **Linear-Chain CRF** — a joint BIO sequence labeling model trained with `sklearn-crfsuite` on bilingual textbook datasets and decoded in pure Rust via Viterbi dynamic programming with embedded compile-time weights (`crf_weights.json`).
+3. **Deterministic guardrails** — labelled leads are anchored, references and keyword mentions are demoted, argument openers are sanitized, and strongly labelled openers get structural scopes.
+4. **Optional External Judge (`--judge CMD`)** — lets an external model review proposed blocks. `CMD` reads one JSON request per line on stdin (block text with LaTeX, neighbours, proposed type and scope) and answers one verdict per line (`accept`, `incomplete`, `overreach`, `reject`, `{"retype": "lemma"}`, `{"end_at": 7}`, `{"start_at": 3}`, optionally with a `confidence`).
 
 `--judge-cache FILE` keeps verdicts keyed by block text, type and `--judge-model`, so an
 unchanged document is not sent again; `--judge-log FILE` records the resulting corrections,
@@ -288,7 +287,7 @@ repaired copy of the open file (see [Running Mathia](#running-mathia)) and switc
 
 Comprehensive architecture, design, and extension documentation is available in the [`docs/`](docs/) directory:
 
-- [**System Overview & Architecture (`docs/ARCHITECTURE.md`)**](docs/ARCHITECTURE.md) — Authoritative blueprint covering the compiler pipeline, AST representation, block detection stages, Heuristic Decision Tree, Linear-Chain CRF model with Viterbi decoding, external judge wiring, and the client-side interactive AI security model.
+- [**System Overview & Architecture (`docs/ARCHITECTURE.md`)**](docs/ARCHITECTURE.md) — Authoritative blueprint covering the compiler pipeline, AST representation, block detection stages, Linear-Chain CRF model with Viterbi decoding, deterministic guardrails, external judge wiring, and the client-side interactive AI security model.
 - [**Extension Guide (`docs/EXTENDING.md`)**](docs/EXTENDING.md) — Step-by-step developer recipes for adding new semantic block types, adding feature signals, retraining & deploying CRF weights, adding CLI options, adding Tauri IPC commands, and integrating new AI providers.
 - [**Known Issues & Technical Debt (`docs/KNOWN_ISSUES.md`)**](docs/KNOWN_ISSUES.md) — Detailed catalog of grounded architectural constraints, implicit assumptions, fragile couplings, and edge cases.
 - [**ML Flywheel Developer Guide (`ml/README.md`)**](ml/README.md) — Guide to the offline Python workspace: synthetic OCR dataset generation, hyperparameter tuning, exact-span F1 evaluation, and weight export.

@@ -91,15 +91,11 @@ flowchart TD
     
     %% Feature & Tagging
     AST --> Feat["features::Lexicon::extract() -> Vec<NodeFeatures>"]
-    Feat --> TagBranch{"Sequence Tagger"}
-    
-    TagBranch -- "Linear / DecisionTree" --> HeurTag["tagger::HeuristicTagger::tag()"]
-    TagBranch -- "CRF Model" --> CrfTag["crf::CrfTagger::decode_nodes() (Viterbi Trellis)"]
-    
-    HeurTag --> BioTags["BIO Sequence Tags (Vec<TaggedNode>)"]
-    CrfTag --> BioTags
-    
-    BioTags --> TagsToBlocks["classifier::HeuristicClassifier::tags_to_blocks()"]
+    Feat --> CrfTag["crf::CrfTagger::decode_nodes() (Viterbi Trellis)"]
+
+    CrfTag --> BioTags["BIO Sequence Tags (Vec<TaggedNode>)"]
+
+    BioTags --> TagsToBlocks["classifier::BlockClassifier::tags_to_blocks()"]
     
     %% Overrides & Judge
     TagsToBlocks --> Overrides["classifier::ScopeOverrides::resolve() (ContentAnchor)"]
@@ -135,11 +131,10 @@ flowchart TD
 3. **Feature Extraction**:
    - [`features::Lexicon::extract()`](../crates/math-core/src/features.rs) extracts multilingual opener keywords, labels, proof targets, mathematical character densities, logic symbol frequencies, and QED markers into [`NodeFeatures`](../crates/math-core/src/features.rs).
 4. **Sequence Tagging**:
-   - **Heuristic Path**: [`tagger::HeuristicTagger::tag()`](../crates/math-core/src/tagger.rs) computes scoring via linear weights or the decision tree in [`crates/math-core/src/tree.rs`](../crates/math-core/src/tree.rs).
-   - **CRF Path**: [`crf::CrfTagger::decode_nodes()`](../crates/math-core/src/crf.rs) performs dynamic programming Viterbi trellis decoding using embedded compile-time weights from [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json).
+   - [`crf::CrfTagger::decode_nodes()`](../crates/math-core/src/crf.rs) performs dynamic programming Viterbi trellis decoding using embedded compile-time weights from [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json).
    - Tagging produces a sequence of [`TaggedNode`](../crates/math-core/src/tagger.rs) containing [`BioTag`](../crates/math-core/src/tagger.rs) annotations and confidence scores.
 5. **Scoping & Block Classification**:
-   - [`classifier::HeuristicClassifier::tags_to_blocks()`](../crates/math-core/src/classifier.rs) aggregates consecutive tagged nodes into bounded [`SemanticBlock`](../crates/math-core/src/model.rs) units.
+   - [`classifier::BlockClassifier::tags_to_blocks()`](../crates/math-core/src/classifier.rs) aggregates consecutive tagged nodes into bounded [`SemanticBlock`](../crates/math-core/src/model.rs) units and applies the deterministic guardrails.
    - Resolves manual and learned overrides via [`classifier::ScopeOverrides::resolve()`](../crates/math-core/src/classifier.rs) with content-based anchoring ([`ContentAnchor`](../crates/math-core/src/classifier.rs)).
    - Resolves internal prose cross-references using [`crates/math-core/src/crossref.rs`](../crates/math-core/src/crossref.rs).
 6. **Judge Seam & Escalation**:
@@ -172,12 +167,12 @@ flowchart TD
 - [`src/normalize.rs`](../crates/math-core/src/normalize.rs): Idempotent Markdown normalizer (stripping headers/footers, fence unrolling, delimiter standardizing).
 - [`src/repair.rs`](../crates/math-core/src/repair.rs): OCR transcription defect repair and bare math formula auto-wrapping ([`wrap_bare_math`](../crates/math-core/src/repair.rs)).
 - [`src/features.rs`](../crates/math-core/src/features.rs): Lexicon and feature extractor producing [`NodeFeatures`](../crates/math-core/src/features.rs) vectors.
-- [`src/tagger.rs`](../crates/math-core/src/tagger.rs): Sequence tagging abstractions ([`SequenceTagger`](../crates/math-core/src/tagger.rs), [`TaggedNode`](../crates/math-core/src/tagger.rs), [`BioTag`](../crates/math-core/src/tagger.rs), [`HeuristicTagger`](../crates/math-core/src/tagger.rs)).
+- [`src/tagger.rs`](../crates/math-core/src/tagger.rs): Sequence tagging abstractions ([`SequenceTagger`](../crates/math-core/src/tagger.rs), [`TaggedNode`](../crates/math-core/src/tagger.rs), [`BioTag`](../crates/math-core/src/tagger.rs)).
 - [`src/crf.rs`](../crates/math-core/src/crf.rs): Pure-Rust Linear-Chain CRF Viterbi trellis dynamic programming decoder and weights loader.
 - [`src/crf_weights.json`](../crates/math-core/src/crf_weights.json): Embedded compile-time CRF transition and state feature weights (~50 KB).
 - [`src/classifier.rs`](../crates/math-core/src/classifier.rs): Scope absorption, block boundary construction, [`ScopeOverrides`](../crates/math-core/src/classifier.rs), [`ContentAnchor`](../crates/math-core/src/classifier.rs), and [`BlockJudge`](../crates/math-core/src/classifier.rs) trait seam.
 - [`src/crossref.rs`](../crates/math-core/src/crossref.rs): Prose cross-reference parser and linker (connecting textual mentions to block HTML anchors).
-- [`src/tree.rs`](../crates/math-core/src/tree.rs): Static decision tree evaluation engine ([`DecisionTree`](../crates/math-core/src/tree.rs), [`TreeNode`](../crates/math-core/src/tree.rs), [`Test`](../crates/math-core/src/tree.rs)).
+- [`src/scoping.rs`](../crates/math-core/src/scoping.rs): Deterministic structural scoping for strongly labelled openers (`argument_end`, `statement_end`).
 - [`src/html.rs`](../crates/math-core/src/html.rs): Askama-based HTML5 document renderer with automatic SHA-256 CSP computation.
 - [`templates/document.html`](../crates/math-core/templates/document.html): Standalone HTML5 template embedding styles, scripts, fonts, and KaTeX.
 - [`src/markdown.rs`](../crates/math-core/src/markdown.rs): Standardized Markdown document exporter.
@@ -232,7 +227,7 @@ flowchart TD
 
 ## 4. Abstract Syntax Tree (AST) & Node Architecture
 
-The AST in Mathia is deliberately flat rather than deeply nested. This design allows sequence tagging algorithms (CRF Viterbi, greedy BIO) to operate over sequential node atoms without tree-traversal overhead.
+The AST in Mathia is deliberately flat rather than deeply nested. This design lets the CRF Viterbi decoder operate over sequential node atoms without tree-traversal overhead.
 
 ### AST Node Definition ([`crates/math-core/src/model.rs`](../crates/math-core/src/model.rs))
 The document consists of a top-level `Vec<Node>`:
@@ -289,57 +284,22 @@ For every AST node, [`Lexicon::extract`](../crates/math-core/src/features.rs) ex
 - `definitional: bool`: Matches definition phrases ("if and only if", "تعریف می‌شود", "نامیده می‌شود").
 - `continuation: bool`: Matches continuation connectives ("where", "که در آن", "بطوریکه").
 
-### Stage 3: Opener Scoring & Sequence Tagging
-The document is tagged using one of two sequence taggers implementing [`SequenceTagger`](../crates/math-core/src/tagger.rs):
-- **[`HeuristicTagger`](../crates/math-core/src/tagger.rs)**: Evaluates linear weights from [`ScoringConfig`](../crates/math-core/src/config.rs) or the decision tree in [`crates/math-core/src/tree.rs`](../crates/math-core/src/tree.rs). If $\text{score} \ge \text{threshold}$ (default `0.50`), the node is tagged as `Begin(BlockType)`.
-- **[`CrfTagger`](../crates/math-core/src/crf.rs)**: Runs the trained linear-chain CRF model via Viterbi decoding over embedded weights in [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json), assigning global optimal `Begin(BlockType)`, `Inside(BlockType)`, or `Outside` tags.
+### Stage 3: Sequence Tagging
+The document is tagged by [`CrfTagger`](../crates/math-core/src/crf.rs), which runs the trained linear-chain CRF model via Viterbi decoding over embedded weights in [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json), assigning global optimal `Begin(BlockType)`, `Inside(BlockType)`, or `Outside` tags. Each tag carries a confidence margin (the gap to the best alternative path). Custom models can still be injected through the [`SequenceTagger`](../crates/math-core/src/tagger.rs) trait.
 
 ### Stage 4: Scoping & Block Construction ([`classifier.rs`](../crates/math-core/src/classifier.rs))
 In [`tags_to_blocks`](../crates/math-core/src/classifier.rs):
-1. **LaTeX Environment Bypass**: Any [`EnvSpan`](../crates/math-core/src/model.rs) (`\begin{theorem}`) automatically commands score `1.0` and exact boundary coverage, overriding heuristic or CRF decisions unless explicitly suppressed by a user override.
-2. **Greedy Scope Absorption**:
+1. **LaTeX Environment Bypass**: Any [`EnvSpan`](../crates/math-core/src/model.rs) (`\begin{theorem}`) automatically commands score `1.0` and exact boundary coverage, overriding CRF decisions unless explicitly suppressed by a user override.
+2. **Deterministic Guardrails**: Labelled leads are anchored to their keyword's type, references and unlabelled keyword mentions are demoted to prose, `B-` tags on non-openable nodes (display math, rules, tables) are dropped, and argument openers that do not follow the statement they argue about are sanitized.
+3. **Greedy Scope Absorption**:
    - For statements (Theorems, Lemmas, Propositions, Corollaries, Definitions), the scope absorbs subsequent `DisplayMath`, `List`, `Table`, and continuation paragraphs until encountering a new opener, a heading, a non-continuation paragraph, or hitting [`scope.statement_max_nodes`](../crates/math-core/src/config.rs) (default 6).
    - For arguments (Proofs, Solutions), the scope extends until encountering a `qed` marker, a structural heading, or hitting [`scope.proof_max_nodes`](../crates/math-core/src/config.rs) (default 12).
-3. **Argument Linking**: Proofs and Solutions are linked to their corresponding statements ([`SemanticBlock.proves`](../crates/math-core/src/model.rs)) by explicit reference first (`refers_to`), falling back to the nearest preceding unlinked statement.
-4. **Cross-Referencing ([`crossref.rs`](../crates/math-core/src/crossref.rs))**: Textual references in prose (e.g., "by Theorem 3.2", "طبق لم ۱") are converted to internal hyperlinks pointing to the target block's HTML id (`#block-theorem-1`).
+4. **Argument Linking**: Proofs and Solutions are linked to their corresponding statements ([`SemanticBlock.proves`](../crates/math-core/src/model.rs)) by explicit reference first (`refers_to`), falling back to the nearest preceding unlinked statement.
+5. **Cross-Referencing ([`crossref.rs`](../crates/math-core/src/crossref.rs))**: Textual references in prose (e.g., "by Theorem 3.2", "طبق لم ۱") are converted to internal hyperlinks pointing to the target block's HTML id (`#block-theorem-1`).
 
 ---
 
-## 6. Heuristic Decision Tree ([`crates/math-core/src/tree.rs`](../crates/math-core/src/tree.rs))
-
-As an alternative to linear weighted summation, users can configure a static decision tree via `[scorer] model = "tree"` in `scoring.toml` loaded through [`crates/math-core/src/config.rs`](../crates/math-core/src/config.rs).
-
-### Data Model
-```rust
-pub enum TreeNode {
-    Split {
-        test: Test,
-        yes: Box<TreeNode>,
-        no: Box<TreeNode>,
-    },
-    Leaf {
-        score: f32,
-    },
-}
-```
-
-### Tree Evaluation Mechanics
-The tree ([`DecisionTree`](../crates/math-core/src/tree.rs)) is evaluated once per `(NodeFeatures, candidate BlockType)`. Each [`Test`](../crates/math-core/src/tree.rs) asks a contextual question relative to the candidate type:
-- `Lead`: Does the node open with a keyword matching this candidate type without being an active reference?
-- `Labelled`: Is that keyword formatted as a label?
-- `Emphasized`: Does the node start with bold or italic emphasis?
-- `Mention`: Does a keyword of this type appear anywhere in the node?
-- `Qed`: Is a QED marker present?
-- `ProofCue` / `StatementCue` / `Definitional` / `Continuation`: Are structural phrases present?
-- `Kind { kinds }`: Is the candidate type in this set?
-- `Statement`: Is the candidate type a theorem-like statement?
-- `MathAtLeast { value }` / `LogicAtLeast { value }`: Does density meet or exceed the threshold?
-
-The tree is strictly validated on load: maximum recursion depth is capped at 32 (`MAX_TREE_DEPTH`), leaf scores must reside in $[0.0, 1.0]$, and thresholds must be normalized.
-
----
-
-## 7. Machine Learning: Linear-Chain CRF ([`crf.rs`](../crates/math-core/src/crf.rs) & [`ml/`](../ml/pyproject.toml))
+## 6. Machine Learning: Linear-Chain CRF ([`crf.rs`](../crates/math-core/src/crf.rs) & [`ml/`](../ml/pyproject.toml))
 
 The CRF treats block detection as joint sequence labeling, directly predicting transitions between block openers, body paragraphs, and outside text.
 
@@ -416,13 +376,13 @@ graph LR
 
 ---
 
-## 8. Block Judge & LLM Wiring ([`crates/math-judge`](../crates/math-judge/src/lib.rs))
+## 7. Block Judge & LLM Wiring ([`crates/math-judge`](../crates/math-judge/src/lib.rs))
 
 When heuristics or the CRF encounter ambiguity, `math-core` escalates blocks to `math-judge`.
 
 ### Escalation Conditions
 Confidence gating triggers escalation under two specific conditions:
-1. The CRF Viterbi confidence margin falls below [`config.ml_confidence_threshold`](../crates/math-core/src/config.rs) (default `0.30`).
+1. The CRF Viterbi confidence margin falls below [`config.ml_confidence_threshold`](../crates/math-core/src/config.rs) (default `5.0`).
 2. An `Outside` paragraph exhibiting high logic density ($\ge 0.50$) immediately follows a `Theorem` or `Lemma` statement (suspected unlabelled proof).
 
 ### The JSON Protocol Contract
@@ -476,7 +436,7 @@ Possible verdicts:
 
 ---
 
-## 9. Compilation Pipelines & Security Model
+## 8. Compilation Pipelines & Security Model
 
 ### HTML5 Document Compilation ([`crates/math-core/src/html.rs`](../crates/math-core/src/html.rs))
 The HTML renderer compiles [`Document`](../crates/math-core/src/model.rs) into a single standalone HTML5 file using Askama ([`templates/document.html`](../crates/math-core/templates/document.html)).
@@ -513,7 +473,7 @@ When compiled with `--ai` or specific `--ai-provider` flags:
 
 ---
 
-## 10. Desktop Application & IPC Integration ([`src-tauri`](../src-tauri/src/main.rs) & [`ui/`](../ui/index.html))
+## 9. Desktop Application & IPC Integration ([`src-tauri`](../src-tauri/src/main.rs) & [`ui/`](../ui/index.html))
 
 The desktop frontend is an unbundled, frameworkless vanilla ES6/HTML5 application designed for high security and performance:
 

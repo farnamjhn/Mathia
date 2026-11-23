@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use math_core::{
     AiOptions, AiProvider, BlockType, CustomProvider, Document, HtmlOptions, MathAssets,
-    ScopeOverrides, ScoringConfig,
+    ScopeOverrides, ScoringConfig, TaggedNode,
 };
 use serde::{Deserialize, Serialize};
 
@@ -105,14 +105,21 @@ impl CompileOptions {
     }
 }
 
-/// Scores of one node, for the block inspector.
+/// BIO tag and confidence of one node, for the block inspector.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ScoreView {
-    pub best: BlockType,
-    pub score: f32,
-    pub opens: bool,
-    /// Every semantic type with its score.
-    pub scores: Vec<(BlockType, f32)>,
+pub struct TagView {
+    /// BIO label, e.g. `O`, `B-THEOREM`, `I-PROOF`.
+    pub label: String,
+    pub kind: Option<BlockType>,
+    pub confidence: f32,
+}
+
+fn tag_view(tag: TaggedNode) -> TagView {
+    TagView {
+        label: tag.tag.to_label(),
+        kind: tag.tag.block_type(),
+        confidence: tag.confidence,
+    }
 }
 
 /// `math_core::Analysis` in a serialisable shape.
@@ -120,10 +127,11 @@ pub struct ScoreView {
 pub struct AnalysisView {
     pub document: Document,
     /// One entry per node.
-    pub scores: Vec<ScoreView>,
+    pub tags: Vec<TagView>,
     /// For every node, the index in `document.blocks` of its block.
     pub block_of: Vec<usize>,
-    pub threshold: f32,
+    /// CRF Viterbi margin below which a block is considered ambiguous.
+    pub confidence_threshold: f32,
 }
 
 /// What `compile` reports back; the HTML itself is served to the preview
@@ -455,18 +463,9 @@ impl Session {
         let analysis = self.classify(source)?;
         Ok(AnalysisView {
             document: analysis.document,
-            scores: analysis
-                .scores
-                .into_iter()
-                .map(|s| ScoreView {
-                    best: s.best.0,
-                    score: s.best.1,
-                    opens: s.opens,
-                    scores: s.scores,
-                })
-                .collect(),
+            tags: analysis.tags.into_iter().map(tag_view).collect(),
             block_of: analysis.block_of,
-            threshold: self.config.threshold,
+            confidence_threshold: self.config.ml_confidence_threshold,
         })
     }
 
@@ -597,16 +596,21 @@ mod tests {
     }
 
     #[test]
-    fn analyze_reports_blocks_and_one_score_per_node() {
+    fn analyze_reports_blocks_and_one_tag_per_node() {
         let view = Session::default().analyze(&text()).unwrap();
-        assert_eq!(view.scores.len(), view.document.nodes.len());
+        assert_eq!(view.tags.len(), view.document.nodes.len());
         assert_eq!(view.block_of.len(), view.document.nodes.len());
         let kinds: Vec<_> = view.document.blocks.iter().map(|b| b.kind).collect();
         assert!(kinds.contains(&BlockType::Theorem), "{kinds:?}");
         assert!(kinds.contains(&BlockType::Proof), "{kinds:?}");
         // The shape the frontend reads.
         let json = serde_json::to_value(&view).unwrap();
-        assert_eq!(json["scores"][1]["best"], "theorem");
+        assert_eq!(json["tags"][1]["label"], "B-THEOREM");
+        assert_eq!(json["tags"][1]["kind"], "theorem");
+        assert_eq!(
+            json["confidence_threshold"],
+            serde_json::json!(ScoringConfig::default().ml_confidence_threshold)
+        );
         assert!(json["document"]["blocks"][1]["id"].is_string());
     }
 
@@ -737,7 +741,7 @@ mod tests {
 
         let mut session = Session::default();
         let config = ScoringConfig {
-            threshold: 7.0,
+            ml_confidence_threshold: -1.0,
             ..ScoringConfig::default()
         };
         assert!(session.set_config(config).is_err());
@@ -745,18 +749,6 @@ mod tests {
 
         assert!(is_markdown(Path::new("notes.MD")));
         assert!(!is_markdown(Path::new("notes.html")));
-    }
-
-    #[test]
-    fn session_switches_between_heuristic_and_crf_tagger() {
-        let mut session = Session::default();
-        assert_eq!(session.config().tagger, math_core::TaggerModel::Heuristic);
-        let mut config = session.config().clone();
-        config.tagger = math_core::TaggerModel::Crf;
-        session.set_config(config).unwrap();
-        assert_eq!(session.config().tagger, math_core::TaggerModel::Crf);
-        let view = session.analyze(&text()).unwrap();
-        assert!(!view.document.blocks.is_empty());
     }
 
     #[test]

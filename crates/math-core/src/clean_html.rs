@@ -7,10 +7,12 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::Analysis;
-use crate::classifier::{NodeScore, ScopeOverrides};
+use crate::classifier::ScopeOverrides;
 use crate::error::Result;
+use crate::features::NodeFeatures;
 use crate::html::{self, HtmlOptions};
 use crate::model::{BlockType, Document, EndReason};
+use crate::tagger::{BioTag, TaggedNode};
 
 /// Checks if a file path has an HTML extension.
 pub fn is_html_file(path: impl AsRef<Path>) -> bool {
@@ -445,7 +447,8 @@ pub fn analyze_html_detailed(input: &str) -> Analysis {
     let document = crate::html_import::extract_and_clean_html(input).document;
     let mut analysis = Analysis {
         document,
-        scores: Vec::new(),
+        features: Vec::new(),
+        tags: Vec::new(),
         block_of: Vec::new(),
     };
     reindex(&mut analysis);
@@ -463,23 +466,36 @@ pub fn reindex(analysis: &mut Analysis) {
         .map(|block| block.span.end)
         .max()
         .unwrap_or(0);
-    let mut scores = Vec::with_capacity(len);
+    let mut features = Vec::with_capacity(len);
+    let mut tags = Vec::with_capacity(len);
     let mut block_of = vec![0usize; len];
     for (index, block) in document.blocks.iter().enumerate() {
-        let score = NodeScore {
-            features: crate::features::Features::default(),
-            best: (block.kind, block.score),
-            opens: block.kind.is_semantic(),
-            scores: vec![(block.kind, block.score)],
-        };
         for slot in block.span.clone() {
-            while scores.len() < slot {
-                scores.push(score.clone());
+            while features.len() < slot {
+                features.push(NodeFeatures::default());
+                tags.push(TaggedNode {
+                    tag: BioTag::Outside,
+                    confidence: 0.0,
+                });
             }
-            if scores.len() == slot {
-                scores.push(score.clone());
+            let tag = TaggedNode {
+                tag: if block.kind.is_semantic() {
+                    if slot == block.span.start {
+                        BioTag::Begin(block.kind)
+                    } else {
+                        BioTag::Inside(block.kind)
+                    }
+                } else {
+                    BioTag::Outside
+                },
+                confidence: block.score,
+            };
+            if features.len() == slot {
+                features.push(NodeFeatures::default());
+                tags.push(tag.clone());
             } else {
-                scores[slot] = score.clone();
+                features[slot] = NodeFeatures::default();
+                tags[slot] = tag.clone();
             }
             if slot < block_of.len() {
                 block_of[slot] = index;
@@ -487,7 +503,8 @@ pub fn reindex(analysis: &mut Analysis) {
         }
     }
 
-    analysis.scores = scores;
+    analysis.features = features;
+    analysis.tags = tags;
     analysis.block_of = block_of;
 }
 
@@ -845,6 +862,20 @@ mod tests {
     }
 
     #[test]
+    fn reindex_marks_first_slot_begin_and_the_rest_inside() {
+        let mut analysis = analyze_html_detailed(&sample());
+        let mut overrides = corrections();
+        overrides.end.insert(1.into(), 3);
+        apply_overrides(&mut analysis.document, &overrides);
+        reindex(&mut analysis);
+
+        let theorem = &analysis.document.blocks[1];
+        assert_eq!(theorem.span, 1..3);
+        assert_eq!(analysis.tags[1].tag, BioTag::Begin(BlockType::Theorem));
+        assert_eq!(analysis.tags[2].tag, BioTag::Inside(BlockType::Theorem));
+    }
+
+    #[test]
     fn html_suppressed_block_becomes_text() {
         let mut analysis = analyze_html_detailed(&sample());
         let mut overrides = corrections();
@@ -876,7 +907,7 @@ mod tests {
         apply_overrides(&mut analysis.document, &overrides);
         reindex(&mut analysis);
 
-        let text = analysis.explain(0.5);
+        let text = analysis.explain();
         assert!(text.contains("ended by override"));
     }
 }

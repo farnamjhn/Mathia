@@ -75,13 +75,8 @@
     fixKind: $("fix-kind"), fixShorter: $("fix-shorter"), fixLonger: $("fix-longer"),
     fixReject: $("fix-reject"), fixReset: $("fix-reset"),
     scoring: $("scoring"), configDialog: $("config-dialog"), configForm: $("config-form"),
-    cfgTagger: $("cfg-tagger"), cfgScorerWrap: $("cfg-scorer-wrap"),
-    cfgScorer: $("cfg-scorer"), cfgThreshold: $("cfg-threshold"), cfgWeights: $("cfg-weights"),
     cfgScope: $("cfg-scope"), cfgKeywords: $("cfg-keywords"), cfgCues: $("cfg-cues"),
     configError: $("config-error"), configLoad: $("config-load"), configSave: $("config-save"),
-    modelToggle: $("model-toggle"), btnModelHeuristic: $("btn-model-heuristic"),
-    btnModelCrf: $("btn-model-crf"), optCrfModel: $("opt-crf-model"),
-    winMenuModel: $("win-menu-model"),
     decision: $("decision"), decisionRun: $("decision-run"), decisionDialog: $("decision-dialog"),
     dmProvider: $("dm-provider"), dmModel: $("dm-model"), dmUrl: $("dm-url"), dmKey: $("dm-key"),
     dmKeyHint: $("dm-key-hint"), dmRemoveKey: $("dm-remove-key"), dmTest: $("dm-test"),
@@ -111,9 +106,6 @@
     "theorem", "lemma", "proposition", "corollary", "definition", "proof",
     "example", "remark", "exercise", "solution", "claim", "notation",
   ];
-  /** A detected block scoring less than this above the threshold is listed
-   *  as "unsure": the ones worth a second look. */
-  const UNSURE_MARGIN = 0.1;
   /** How often the open file is checked for changes made elsewhere (ms). */
   const WATCH_INTERVAL = 1000;
 
@@ -257,11 +249,6 @@
   }
 
   function updateMenuToggles() {
-    const modelBtn = $("win-menu-model");
-    if (modelBtn) {
-      const check = modelBtn.querySelector(".menu-check");
-      if (check) check.style.visibility = (currentConfig?.tagger === "crf") ? "visible" : "hidden";
-    }
     const mathBtn = $("win-menu-render-math");
     if (mathBtn) {
       const check = mathBtn.querySelector(".menu-check");
@@ -724,7 +711,7 @@
 
   function unsure(block) {
     return isSemantic(block) && !corrected(block.span.start) && block.score > 0 &&
-      block.score < analysis.threshold + UNSURE_MARGIN;
+      block.score < analysis.confidence_threshold;
   }
 
   function matches(block, query) {
@@ -854,7 +841,7 @@
       (corrected(block.span.start) ? " changed" : unsure(block) ? " unsure" : "");
 
     el.detailFacts.replaceChildren();
-    fact("Confidence", block.score > 0 ? block.score.toFixed(2) + " (needs " + analysis.threshold.toFixed(2) + ")" : null);
+    fact("Confidence", block.score > 0 ? block.score.toFixed(2) : null);
     fact("Number", block.number);
     fact("Name", block.name);
     fact("Proves", block.proves);
@@ -864,18 +851,23 @@
     fact("Id", block.id);
 
     el.detailScores.replaceChildren();
-    const opener = analysis.scores[block.span.start];
-    const ranked = opener ? opener.scores.filter((s) => s[1] > 0).sort((a, b) => b[1] - a[1]) : [];
-    for (const [kind, score] of ranked) {
+    const opener = analysis.tags[block.span.start];
+    if (opener && opener.label !== "O") {
       const row = node("li");
       const meter = node("meter");
+      const scale = analysis.confidence_threshold > 0 ? analysis.confidence_threshold : 1;
       meter.min = 0;
-      meter.max = 1;
-      meter.value = Math.min(score, 1);
-      row.append(node("span", "", titleCase(kind)), meter, node("span", "num", score.toFixed(2)));
+      meter.max = scale;
+      meter.value = Math.min(opener.confidence, scale);
+      row.append(
+        node("span", "", opener.label),
+        meter,
+        node("span", "num", opener.confidence.toFixed(2)),
+      );
       el.detailScores.append(row);
+    } else {
+      el.detailScores.append(node("li", "none", "Nothing here looked like the start of a block."));
     }
-    if (!ranked.length) el.detailScores.append(node("li", "none", "Nothing here looked like the start of a block."));
     el.detailFeatures.textContent = block.features ? JSON.stringify(block.features, null, 2) : "—";
     renderFixes(block);
   }
@@ -1141,70 +1133,6 @@
 
   // ── Detection settings dialog ────────────────────────────────────────────────────
 
-  let currentConfig = null;
-
-  function updateModelUI(tagger) {
-    const isCrf = tagger === "crf";
-    if (el.btnModelHeuristic) {
-      el.btnModelHeuristic.classList.toggle("active", !isCrf);
-      el.btnModelHeuristic.setAttribute("aria-checked", String(!isCrf));
-    }
-    if (el.btnModelCrf) {
-      el.btnModelCrf.classList.toggle("active", isCrf);
-      el.btnModelCrf.setAttribute("aria-checked", String(isCrf));
-    }
-    if (el.optCrfModel) {
-      el.optCrfModel.checked = isCrf;
-    }
-    const winModel = $("win-menu-model");
-    if (winModel) {
-      const check = winModel.querySelector(".menu-check");
-      if (check) check.style.visibility = isCrf ? "visible" : "hidden";
-    }
-    if (el.cfgTagger) {
-      el.cfgTagger.value = isCrf ? "crf" : "heuristic";
-    }
-    if (el.cfgScorerWrap) {
-      el.cfgScorerWrap.style.opacity = isCrf ? "0.5" : "1";
-    }
-  }
-
-  async function loadConfig() {
-    try {
-      currentConfig = await invoke("get_config");
-      updateModelUI(currentConfig.tagger);
-    } catch (_) {}
-  }
-
-  async function setDetectionModel(model) {
-    const nextModel = model === "crf" ? "crf" : "heuristic";
-    if (!currentConfig) {
-      try {
-        currentConfig = await invoke("get_config");
-      } catch (_) {
-        currentConfig = {};
-      }
-    }
-    if (currentConfig.tagger === nextModel) return;
-    currentConfig.tagger = nextModel;
-    updateModelUI(nextModel);
-    try {
-      await invoke("set_config", { config: currentConfig });
-      if (source) {
-        revision = 0;
-        analysis = null;
-        await refresh();
-      }
-      setStatus(
-        nextModel === "crf"
-          ? "Switched block detection to CRF model"
-          : "Switched block detection to Linear / DecisionTree"
-      );
-    } catch (err) {
-      setStatus("Failed to change detection model: " + err, true);
-    }
-  }
-
   function numberField(container, label, value, attrs) {
     const input = node("input");
     input.type = "number";
@@ -1219,15 +1147,7 @@
 
   function fillConfig(config) {
     editing = config;
-    currentConfig = config;
     el.configError.hidden = true;
-    updateModelUI(config.tagger);
-    el.cfgScorer.value = config.scorer && config.scorer.model === "tree" ? "tree" : "linear";
-    el.cfgThreshold.value = String(config.threshold);
-    el.cfgWeights.replaceChildren();
-    for (const [key, value] of Object.entries(config.weights)) {
-      numberField(el.cfgWeights, key, value, { min: 0, max: 1, step: 0.01 });
-    }
     el.cfgScope.replaceChildren();
     for (const [key, value] of Object.entries(config.scope)) {
       numberField(el.cfgScope, key, value, { min: 1, max: 1000, step: 1 });
@@ -1260,16 +1180,6 @@
 
   function readConfig() {
     const config = JSON.parse(JSON.stringify(editing));
-    if (el.cfgTagger) {
-      config.tagger = el.cfgTagger.value === "crf" ? "crf" : "heuristic";
-    }
-    const scorer = el.cfgScorer.value;
-    if (scorer === "linear") config.scorer = { model: "linear" };
-    else if (!editing.scorer || editing.scorer.model !== "tree") config.scorer = { model: "tree" };
-    config.threshold = Number(el.cfgThreshold.value);
-    for (const input of el.cfgWeights.querySelectorAll("input")) {
-      config.weights[input.dataset.key] = Number(input.value);
-    }
     for (const input of el.cfgScope.querySelectorAll("input")) {
       config.scope[input.dataset.key] = Math.round(Number(input.value));
     }
@@ -1302,8 +1212,6 @@
     try {
       const cfg = readConfig();
       await invoke("set_config", { config: cfg });
-      currentConfig = cfg;
-      updateModelUI(cfg.tagger);
       el.configDialog.close();
       if (source) {
         revision = 0;
@@ -1339,15 +1247,6 @@
       refresh(true);
     } catch (error) {
       configFailed(error);
-    }
-  });
-
-  el.btnModelHeuristic?.addEventListener("click", () => setDetectionModel("heuristic"));
-  el.btnModelCrf?.addEventListener("click", () => setDetectionModel("crf"));
-  el.optCrfModel?.addEventListener("change", (e) => setDetectionModel(e.target.checked ? "crf" : "heuristic"));
-  el.cfgTagger?.addEventListener("change", (e) => {
-    if (el.cfgScorerWrap) {
-      el.cfgScorerWrap.style.opacity = e.target.value === "crf" ? "0.5" : "1";
     }
   });
 
@@ -1492,8 +1391,6 @@
     el.dmRemoveKey.hidden = true;
   });
   loadDecision();
-  loadConfig();
-
   async function exportFolder() {
     try {
       setStatus("Choose a folder of Markdown files…");
@@ -1744,11 +1641,6 @@
       case "scoring":
         showConfig();
         break;
-      case "toggle_model": {
-        const current = currentConfig?.tagger === "crf" ? "crf" : "heuristic";
-        setDetectionModel(current === "crf" ? "heuristic" : "crf");
-        break;
-      }
       case "toggle_render_math":
         el.math.checked = !el.math.checked;
         updateMenuToggles();

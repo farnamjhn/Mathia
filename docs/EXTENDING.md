@@ -41,23 +41,20 @@ This guide provides concrete, repeatable recipes for making common architectural
 2. **Update Lexicon & Feature Detection (`crates/math-core/src/features.rs`)**:
    - In `Lexicon::new(config: &ScoringConfig)`, register the Persian and English opener keywords and patterns for the new block type.
 
-3. **Update Decision Tree Scorer (`crates/math-core/src/tree.rs`)**:
-   - If the new block type needs distinct branching logic in `DecisionTree::default()`, update the test splits under `Test::Kind` or `Test::Statement`.
-
-4. **Update Judge Contract & Prompts (`crates/math-judge/src/jev.rs`)**:
+3. **Update Judge Contract & Prompts (`crates/math-judge/src/jev.rs`)**:
    - In `kind_criteria()`, add a concise, single-sentence definition for the new type so external LLM judges know when to select it:
      ```rust
      BlockType::Axiom => "A foundational statement accepted without proof as a starting point.",
      ```
 
-5. **Update Python ML Schema & Evaluation (`ml/src/mathia_ml/`)**:
+4. **Update Python ML Schema & Evaluation (`ml/src/mathia_ml/`)**:
    - In `ml/src/mathia_ml/schema.py` and `ml/src/mathia_ml/evaluate.py`, add the new slug to `SEMANTIC_TYPES`.
    - In `ml/src/mathia_ml/dataset_gen.py`, add the bilingual keyword patterns for synthetic dataset generation.
 
-6. **Retrain CRF Weights & Verify**:
+5. **Retrain CRF Weights & Verify**:
    - Run the ML training pipeline (see [Recipe 3](#3-retraining--deploying-updated-crf-weights)) to export updated weights to `crates/math-core/src/crf_weights.json`.
 
-7. **Verification**:
+6. **Verification**:
    ```bash
    cargo fmt --check
    cargo test --workspace
@@ -175,12 +172,12 @@ This guide provides concrete, repeatable recipes for making common architectural
 
 ## 4. Adding a New CLI Option or Configuration Field
 
-**Context:** Exposing a new compiler toggle, threshold, or output option through `scoring.toml` and the `mathia` CLI binary.
+**Context:** Exposing a new compiler toggle, scope limit, or output option through `scoring.toml` and the `mathia` CLI binary.
 
 ### Checklist
 
 1. **Update Configuration Model (`crates/math-core/src/config.rs`)**:
-   - Add field to `struct ScoringConfig` (or nested structs `WeightConfig`, `ScopeConfig`).
+   - Add field to `struct ScoringConfig` (or the nested `ScopeConfig`).
    - Define sensible defaults in `impl Default for ScoringConfig`.
    - Update `ScoringConfig::validate(&self)` to enforce value ranges (e.g., scores in $[0.0, 1.0]$).
 

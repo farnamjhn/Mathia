@@ -534,61 +534,11 @@ body.platform-mac .win-menubar {
 
 #preview-toggle[aria-expanded="true"]:not(:disabled) { color: var(--ink); background: var(--ink-wash); }
 
-/* ── Model Toggle ────────────────────────────────────────────────────── */
-
-.bar-group-model {
-  display: inline-flex;
-  align-items: center;
-}
-
-.model-toggle {
-  display: inline-flex;
-  align-items: center;
-  background: var(--desk);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 2px;
-  gap: 2px;
-}
-
-.model-toggle-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 24px;
-  padding: 0 10px;
-  font-size: 11.5px;
-  font-weight: 500;
-  line-height: 1;
-  color: var(--muted);
-  background: none;
-  border: none;
-  border-radius: calc(var(--radius) - 2px);
-  cursor: pointer;
-  transition: background var(--ease), color var(--ease), box-shadow var(--ease);
-  white-space: nowrap;
-  user-select: none;
-}
-
-.model-toggle-btn:hover {
-  color: var(--print);
-  background: var(--hover);
-}
-
-.model-toggle-btn.active,
-.model-toggle-btn[aria-checked="true"] {
-  color: var(--print);
-  background: var(--paper);
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-}
-
 @media (max-width: 860px) {
   .bar { gap: 6px; padding: 0 8px; }
   .bar-group { gap: 4px; }
   .bar .btn { padding: 0 8px; }
   .bar-separator { margin: 0 1px; }
-  .model-toggle-btn { padding: 0 7px; font-size: 11px; }
 }
 
 /* ── Panes ───────────────────────────────────────────────────────────── */

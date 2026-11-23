@@ -4,13 +4,10 @@
 //! self-transition plus an over-broad `proof_cue` turned whole sections into a
 //! single proof. These tests pin the behaviour that matters.
 
-use math_core::{BlockType, ScoringConfig, TaggerModel, analyze};
+use math_core::{BlockType, ScoringConfig, analyze};
 
 fn crf_config() -> ScoringConfig {
-    ScoringConfig {
-        tagger: TaggerModel::Crf,
-        ..ScoringConfig::default()
-    }
+    ScoringConfig::default()
 }
 
 /// A definition followed by math-dense axioms, then a labelled proof. The

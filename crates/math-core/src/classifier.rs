@@ -1,20 +1,22 @@
 //! Deterministic block classification.
 //!
-//! Two stages, both pure:
+//! One pipeline, all pure:
 //!
-//! 1. **Scoring** — every node gets a weighted feature score per [`BlockType`];
-//!    a node whose best score reaches [`ScoringConfig::threshold`] is an
-//!    *opener*. LaTeX theorem environments are openers with score 1.
-//! 2. **Scoping** — each opener absorbs the nodes after it until a terminator
-//!    (QED marker, next opener, heading, or a size limit); an environment
-//!    covers exactly its body.
+//! 1. **Static features** — [`crate::features::Lexicon`] extracts a
+//!    [`NodeFeatures`] record per node.
+//! 2. **CRF tagging** — [`CrfTagger`] runs Viterbi over the sequence and
+//!    returns BIO tags with a confidence margin per node.
+//! 3. **Deterministic guardrails** — labelled leads are anchored, references
+//!    and keyword mentions are demoted, argument openers are sanitized, and
+//!    strongly labelled openers get structural scopes.
+//! 4. **Optional judge** — a [`BlockJudge`] may review low-confidence blocks.
 //!
 //! Afterwards proofs are linked to the statements they prove and textual
 //! references ("by Theorem 3.3") become links.
 //!
 //! Scope is the part a later decision model may disagree with, so it is
 //! adjustable from outside through [`ScopeOverrides`] without touching the
-//! scoring: see [`BlockJudge`] and [`HeuristicClassifier::classify_with_judge`].
+//! tagging: see [`BlockJudge`] and [`BlockClassifier::classify_with_judge`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -28,37 +30,18 @@ use crate::features::{Features, Lexicon, NodeFeatures};
 use crate::model::{
     BlockType, Direction, EndReason, Node, NodeKind, SemanticBlock, document_direction,
 };
-use crate::tagger::{BioTag, HeuristicTagger, SequenceTagger, TaggedNode};
+use crate::scoping;
+use crate::tagger::{BioTag, SequenceTagger, TaggedNode};
 use crate::text::fold_digits;
-
-/// Scoring result for one node.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NodeScore {
-    pub features: Features,
-    /// The score of every semantic type, in [`BlockType::SEMANTIC`] order.
-    pub scores: Vec<(BlockType, f32)>,
-    /// Best semantic type and its score, whether or not it passes the threshold.
-    pub best: (BlockType, f32),
-    /// The node may open a block: right kind of node and score ≥ threshold.
-    pub opens: bool,
-}
-
-impl NodeScore {
-    /// This node's score for `kind` (0 for non-semantic types).
-    pub fn score_of(&self, kind: BlockType) -> f32 {
-        self.scores
-            .iter()
-            .find(|(k, _)| *k == kind)
-            .map_or(0.0, |(_, s)| *s)
-    }
-}
 
 /// Blocks plus everything needed to explain them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Classification {
     pub blocks: Vec<SemanticBlock>,
-    /// One entry per node.
-    pub scores: Vec<NodeScore>,
+    /// One entry per node: the static features the tagger saw.
+    pub features: Vec<NodeFeatures>,
+    /// One entry per node: the BIO tag and confidence margin.
+    pub tags: Vec<TaggedNode>,
     /// For every node, the index in `blocks` of the block that contains it.
     pub block_of: Vec<usize>,
 }
@@ -273,7 +256,7 @@ pub struct ResolvedOverrides {
 
 /// Externally requested corrections to the default classification, keyed by
 /// content-based anchor (or fallback node index) of a block's opener. An empty
-/// value reproduces [`HeuristicClassifier::classify`]. Serialisable, so a set of
+/// value reproduces [`BlockClassifier::classify`]. Serialisable, so a set of
 /// corrections (made by hand or by a [`BlockJudge`]) can be stored and replayed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -464,9 +447,9 @@ pub struct AppliedVerdict {
     pub applied: bool,
 }
 
-/// The outcome of [`HeuristicClassifier::classify_with_judge_detailed`]:
+/// The outcome of [`BlockClassifier::classify_with_judge_detailed`]:
 /// `overrides` alone reproduces `blocks` through
-/// [`HeuristicClassifier::classify_with_overrides`], without the judge.
+/// [`BlockClassifier::classify_with_overrides`], without the judge.
 #[derive(Debug, Clone, PartialEq)]
 pub struct JudgedClassification {
     pub blocks: Vec<SemanticBlock>,
@@ -476,28 +459,28 @@ pub struct JudgedClassification {
 }
 
 #[derive(Debug, Clone)]
-pub struct HeuristicClassifier {
+pub struct BlockClassifier {
     config: ScoringConfig,
     lexicon: Lexicon,
-    tagger: HeuristicTagger,
     crf: CrfTagger,
 }
 
-impl Default for HeuristicClassifier {
+/// Backwards-compatible name for [`BlockClassifier`].
+pub type HeuristicClassifier = BlockClassifier;
+
+impl Default for BlockClassifier {
     fn default() -> Self {
         Self::new(ScoringConfig::default())
     }
 }
 
-impl HeuristicClassifier {
+impl BlockClassifier {
     pub fn new(config: ScoringConfig) -> Self {
         let lexicon = Lexicon::new(&config);
-        let tagger = HeuristicTagger::new(config.clone(), lexicon.clone());
         let crf = CrfTagger::new();
-        HeuristicClassifier {
+        BlockClassifier {
             config,
             lexicon,
-            tagger,
             crf,
         }
     }
@@ -510,32 +493,8 @@ impl HeuristicClassifier {
         &self.lexicon
     }
 
-    pub fn tagger(&self) -> &HeuristicTagger {
-        &self.tagger
-    }
-
     pub fn crf(&self) -> &CrfTagger {
         &self.crf
-    }
-
-    /// Classifies nodes using the pure-Rust CRF Viterbi tagger.
-    pub fn classify_with_crf(&self, nodes: &[Node], overrides: &ScopeOverrides) -> Classification {
-        self.classify_with_tagger(nodes, overrides, &self.crf)
-    }
-
-    /// Score of `features` for one candidate type, in `[0, 1]`, by the
-    /// configured [`Scorer`].
-    pub fn score(&self, features: &Features, kind: BlockType) -> f32 {
-        self.tagger.score(features, kind)
-    }
-
-    /// Weighted sum of the features for one candidate type, in `[0, 1]`.
-    pub fn linear_score(&self, features: &Features, kind: BlockType) -> f32 {
-        self.tagger.linear_score(features, kind)
-    }
-
-    pub fn score_node(&self, node: &Node) -> NodeScore {
-        self.tagger.score_node(node)
     }
 
     /// Classifies with the default scoping.
@@ -551,15 +510,9 @@ impl HeuristicClassifier {
         self.classify_detailed(nodes, overrides).blocks
     }
 
-    /// [`Self::classify_with_overrides`], keeping the per-node scores.
+    /// [`Self::classify_with_overrides`], keeping the features and BIO tags.
     pub fn classify_detailed(&self, nodes: &[Node], overrides: &ScopeOverrides) -> Classification {
-        if self.config.tagger == crate::config::TaggerModel::Crf
-            || self.config.scorer == crate::config::Scorer::Crf
-        {
-            self.classify_with_crf(nodes, overrides)
-        } else {
-            self.classify_with_tagger(nodes, overrides, &self.tagger)
-        }
+        self.classify_with_tagger(nodes, overrides, &self.crf)
     }
 
     /// Classifies nodes using an arbitrary [`SequenceTagger`] to predict BIO tags.
@@ -573,13 +526,8 @@ impl HeuristicClassifier {
             .iter()
             .map(|node| self.lexicon.extract(node))
             .collect();
-        let scores: Vec<NodeScore> = nodes
-            .iter()
-            .zip(&features)
-            .map(|(node, feat)| self.tagger.score_node_with_features(node, feat))
-            .collect();
         let tags = tagger.tag(nodes, &features);
-        self.tags_to_blocks(nodes, &tags, &scores, overrides)
+        self.tags_to_blocks(nodes, &tags, &features, overrides)
     }
 
     /// Reconstructs [`SemanticBlock`] spans from BIO sequence tags while preserving
@@ -589,23 +537,28 @@ impl HeuristicClassifier {
         &self,
         nodes: &[Node],
         tags: &[TaggedNode],
-        scores: &[NodeScore],
+        features: &[NodeFeatures],
         overrides: &ScopeOverrides,
     ) -> Classification {
         let n = nodes.len();
         // An explicit, labelled lead ("برهان (Proof):", "Theorem 2.") names the
         // block outright, so it is a hard anchor: neither a tagger nor the
-        // demotion pass below may move it to another type or fold it into the
-        // previous block.
-        let anchored = anchor_labelled_leads(tags, scores);
+        // demotion passes below may move it to another type or fold it into the
+        // previous block. The one exception is a node kind that cannot open a
+        // block at all (code, table, display math), demoted below.
+        let anchored = anchor_labelled_leads(tags, features);
+        // Anchoring can promote a node that cannot open a block (code, table,
+        // display math) when its text starts with a labelled keyword, so the
+        // demotion must run after the anchor, not before.
+        let openable = demote_non_openable_starts(&anchored, nodes);
         // A node that merely mentions a block ("Theorem 18-5 should not be
         // used…", "قضیهٔ ۱۸-۵ را نباید…") is prose, not a new block of that type.
-        let dereferenced = demote_reference_openers(&anchored, scores);
+        let dereferenced = demote_reference_openers(&openable, features);
         // A proof or solution argues about the block that precedes it. CRF tags
         // occasionally open an argument in the middle of exposition; demote such
         // an opener to plain text unless the node itself carries an explicit
-        // proof lead or QED marker.
-        let sanitized = sanitize_argument_openers(&dereferenced, scores);
+        // proof lead, or a QED-terminated paragraph follows its statement.
+        let sanitized = sanitize_argument_openers(&dereferenced, features);
         let tags: &[TaggedNode] = &sanitized;
         let resolved = overrides.resolve(nodes);
 
@@ -696,14 +649,14 @@ impl HeuristicClassifier {
                     },
                 )
             };
-            let features = Some(&scores[i].features);
+            let opener_features = Some(&features[i]);
 
             if env_first[i] {
                 let env = nodes[i].env.as_ref().expect("env_first implies env");
                 let end = (i + env.len.max(1)).min(n);
                 let opener = Opener {
                     score: 1.0,
-                    features,
+                    features: opener_features,
                     env_name: env.name.as_deref(),
                     retyped: retype(i).is_some(),
                 };
@@ -716,21 +669,12 @@ impl HeuristicClassifier {
                     None => tags
                         .get(i)
                         .and_then(|t| t.tag.block_type())
-                        .unwrap_or(scores[i].best.0),
+                        .unwrap_or(BlockType::Text),
                 };
-                let score = if retype(i).is_some() {
-                    scores[i].score_of(kind)
-                } else if let Some(t) = tags.get(i)
-                    && t.tag.is_begin()
-                {
-                    if t.confidence <= 1.0 {
-                        t.confidence
-                    } else {
-                        scores[i].score_of(kind)
-                    }
-                } else {
-                    scores[i].best.1
-                };
+                let score = tags
+                    .get(i)
+                    .filter(|t| t.tag.is_begin())
+                    .map_or(0.0, |t| t.confidence);
 
                 let original_kind = tags.get(i).and_then(|t| t.tag.block_type());
                 // A strongly labelled opener names the block outright, so its
@@ -738,7 +682,7 @@ impl HeuristicClassifier {
                 // than by the tagger's `I-` run. Without this the CRF leaves
                 // every body paragraph as separate text, because its emission
                 // model rarely predicts `I-` states on real notes.
-                let strong_lead = scores[i].features.lead.as_ref().is_some_and(|lead| {
+                let strong_lead = features[i].lead.as_ref().is_some_and(|lead| {
                     !lead.reference
                         && lead.kind == kind
                         // A proof/solution keyword at the start of an argument
@@ -752,29 +696,40 @@ impl HeuristicClassifier {
                             || original_kind != Some(kind)));
                 let (natural, reason) = if structural {
                     match kind {
-                        BlockType::Proof => {
-                            self.tagger
-                                .argument_end(scores, i, scope_limit, at_scope_limit)
-                        }
+                        BlockType::Proof => scoping::argument_end(
+                            features,
+                            &self.config.scope,
+                            i,
+                            scope_limit,
+                            at_scope_limit,
+                        ),
                         BlockType::Solution => {
-                            match self
-                                .tagger
-                                .argument_end(scores, i, scope_limit, at_scope_limit)
-                            {
+                            match scoping::argument_end(
+                                features,
+                                &self.config.scope,
+                                i,
+                                scope_limit,
+                                at_scope_limit,
+                            ) {
                                 (end, EndReason::Qed) => (end, EndReason::Qed),
-                                _ => self.tagger.statement_end(
+                                _ => scoping::statement_end(
                                     nodes,
-                                    scores,
+                                    features,
+                                    &self.config.scope,
                                     i,
                                     scope_limit,
                                     at_scope_limit,
                                 ),
                             }
                         }
-                        _ => {
-                            self.tagger
-                                .statement_end(nodes, scores, i, scope_limit, at_scope_limit)
-                        }
+                        _ => scoping::statement_end(
+                            nodes,
+                            features,
+                            &self.config.scope,
+                            i,
+                            scope_limit,
+                            at_scope_limit,
+                        ),
                     }
                 } else {
                     let mut end = i + 1;
@@ -784,7 +739,7 @@ impl HeuristicClassifier {
                         end += 1;
                     }
                     let reason = if matches!(kind, BlockType::Proof | BlockType::Solution)
-                        && (i..end).any(|j| scores[j].features.qed)
+                        && (i..end).any(|j| features[j].qed)
                     {
                         EndReason::Qed
                     } else if end
@@ -800,7 +755,7 @@ impl HeuristicClassifier {
                         EndReason::SizeLimit
                     } else if end == scope_limit {
                         if at_scope_limit == EndReason::NextOpener
-                            && !scores[end].opens
+                            && !tags.get(end).is_some_and(|t| t.tag.is_begin())
                             && !env_first[end]
                             && retype(end).is_none()
                         {
@@ -817,7 +772,7 @@ impl HeuristicClassifier {
                 let (end, reason) = adjust(natural, reason);
                 let opener = Opener {
                     score,
-                    features,
+                    features: opener_features,
                     env_name: None,
                     retyped: retype(i).is_some(),
                 };
@@ -852,7 +807,8 @@ impl HeuristicClassifier {
         }
         Classification {
             blocks,
-            scores: scores.to_vec(),
+            features: features.to_vec(),
+            tags: tags.to_vec(),
             block_of,
         }
     }
@@ -893,14 +849,9 @@ impl HeuristicClassifier {
         // Step 1: Run EnvSpan bypass first, then CrfTagger across the document
         let features: Vec<NodeFeatures> = nodes.iter().map(|n| self.lexicon.extract(n)).collect();
         let crf_tags = self.crf.tag(nodes, &features);
-        let scores: Vec<NodeScore> = nodes
-            .iter()
-            .zip(&features)
-            .map(|(node, feat)| self.tagger.score_node_with_features(node, feat))
-            .collect();
 
         let mut blocks = self
-            .tags_to_blocks(nodes, &crf_tags, &scores, &overrides)
+            .tags_to_blocks(nodes, &crf_tags, &features, &overrides)
             .blocks;
 
         while rounds < max_rounds {
@@ -978,7 +929,7 @@ impl HeuristicClassifier {
                 break;
             }
             blocks = self
-                .tags_to_blocks(nodes, &crf_tags, &scores, &overrides)
+                .tags_to_blocks(nodes, &crf_tags, &features, &overrides)
                 .blocks;
         }
         JudgedClassification {
@@ -994,14 +945,15 @@ impl HeuristicClassifier {
 ///
 /// "Theorem 18-5 should not be used…" and "قضیهٔ ۱۸-۵ را نباید…" mention a block;
 /// they do not start one. A reference is recognised by the lexicon (a verb or
-/// object marker directly after the keyword), so this is deterministic evidence
-/// that the node is prose. The tagger can still be wrong about a low-confidence
-/// mention, so the demotion runs before the argument pass.
-fn demote_reference_openers(tags: &[TaggedNode], scores: &[NodeScore]) -> Vec<TaggedNode> {
+/// object marker directly after the keyword), and a non-argument keyword that is
+/// neither labelled, numbered nor emphasized ("نتیجه می‌گیریم…") is a mention
+/// too. Both are deterministic evidence that the node is prose, so the demotion
+/// runs before the argument pass.
+fn demote_reference_openers(tags: &[TaggedNode], features: &[NodeFeatures]) -> Vec<TaggedNode> {
     let mut out = tags.to_vec();
     let mut demoting: Option<BlockType> = None;
 
-    for (tagged, score) in out.iter_mut().zip(scores) {
+    for (tagged, feature) in out.iter_mut().zip(features) {
         if let Some(kind) = demoting {
             match tagged.tag {
                 BioTag::Inside(inner) if inner == kind => {
@@ -1013,11 +965,50 @@ fn demote_reference_openers(tags: &[TaggedNode], scores: &[NodeScore]) -> Vec<Ta
         }
 
         if let BioTag::Begin(kind) = tagged.tag
-            && score
-                .features
-                .lead
-                .as_ref()
-                .is_some_and(|lead| lead.reference)
+            && let Some(lead) = feature.lead.as_ref()
+        {
+            // A reference ("Theorem 2 implies…") or an unlabelled keyword
+            // mention ("نتیجه می‌گیریم…") is prose, not a block opener.
+            let reference = lead.reference;
+            let unlabelled_mention = !lead.kind.is_argument()
+                && !lead.labelled
+                && lead.number.is_none()
+                && !feature.emphasized;
+            if reference || unlabelled_mention {
+                tagged.tag = BioTag::Outside;
+                demoting = Some(kind);
+            }
+        }
+    }
+
+    out
+}
+
+/// Demote a `B-` tag on a node that cannot start a block.
+///
+/// The CRF occasionally predicts `B-PROOF` on display math or another
+/// structural node. Only paragraphs, list items, headings and quotes can open
+/// a block; anything else is content inside the surrounding scope.
+fn demote_non_openable_starts(tags: &[TaggedNode], nodes: &[Node]) -> Vec<TaggedNode> {
+    let mut out = tags.to_vec();
+    let mut demoting: Option<BlockType> = None;
+
+    for (tagged, node) in out.iter_mut().zip(nodes) {
+        if let Some(kind) = demoting {
+            match tagged.tag {
+                BioTag::Inside(inner) if inner == kind => {
+                    tagged.tag = BioTag::Outside;
+                    continue;
+                }
+                _ => demoting = None,
+            }
+        }
+
+        if let BioTag::Begin(kind) = tagged.tag
+            && !matches!(
+                node.kind,
+                NodeKind::Paragraph | NodeKind::ListItem | NodeKind::Heading(_) | NodeKind::Quote
+            )
         {
             tagged.tag = BioTag::Outside;
             demoting = Some(kind);
@@ -1038,10 +1029,10 @@ fn demote_reference_openers(tags: &[TaggedNode], scores: &[NodeScore]) -> Vec<Ta
 /// keeps that decision out of the tagger's hands. Mentions and references
 /// ("Theorem 2 implies…", "by Lemma 3") are not labelled openers and are left
 /// alone.
-fn anchor_labelled_leads(tags: &[TaggedNode], scores: &[NodeScore]) -> Vec<TaggedNode> {
+fn anchor_labelled_leads(tags: &[TaggedNode], features: &[NodeFeatures]) -> Vec<TaggedNode> {
     let mut out = tags.to_vec();
-    for (tagged, score) in out.iter_mut().zip(scores) {
-        let Some(lead) = score.features.lead.as_ref() else {
+    for (tagged, feature) in out.iter_mut().zip(features) {
+        let Some(lead) = feature.lead.as_ref() else {
             continue;
         };
         // A number after the keyword ("Theorem 2", "قضیه ۳-۱") is itself a
@@ -1065,9 +1056,9 @@ fn anchor_labelled_leads(tags: &[TaggedNode], scores: &[NodeScore]) -> Vec<Tagge
 /// Demote `B-PROOF` / `B-SOLUTION` openers that do not follow the statement they
 /// argue about. A proof may open after a theorem-like statement; a solution may
 /// open after a statement, an example, or an exercise. An explicit proof lead
-/// ("برهان", "Proof") or a QED marker is always honoured, so a labelled proof
-/// that the tagger placed in an unusual spot survives.
-fn sanitize_argument_openers(tags: &[TaggedNode], scores: &[NodeScore]) -> Vec<TaggedNode> {
+/// ("برهان", "Proof") is always honoured, and a QED-terminated paragraph is
+/// honoured when it follows the statement it argues about.
+fn sanitize_argument_openers(tags: &[TaggedNode], features: &[NodeFeatures]) -> Vec<TaggedNode> {
     let mut out = tags.to_vec();
     let mut last_begin: Option<BlockType> = None;
     let mut last_emitted: Option<BioTag> = None;
@@ -1087,15 +1078,11 @@ fn sanitize_argument_openers(tags: &[TaggedNode], scores: &[NodeScore]) -> Vec<T
 
         match tagged.tag {
             BioTag::Begin(kind) if kind.is_argument() => {
-                let score = scores.get(i);
-                let has_lead = score.is_some_and(|score| {
-                    score
-                        .features
-                        .lead
-                        .as_ref()
-                        .is_some_and(|lead| lead.kind == kind)
+                let feature = features.get(i);
+                let has_lead = feature.is_some_and(|feature| {
+                    feature.lead.as_ref().is_some_and(|lead| lead.kind == kind)
                 });
-                let has_qed = score.is_some_and(|score| score.features.qed);
+                let has_qed = feature.is_some_and(|feature| feature.qed);
                 let anchored = match last_begin {
                     Some(prev) if kind == BlockType::Solution => {
                         prev.is_statement()
@@ -1106,9 +1093,8 @@ fn sanitize_argument_openers(tags: &[TaggedNode], scores: &[NodeScore]) -> Vec<T
                 };
                 // A claim is only argued with a *mathematical* paragraph; an
                 // unlabelled, math-free paragraph after a theorem is prose.
-                let substantive = score.is_some_and(|score| {
-                    score.features.math_density > 0.05 || score.features.proof_cue
-                });
+                let substantive =
+                    feature.is_some_and(|feature| feature.math_density > 0.05 || feature.proof_cue);
                 // A second argument opener with no statement in between is a
                 // continuation of the previous argument, not a new block.
                 let continues = last_emitted
@@ -1119,7 +1105,7 @@ fn sanitize_argument_openers(tags: &[TaggedNode], scores: &[NodeScore]) -> Vec<T
                     last_begin = Some(kind);
                 } else if continues && !anchored {
                     tagged.tag = BioTag::Inside(kind);
-                } else if (anchored && substantive) || has_qed {
+                } else if anchored && (substantive || has_qed) {
                     last_begin = Some(kind);
                 } else {
                     tagged.tag = BioTag::Outside;
@@ -1416,7 +1402,6 @@ impl<'a> Builder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Scorer;
     use crate::parser::parse_markdown;
 
     fn classify(md: &str) -> Vec<SemanticBlock> {
@@ -1427,8 +1412,23 @@ mod tests {
         blocks.iter().map(|b| b.kind).collect()
     }
 
-    fn best(md: &str) -> NodeScore {
-        HeuristicClassifier::default().score_node(&parse_markdown(md)[0])
+    struct NodeProbe {
+        opens: bool,
+        best: (BlockType, f32),
+    }
+
+    fn best(md: &str) -> NodeProbe {
+        let nodes = parse_markdown(md);
+        let detail =
+            BlockClassifier::default().classify_detailed(&nodes, &ScopeOverrides::default());
+        let tag = &detail.tags[0];
+        NodeProbe {
+            opens: tag.tag.is_begin(),
+            best: (
+                tag.tag.block_type().unwrap_or(BlockType::Text),
+                tag.confidence,
+            ),
+        }
     }
 
     #[test]
@@ -1487,6 +1487,22 @@ mod tests {
     }
 
     #[test]
+    fn labelled_keywords_in_non_openable_nodes_stay_content() {
+        for md in [
+            "```\nTheorem 1. This is code, not a theorem.\n```",
+            "| Theorem 1. | not a theorem |\n| --- | --- |\n| a | b |",
+            "$$\n\\text{Theorem 1. not a theorem}\n$$",
+        ] {
+            let blocks = classify(md);
+            assert!(
+                !blocks.iter().any(|b| b.kind.is_semantic()),
+                "should not open a block: {md} -> {:?}",
+                kinds(&blocks)
+            );
+        }
+    }
+
+    #[test]
     fn bulleted_labels_open_blocks() {
         let blocks = classify(
             "- **قضیه ۵.۳.** اگر $W$ زیرفضا باشد آنگاه حکم برقرار است.\n\n\
@@ -1503,33 +1519,6 @@ mod tests {
     fn plain_bullet_list_stays_text() {
         let blocks = classify("- یک\n- دو\n\n1. اول\n2. دوم");
         assert_eq!(kinds(&blocks), [BlockType::Text]);
-    }
-
-    #[test]
-    fn scores_are_weighted_sums() {
-        let c = HeuristicClassifier::default();
-        let w = &c.config().weights;
-        let s = best("**Proof.** Suppose not. Then $a \\implies b$, a contradiction.");
-        let expected = w.lead + w.label + w.emphasis + w.logic / 3.0 + w.cue;
-        assert_eq!(s.best.0, BlockType::Proof);
-        assert!(
-            (s.best.1 - expected).abs() < 1e-6,
-            "{} vs {expected}",
-            s.best.1
-        );
-    }
-
-    #[test]
-    fn threshold_is_configurable() {
-        let nodes = parse_markdown("Note that $f$ is continuous.");
-        let strict = HeuristicClassifier::default();
-        assert_eq!(kinds(&strict.classify(&nodes)), [BlockType::Text]);
-
-        let lenient = HeuristicClassifier::new(ScoringConfig {
-            threshold: 0.4,
-            ..Default::default()
-        });
-        assert_eq!(kinds(&lenient.classify(&nodes)), [BlockType::Remark]);
     }
 
     #[test]
@@ -1664,7 +1653,7 @@ mod tests {
         assert_eq!(blocks[1].span, 1..3);
         assert_eq!(blocks[1].end, EndReason::Qed);
         assert_eq!(blocks[1].proves.as_deref(), Some("block-lemma-1"));
-        assert!((blocks[1].score - 0.55).abs() < 1e-6);
+        assert!(blocks[1].score > 0.0);
 
         // No QED and no proof profile: ordinary discussion stays text, and a
         // definition is never followed by an implicit proof.
@@ -1773,10 +1762,10 @@ mod tests {
         let c = HeuristicClassifier::default();
         let nodes = parse_markdown("# T\n\nTheorem 1. A.\n\n$$x$$\n\nText.");
         let detail = c.classify_detailed(&nodes, &ScopeOverrides::default());
-        assert_eq!(detail.scores.len(), nodes.len());
+        assert_eq!(detail.features.len(), nodes.len());
+        assert_eq!(detail.tags.len(), nodes.len());
         assert_eq!(detail.block_of, [0, 1, 1, 2]);
-        assert_eq!(detail.scores[1].scores.len(), BlockType::SEMANTIC.len());
-        assert_eq!(detail.scores[1].best.0, BlockType::Theorem);
+        assert_eq!(detail.tags[1].tag, BioTag::Begin(BlockType::Theorem));
     }
 
     /// Asks for more until the block has `want` nodes.
@@ -1848,39 +1837,6 @@ mod tests {
             kinds(&c.classify_with_judge(&nodes, &RejectRemarks, 4)),
             [BlockType::Theorem, BlockType::Text]
         );
-    }
-
-    #[test]
-    fn decision_tree_scorer_makes_the_same_opening_calls() {
-        let tree = HeuristicClassifier::new(ScoringConfig {
-            scorer: Scorer::Tree(crate::tree::DecisionTree::default()),
-            ..Default::default()
-        });
-        for (md, kind) in [
-            (
-                "**قضیه ۱.** اگر $a>0$ آنگاه $a^2>0$.",
-                Some(BlockType::Theorem),
-            ),
-            ("برهان. فرض کنید $x \\in A$.", Some(BlockType::Proof)),
-            (
-                "Lemma 3 (Zorn). Every chain has an upper bound.",
-                Some(BlockType::Lemma),
-            ),
-            (
-                "Definition 2. A set is open if ...",
-                Some(BlockType::Definition),
-            ),
-            ("طبق قضیه ۳.۲ می‌توان نتیجه گرفت که $f$ کراندار است.", None),
-            (
-                "Theorem 2 implies that for all $x$ we have $f(x) > 0$.",
-                None,
-            ),
-            ("Proof techniques vary widely between fields.", None),
-            ("Note that $f$ is continuous.", None),
-        ] {
-            let s = tree.score_node(&parse_markdown(md)[0]);
-            assert_eq!(s.opens.then_some(s.best.0), kind, "{md} ({:?})", s.best);
-        }
     }
 
     #[test]
@@ -2172,7 +2128,7 @@ mod tests {
     fn classify_with_tagger_accepts_sequence_tagger() {
         let c = HeuristicClassifier::default();
         let nodes = parse_markdown("**Theorem 1.** Statement.\n\nProof. Follows.");
-        let res = c.classify_with_tagger(&nodes, &ScopeOverrides::default(), &c.tagger);
+        let res = c.classify_with_tagger(&nodes, &ScopeOverrides::default(), &c.crf);
         assert_eq!(res.blocks.len(), 2);
         assert_eq!(res.blocks[0].kind, BlockType::Theorem);
         assert_eq!(res.blocks[1].kind, BlockType::Proof);
@@ -2297,38 +2253,5 @@ mod tests {
         let parsed: crate::features::TelemetryEntry = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(parsed, tel);
         std::fs::remove_file(&tmp).unwrap();
-    }
-
-    #[test]
-    fn crf_tagger_model_and_scorer_selection() {
-        use crate::config::TaggerModel;
-
-        let md = "Theorem 1. Let $x > 0$.\n\nProof. Obvious. QED\n";
-        let nodes = parse_markdown(md);
-
-        // 1. Default (Heuristic)
-        let c_default = HeuristicClassifier::default();
-        let class_default = c_default.classify_detailed(&nodes, &ScopeOverrides::default());
-        assert_eq!(class_default.blocks.len(), 2);
-
-        // 2. CRF via TaggerModel::Crf
-        let config_crf = ScoringConfig {
-            tagger: TaggerModel::Crf,
-            ..Default::default()
-        };
-        let c_crf = HeuristicClassifier::new(config_crf);
-        let class_crf = c_crf.classify_detailed(&nodes, &ScopeOverrides::default());
-        let class_crf_direct = c_default.classify_with_crf(&nodes, &ScopeOverrides::default());
-        assert_eq!(class_crf.blocks.len(), class_crf_direct.blocks.len());
-        assert_eq!(class_crf.blocks[0].kind, class_crf_direct.blocks[0].kind);
-
-        // 3. CRF via Scorer::Crf
-        let config_scorer_crf = ScoringConfig {
-            scorer: Scorer::Crf,
-            ..Default::default()
-        };
-        let c_scorer_crf = HeuristicClassifier::new(config_scorer_crf);
-        let class_scorer_crf = c_scorer_crf.classify_detailed(&nodes, &ScopeOverrides::default());
-        assert_eq!(class_scorer_crf.blocks.len(), class_crf.blocks.len());
     }
 }

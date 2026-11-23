@@ -33,7 +33,7 @@ const USAGE: &str = "usage: mathia <input.md | input.html | folder> [options]
       --dump-features   dump AST nodes and extracted NodeFeatures as JSON (or subcommand: mathia dump-features <input.md>)
       --config FILE     scoring configuration (.toml or .json)
       --dump-config     print the default scoring configuration as TOML and exit
-      --explain         print every node's scores and why each block ended
+      --explain         print every node's BIO tag and why each block ended
       --font FILE       embed a WOFF2 text font (repeatable; family from the file name);
                         replaces the bundled Vazirmatn
       --no-font         embed no text font (the reader's installed fonts are used)
@@ -496,7 +496,7 @@ fn compile_file(input: &Path, output: &Path, settings: &Settings) -> Result<(), 
             math_core::clean_html::reindex(&mut analysis);
         }
         if settings.explain {
-            print!("{}", analysis.explain(settings.config.threshold));
+            print!("{}", analysis.explain());
         }
         let html = math_core::html::render(&analysis.document, &html_options)
             .map_err(|e| e.to_string())?;
@@ -533,7 +533,7 @@ fn compile_file(input: &Path, output: &Path, settings: &Settings) -> Result<(), 
         (None, None) => math_core::analyze_detailed(&markdown, config),
     };
     if settings.explain {
-        print!("{}", analysis.explain(config.threshold));
+        print!("{}", analysis.explain());
     }
     let document = analysis.document;
     let html = math_core::html::render(&document, &html_options).map_err(|e| e.to_string())?;

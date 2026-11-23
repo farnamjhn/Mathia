@@ -1092,8 +1092,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            !html.contains("http://"),
+        // The bundled runtime writes W3C XML namespace strings (e.g.
+        // xmlns="http://www.w3.org/1999/xhtml"); those are not network URLs.
+        let non_xmlns_http = html
+            .match_indices("http://")
+            .filter(|&(idx, _)| !html[idx..].starts_with("http://www.w3.org/"))
+            .count();
+        assert_eq!(
+            non_xmlns_http, 0,
             "Inline build should contain no http:// URLs"
         );
         assert!(

@@ -22,17 +22,18 @@ pub mod model;
 pub mod normalize;
 pub mod parser;
 pub mod repair;
+mod scoping;
 mod sha256;
 pub mod tagger;
 pub mod text;
-pub mod tree;
 
 pub use classifier::{
-    AppliedVerdict, BlockJudge, Classification, ContentAnchor, HeuristicClassifier,
-    JudgedClassification, NodeScore, OverrideKey, ResolvedOverrides, ScopeOverrides, Verdict,
+    AppliedVerdict, BlockClassifier, BlockJudge, Classification, ContentAnchor,
+    HeuristicClassifier, JudgedClassification, OverrideKey, ResolvedOverrides, ScopeOverrides,
+    Verdict,
 };
 pub use clean_html::{analyze_html, analyze_html_detailed, clean_html, is_html, is_html_file};
-pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, Scorer, ScoringConfig, TaggerModel};
+pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, ScoringConfig};
 pub use crf::{CrfModel, CrfTagger, RawCrfWeights};
 pub use error::{Error, Result};
 pub use features::{
@@ -49,27 +50,28 @@ pub use model::{
 };
 pub use normalize::normalize_markdown;
 pub use repair::{Repair, repair_markdown, wrap_bare_math};
-pub use tagger::{BioTag, HeuristicTagger, SequenceTagger, TaggedNode};
-pub use tree::DecisionTree;
+pub use tagger::{BioTag, SequenceTagger, TaggedNode};
 
-/// A [`Document`] together with the evidence behind every decision: all type
-/// scores of every node, and (on each block) why its scope ended.
+/// A [`Document`] together with the evidence behind every decision: the static
+/// features and BIO tag of every node, and (on each block) why its scope ended.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Analysis {
     pub document: Document,
     /// One entry per node of the document.
-    pub scores: Vec<NodeScore>,
+    pub features: Vec<NodeFeatures>,
+    /// One entry per node of the document.
+    pub tags: Vec<TaggedNode>,
     /// For every node, the index in `document.blocks` of its block.
     pub block_of: Vec<usize>,
 }
 
 impl Analysis {
     /// A plain-text table answering "why is this a theorem": one line per
-    /// node with its block, its best type and score, and the runner-up.
-    pub fn explain(&self, threshold: f32) -> String {
+    /// node with its block, its BIO tag and the tagger's confidence margin.
+    pub fn explain(&self) -> String {
         let mut out = String::new();
         let mut current = usize::MAX;
-        for (index, score) in self.scores.iter().enumerate() {
+        for (index, tag) in self.tags.iter().enumerate() {
             let block_index = self.block_of[index];
             let block = &self.document.blocks[block_index];
             if block_index != current {
@@ -89,13 +91,6 @@ impl Analysis {
                         .unwrap_or_default(),
                 ));
             }
-            let mut ranked = score.scores.clone();
-            ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
-            let runner_up = ranked
-                .get(1)
-                .filter(|(_, s)| *s > 0.0)
-                .map(|(kind, s)| format!(", then {} {s:.2}", kind.slug()))
-                .unwrap_or_default();
             let preview: String = self
                 .document
                 .nodes
@@ -110,14 +105,14 @@ impl Analysis {
                         .collect()
                 })
                 .unwrap_or_default();
-            let best = if score.best.1 > 0.0 {
-                format!("{} {:.2}", score.best.0.slug(), score.best.1)
+            let best = if let Some(kind) = tag.tag.block_type() {
+                format!("{} {:.2}", kind.slug(), tag.confidence)
             } else {
                 "-".to_string()
             };
             out.push_str(&format!(
-                "  {index:>4} {} {best}{runner_up}  | {preview}\n",
-                if score.best.1 >= threshold { '*' } else { ' ' },
+                "  {index:>4} {} {best}  | {preview}\n",
+                if tag.tag.is_begin() { '*' } else { ' ' },
             ));
         }
         out
@@ -152,12 +147,14 @@ pub fn analyze_with_overrides(
     let nodes = parser::parse_markdown(&normalize_markdown(markdown));
     let Classification {
         blocks,
-        scores,
+        features,
+        tags,
         block_of,
     } = HeuristicClassifier::new(config.clone()).classify_detailed(&nodes, overrides);
     Analysis {
         document: Document::new(nodes, blocks),
-        scores,
+        features,
+        tags,
         block_of,
     }
 }

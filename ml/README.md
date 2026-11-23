@@ -103,7 +103,7 @@ openers are anchored deterministically in Rust: a labelled or numbered lead
 body span follows the structural rules rather than the CRF's `I-` run.
 
 ### Step 4: Model Evaluation (`evaluate.py`)
-Benchmarks the trained CRF against the baseline HeuristicTagger using `seqeval` exact-span F1, precision, and recall metrics, broken down by language and BlockType:
+Benchmarks the trained CRF against the baseline heuristic scorer using `seqeval` exact-span F1, precision, and recall metrics, broken down by language and BlockType:
 
 ```bash
 uv run python -m mathia_ml.evaluate \

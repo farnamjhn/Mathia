@@ -7,27 +7,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::model::BlockType;
-use crate::tree::DecisionTree;
 
 /// Current version of the [`ScoringConfig`] file format. Files written by a
 /// newer Mathia (a higher number) are rejected rather than half-understood.
-pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+pub const CONFIG_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ScoringConfig {
     /// Version of this file format; see [`CONFIG_SCHEMA_VERSION`].
     pub schema_version: u32,
-    /// A node opens a block when its best type score reaches this value.
-    pub threshold: f32,
-    /// Which sequence tagger to use for block detection: heuristic
-    /// (Linear / DecisionTree) or pure-Rust CRF.
-    #[serde(default)]
-    pub tagger: TaggerModel,
-    /// How features become type scores: the weighted sum of [`Weights`]
-    /// (default) or a [`DecisionTree`].
-    pub scorer: Scorer,
-    pub weights: Weights,
     pub scope: ScopeConfig,
     pub keywords: Vec<KeywordRule>,
     /// Counted case-sensitively (`\Rightarrow` is not `\rightarrow`).
@@ -48,59 +37,6 @@ pub struct ScoringConfig {
     pub ml_telemetry: bool,
 }
 
-/// Which sequence tagger to use for block detection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaggerModel {
-    /// Heuristic tagger using linear feature scoring or decision tree.
-    #[default]
-    #[serde(alias = "linear_tree", alias = "heuristic")]
-    Heuristic,
-    /// Pure-Rust Linear-Chain CRF sequence tagger using embedded weights.
-    #[serde(alias = "crf_model")]
-    Crf,
-}
-
-/// The scoring model. `weights.after_statement` (keyword-less proofs) and the
-/// scope rules apply to both.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "model", rename_all = "snake_case")]
-pub enum Scorer {
-    /// `score = Σ weight × feature`, see [`Weights`].
-    #[default]
-    Linear,
-    /// A static decision tree over the same features.
-    Tree(DecisionTree),
-    /// Pure-Rust Linear-Chain CRF sequence tagger.
-    Crf,
-}
-
-/// Feature weights. Each feature is in `[0, 1]`; the weighted sum is the score.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Weights {
-    /// The node starts with a keyword of the type.
-    pub lead: f32,
-    /// …followed by a number, a `(name)`, or `.`/`:` — i.e. it reads as a label.
-    pub label: f32,
-    /// …and the node starts with bold/italic text.
-    pub emphasis: f32,
-    /// The keyword only appears somewhere inside the node.
-    pub mention: f32,
-    /// QED / Halmos ending (proofs).
-    pub qed: f32,
-    /// Density of implication and quantifier symbols.
-    pub logic: f32,
-    /// Share of the node that is LaTeX.
-    pub math: f32,
-    /// "is called", "گوییم", `:=` … (definitions).
-    pub definitional: f32,
-    /// Type-specific phrasing ("suppose", "فرض کنید", "if … then", "آنگاه").
-    pub cue: f32,
-    /// An unlabelled paragraph directly after a statement (keyword-less proofs).
-    pub after_statement: f32,
-}
-
 /// Default scope limits, counted in top-level Markdown nodes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -116,23 +52,6 @@ pub struct ScopeConfig {
 pub struct KeywordRule {
     pub kind: BlockType,
     pub words: Vec<String>,
-}
-
-impl Default for Weights {
-    fn default() -> Self {
-        Weights {
-            lead: 0.45,
-            label: 0.20,
-            emphasis: 0.15,
-            mention: 0.10,
-            qed: 0.30,
-            logic: 0.15,
-            math: 0.10,
-            definitional: 0.25,
-            cue: 0.10,
-            after_statement: 0.25,
-        }
-    }
 }
 
 impl Default for ScopeConfig {
@@ -156,10 +75,6 @@ impl Default for ScoringConfig {
         };
         ScoringConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
-            threshold: 0.5,
-            tagger: TaggerModel::default(),
-            scorer: Scorer::Linear,
-            weights: Weights::default(),
             scope: ScopeConfig::default(),
             keywords: vec![
                 rule(BlockType::Theorem, &["قضیه", "theorem", "thm"]),
@@ -343,23 +258,6 @@ impl ConfigFormat {
     }
 }
 
-impl Weights {
-    fn named(&self) -> [(&'static str, f32); 10] {
-        [
-            ("lead", self.lead),
-            ("label", self.label),
-            ("emphasis", self.emphasis),
-            ("mention", self.mention),
-            ("qed", self.qed),
-            ("logic", self.logic),
-            ("math", self.math),
-            ("definitional", self.definitional),
-            ("cue", self.cue),
-            ("after_statement", self.after_statement),
-        ]
-    }
-}
-
 impl ScoringConfig {
     /// Checks that the values make sense. Parsing a file always validates;
     /// call this after building or editing a config in code.
@@ -371,25 +269,11 @@ impl ScoringConfig {
                 self.schema_version
             ));
         }
-        if !(0.0..=1.0).contains(&self.threshold) {
-            return fail(format!(
-                "threshold must be in [0, 1], got {}",
-                self.threshold
-            ));
-        }
         if self.ml_confidence_threshold < 0.0 {
             return fail(format!(
                 "ml_confidence_threshold must be non-negative, got {}",
                 self.ml_confidence_threshold
             ));
-        }
-        for (name, weight) in self.weights.named() {
-            if !(0.0..=1.0).contains(&weight) {
-                return fail(format!("weights.{name} must be in [0, 1], got {weight}"));
-            }
-        }
-        if let Scorer::Tree(tree) = &self.scorer {
-            tree.validate()?;
         }
         if self.scope.statement_max_nodes == 0 || self.scope.proof_max_nodes == 0 {
             return fail("scope limits must be at least 1".into());
@@ -480,24 +364,15 @@ mod tests {
             );
         }
         let toml = config.serialize(ConfigFormat::Toml).unwrap();
-        assert!(toml.contains("schema_version = 1"));
-        assert!(toml.contains("threshold = 0.5"));
-        assert!(
-            toml.contains("lead = 0.45"),
-            "weights should print as written:\n{toml}"
-        );
+        assert!(toml.contains("schema_version = 2"));
+        assert!(toml.contains("[scope]"));
+        assert!(toml.contains("statement_max_nodes = 6"));
     }
 
     #[test]
     fn partial_files_keep_defaults() {
-        let config = ScoringConfig::parse(
-            "threshold = 0.6\n[weights]\nlabel = 0.3\n[scope]\nproof_max_nodes = 20\n",
-            ConfigFormat::Toml,
-        )
-        .unwrap();
-        assert_eq!(config.threshold, 0.6);
-        assert_eq!(config.weights.label, 0.3);
-        assert_eq!(config.weights.lead, Weights::default().lead);
+        let config =
+            ScoringConfig::parse("[scope]\nproof_max_nodes = 20\n", ConfigFormat::Toml).unwrap();
         assert_eq!(config.scope.proof_max_nodes, 20);
         assert_eq!(config.keywords, ScoringConfig::default().keywords);
 
@@ -514,11 +389,9 @@ mod tests {
                 .unwrap_err()
                 .to_string()
         };
-        assert!(message("threshold = 1.5").contains("threshold must be in [0, 1]"));
-        assert!(message("[weights]\nqed = -0.1").contains("weights.qed"));
         assert!(message("keywords = []").contains("keywords must not be empty"));
         assert!(message("schema_version = 99").contains("schema_version 99"));
-        assert!(message("treshold = 0.4").contains("unknown field"));
+        assert!(message("threshold = 0.4").contains("unknown field"));
         assert!(message("[scope]\nproof_max_nodes = 0").contains("at least 1"));
         assert!(
             message("[[keywords]]\nkind = \"heading\"\nwords = [\"x\"]")
@@ -528,73 +401,11 @@ mod tests {
     }
 
     #[test]
-    fn decision_tree_scorer_round_trips_and_validates() {
-        let config = ScoringConfig {
-            scorer: Scorer::Tree(DecisionTree::default()),
-            ..Default::default()
-        };
-        for format in [ConfigFormat::Toml, ConfigFormat::Json] {
-            let text = config.serialize(format).unwrap();
-            assert_eq!(
-                ScoringConfig::parse(&text, format).unwrap(),
-                config,
-                "{text}"
-            );
-        }
-        let toml = config.serialize(ConfigFormat::Toml).unwrap();
-        assert!(toml.contains("model = \"tree\""), "{toml}");
-
-        let small = "[scorer]\nmodel = \"tree\"\n[scorer.root]\nnode = \"split\"\n\
-                     test = { feature = \"lead\" }\nyes = { node = \"leaf\", score = 0.9 }\n\
-                     no = { node = \"leaf\", score = 0.0 }\n";
-        let parsed = ScoringConfig::parse(small, ConfigFormat::Toml).unwrap();
-        assert!(matches!(parsed.scorer, Scorer::Tree(_)));
-
-        let message = |text: &str| {
-            ScoringConfig::parse(text, ConfigFormat::Toml)
-                .unwrap_err()
-                .to_string()
-        };
-        assert!(message(&small.replace("0.9", "1.5")).contains("scorer.root.yes"));
-        assert!(
-            message(&small.replace(
-                "feature = \"lead\"",
-                "feature = \"math_at_least\", value = 2.0"
-            ))
-            .contains("threshold must be in [0, 1]")
-        );
-        assert!(message(&small.replace("\"lead\"", "\"nope\"")).contains("unknown variant"));
-        assert!(message("[scorer]\nmodel = \"forest\"").contains("unknown variant"));
-        let short = ScoringConfig::parse("[scorer]\nmodel = \"tree\"", ConfigFormat::Toml).unwrap();
-        assert_eq!(short.scorer, Scorer::Tree(DecisionTree::default()));
-    }
-
-    #[test]
-    fn crf_tagger_model_and_scorer_round_trips() {
-        let config_tagger = ScoringConfig {
-            tagger: TaggerModel::Crf,
-            ..Default::default()
-        };
-        for format in [ConfigFormat::Toml, ConfigFormat::Json] {
-            let text = config_tagger.serialize(format).unwrap();
-            let parsed = ScoringConfig::parse(&text, format).unwrap();
-            assert_eq!(parsed.tagger, TaggerModel::Crf);
-        }
-
-        let parsed_tagger = ScoringConfig::parse("tagger = \"crf\"", ConfigFormat::Toml).unwrap();
-        assert_eq!(parsed_tagger.tagger, TaggerModel::Crf);
-
-        let parsed_scorer =
-            ScoringConfig::parse("[scorer]\nmodel = \"crf\"", ConfigFormat::Toml).unwrap();
-        assert_eq!(parsed_scorer.scorer, Scorer::Crf);
-    }
-
-    #[test]
     fn files_are_loaded_by_extension() {
         let dir = std::env::temp_dir().join(format!("mathia-config-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let config = ScoringConfig {
-            threshold: 0.55,
+            ml_confidence_threshold: 2.5,
             ..Default::default()
         };
         for name in ["scoring.toml", "scoring.json"] {
