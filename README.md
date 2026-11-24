@@ -112,6 +112,36 @@ platform and open it. Releases are built automatically when a `v*` tag is pushed
 bundles are unsigned unless signing secrets are configured, so your OS may ask you to confirm
 before opening the app.
 
+### Auto-updates
+
+The desktop app checks for a newer release on startup, then once an hour while it runs, and
+from **Check for Updates…** in the Help menu (macOS: the Mathia menu). A check reads
+`https://github.com/farnamjhn/Mathia/releases/latest/download/latest.json`, so it always sees
+the newest *published* release; drafts stay invisible until you publish them. When an update is
+available the app shows its version and notes, and **Install and Restart** downloads the signed
+bundle, verifies it and relaunches.
+
+Updates are signed with a minisign keypair. The public key lives in
+`src-tauri/tauri.conf.json` (`plugins.updater.pubkey`); the private key is only used by the
+release workflow. To use your own keypair:
+
+```sh
+npx @tauri-apps/cli signer generate -w ~/.tauri/mathia.key
+```
+
+Then put the generated public key in `tauri.conf.json` and add these repository secrets
+(Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | the contents of the private key file |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | the password chosen when generating it (empty if none) |
+
+`release.yml` signs every bundle with that key and writes a `latest.json` manifest into the
+draft release, so publishing the draft is all that is needed to ship an update.
+Keep the tag and the workspace `version` in `Cargo.toml` in step (tag `v0.2.0` for version
+`0.2.0`): the app compares its own version with the tag to decide whether an update exists.
+
 ### Build from Source
 
 #### Prerequisites
@@ -303,8 +333,8 @@ cargo test -p mathia-app   # the desktop app (builds Tauri)
 
 CI (`.github/workflows/ci.yml`) runs rustfmt, clippy with warnings denied, all Rust tests and
 the headless-Chrome tests. Pushing a `v*` tag runs `release.yml`, which builds the desktop
-bundles for macOS, Windows and Linux into a draft release (signed only when signing secrets
-are configured).
+bundles for macOS, Windows and Linux into a draft release, signs them for in-app updates and
+attaches a `latest.json` manifest (see [Auto-updates](#auto-updates)).
 
 The JavaScript inside compiled documents is tested in headless Chrome (see
 [tests/js/README.md](tests/js/README.md)):
