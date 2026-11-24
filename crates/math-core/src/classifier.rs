@@ -1080,7 +1080,14 @@ fn sanitize_argument_openers(tags: &[TaggedNode], features: &[NodeFeatures]) -> 
             BioTag::Begin(kind) if kind.is_argument() => {
                 let feature = features.get(i);
                 let has_lead = feature.is_some_and(|feature| {
-                    feature.lead.as_ref().is_some_and(|lead| lead.kind == kind)
+                    feature.lead.as_ref().is_some_and(|lead| {
+                        lead.kind == kind
+                            && !lead.reference
+                            && (lead.labelled
+                                || lead.number.is_some()
+                                || lead.refers_to.is_some()
+                                || feature.emphasized)
+                    })
                 });
                 let has_qed = feature.is_some_and(|feature| feature.qed);
                 let anchored = match last_begin {
