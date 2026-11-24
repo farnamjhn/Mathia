@@ -993,7 +993,7 @@
       send: "Send",
       stop: "Stop",
       clear: "Clear",
-      includeNeighbours: "Include neighbouring blocks",
+      includeNeighbours: "Include context & dependencies",
       askPlaceholder: "Ask a question about this block...",
       missingKeyNotice: "API key required to ask questions.",
       configureKey: "Configure API Key...",
@@ -1001,14 +1001,22 @@
       inputAria: "Question about this block",
       emptyAnswer: "The model returned an empty answer.",
       offlineNotice: "You are offline; AI features need a network connection.",
+      presetsAria: "Quick study actions",
 
       // S4 Illustrate Action
       illustrateAction: "Illustrate",
       regenerate: "Regenerate",
       drawing: "Drawing a figure…",
+      repairing: "Refining figure…",
       noFigure: "The model did not return a usable figure.",
       figureAlt: "Explanatory figure",
-      figureAria: "Figure"
+      figureAria: "Figure",
+
+      // Document-wide Ask Guide
+      guideToggleAria: "Ask the study guide",
+      guideTitle: "Ask the study guide",
+      guidePlaceholder: "Ask a question across the whole document...",
+      guideSources: "Grounded in:"
     },
     fa: {
       toggleAria: "تنظیمات هوش مصنوعی",
@@ -1038,7 +1046,7 @@
       send: "ارسال",
       stop: "توقف",
       clear: "پاک کردن",
-      includeNeighbours: "شامل بخش‌های مجاور",
+      includeNeighbours: "شامل بخش‌های مجاور و وابستگی‌ها",
       askPlaceholder: "درباره این بخش سوال کنید...",
       missingKeyNotice: "برای پرسش، کلید دسترسی (API Key) لازم است.",
       configureKey: "تنظیم کلید API...",
@@ -1046,14 +1054,22 @@
       inputAria: "متن پرسش درباره این بخش",
       emptyAnswer: "مدل پاسخی برنگرداند.",
       offlineNotice: "اتصال اینترنت برقرار نیست؛ امکانات هوش مصنوعی به شبکه نیاز دارند.",
+      presetsAria: "پیشنهادهای مطالعه",
 
       // S4 Illustrate Action
       illustrateAction: "شکل",
       regenerate: "رسم دوباره",
       drawing: "در حال رسم شکل…",
+      repairing: "در حال اصلاح شکل…",
       noFigure: "مدل شکل قابل‌استفاده‌ای برنگرداند.",
       figureAlt: "شکل توضیحی",
-      figureAria: "شکل"
+      figureAria: "شکل",
+
+      // Document-wide Ask Guide
+      guideToggleAria: "پرسش از کل جزوه",
+      guideTitle: "پرسش از کل جزوه",
+      guidePlaceholder: "سوالی درباره کل این جزوه بپرسید...",
+      guideSources: "منابع مرتبط:"
     }
   };
   var t = isRtl ? STRINGS.fa : STRINGS.en;
@@ -1394,8 +1410,255 @@
 
   var MAX_CONTEXT_CHARS = 4000;
   var MAX_PRIMARY_CHARS = 8000;
+  var MAX_DEP_CHARS = 1800;
+  var MAX_DEP_BLOCKS = 4;
   var CHAT_STORAGE_PREFIX = "mathia-ai-chat:";
   var conversationStore = {};
+  var cachedMindMapEdges = null;
+
+  function buildAskSystemPrompt(block) {
+    var base = ASK_SYSTEM_PROMPT;
+    var type = (block && block.type) || "";
+    if (type === "exercise") {
+      return base + " When the student asks for a hint on an exercise, give a small Socratic nudge without revealing the full solution unless they explicitly ask for it.";
+    }
+    if (type === "proof" || type === "solution") {
+      return base + " When explaining an argument, explicitly point out where cited definitions, lemmas, or hypotheses are used.";
+    }
+    if (type === "theorem" || type === "lemma" || type === "proposition" || type === "corollary" || type === "claim") {
+      return base + " Ground your explanation in the definitions and prerequisites provided in the context.";
+    }
+    return base;
+  }
+
+  function getPresetsForBlock(block) {
+    var type = (block && block.type) || "";
+    if (isRtl) {
+      if (type === "proof" || type === "solution") {
+        return [
+          { label: "توضیح گام‌به‌گام", prompt: "این برهان را گام‌به‌گام توضیح بده و انگیزه و دلیل هر مرحله را روشن کن." },
+          { label: "ایده اصلی", prompt: "ایده اصلی و راهبرد این استدلال را در چند جمله کوتاه خلاصه کن." },
+          { label: "نقش فرض‌ها", prompt: "هر فرض یا نتیجه ارجاع‌شده دقیقاً در کجای این استدلال به کار رفته است؟" }
+        ];
+      }
+      if (type === "exercise") {
+        return [
+          { label: "راهنمای مرحله‌ای", prompt: "یک راهنمایی کوچک و مرحله‌ای برای شروع این تمرین بده بدون اینکه حل کامل را لو بدهی." },
+          { label: "قضیه‌های مرتبط", prompt: "کدام تعاریف یا قضیه‌های این جزوه برای حل این تمرین مفیدترند؟" }
+        ];
+      }
+      if (type === "theorem" || type === "lemma" || type === "proposition" || type === "corollary" || type === "claim") {
+        return [
+          { label: "شهود و مثال", prompt: "شهود پشت این نتیجه را با یک مثال ساده توضیح بده." },
+          { label: "چرا فرض‌ها لازمند؟", prompt: "اگر یکی از فرض‌های این قضیه را حذف کنیم چه اتفاقی می‌افتد؟ در صورت امکان مثال نقض بزن." },
+          { label: "آزمون کوتاه", prompt: "دو سوال مفهومی کوتاه برای سنجش درک من از این قضیه بپرس و منتظر پاسخ من بمان." }
+        ];
+      }
+      return [
+        { label: "شهود و مثال", prompt: "این مفهوم را به‌طور شهودی با یک مثال و یک نامثال ساده توضیح بده." },
+        { label: "آزمون کوتاه", prompt: "دو سوال کوتاه برای سنجش درک من از این بخش بپرس و منتظر پاسخ من بمان." }
+      ];
+    }
+    if (type === "proof" || type === "solution") {
+      return [
+        { label: "Step-by-step", prompt: "Walk me through this proof step by step, explaining the motivation and justification for each key transition." },
+        { label: "Key idea", prompt: "Summarize the core idea and strategy behind this argument in a few clear sentences." },
+        { label: "Where hypotheses enter", prompt: "Where in this argument is each hypothesis or cited result actually used?" }
+      ];
+    }
+    if (type === "exercise") {
+      return [
+        { label: "Socratic hint", prompt: "Give me a small first hint to get started on this exercise without revealing the full solution." },
+        { label: "Relevant results", prompt: "Which definitions or theorems from this guide are most relevant for solving this exercise?" }
+      ];
+    }
+    if (type === "theorem" || type === "lemma" || type === "proposition" || type === "corollary" || type === "claim") {
+      return [
+        { label: "Intuition", prompt: "Explain the intuition behind this result and why it matters, using a concrete example." },
+        { label: "Why hypotheses matter", prompt: "What breaks if we drop one of the hypotheses? Give a counterexample if possible." },
+        { label: "Quick self-check", prompt: "Ask me 2 short conceptual questions to test whether I truly understand this result, and wait for my answers." }
+      ];
+    }
+    return [
+      { label: "Intuition & example", prompt: "Explain this concept intuitively with one simple example and one non-example." },
+      { label: "Quick self-check", prompt: "Ask me 2 short questions to test my understanding of this block, and wait for my answers." }
+    ];
+  }
+
+  function getMindMapEdges() {
+    if (cachedMindMapEdges !== null) return cachedMindMapEdges;
+    var edges = [];
+    try {
+      var dataEl = document.getElementById("mx-mindmap-data");
+      if (dataEl && dataEl.textContent) {
+        var parsed = JSON.parse(dataEl.textContent);
+        if (parsed && Array.isArray(parsed.edges)) {
+          edges = parsed.edges;
+        }
+      }
+    } catch (e) {}
+    cachedMindMapEdges = edges;
+    return edges;
+  }
+
+  function findBlockById(blockId, semantics) {
+    if (!blockId) return null;
+    if (window.Mathia && typeof window.Mathia.block === "function") {
+      var b = window.Mathia.block(blockId);
+      if (b) return b;
+    }
+    var list = semantics || getSemanticBlocks();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id === blockId) return list[i];
+    }
+    return null;
+  }
+
+  function collectDependencyBlocks(currentBlock, excludeIds, maxDeps) {
+    if (!currentBlock) return [];
+    var limit = typeof maxDeps === "number" ? maxDeps : MAX_DEP_BLOCKS;
+    var seen = Object.create(null);
+    if (currentBlock.id) seen[currentBlock.id] = true;
+    if (excludeIds) {
+      for (var k in excludeIds) {
+        if (Object.prototype.hasOwnProperty.call(excludeIds, k) && excludeIds[k]) {
+          seen[k] = true;
+        }
+      }
+    }
+
+    var semantics = getSemanticBlocks();
+    var results = [];
+    function addTarget(targetId, reason) {
+      if (!targetId || seen[targetId] || results.length >= limit) return;
+      var target = findBlockById(targetId, semantics);
+      if (!target || !isSemanticBlock(target)) return;
+      seen[targetId] = true;
+      results.push({ block: target, reason: reason || "referenced" });
+    }
+
+    // 1. Direct <a class="mx-ref" href="#..."> links inside the block (and its proved block)
+    var elementsToScan = [];
+    if (currentBlock.element) elementsToScan.push(currentBlock.element);
+    if (currentBlock.proves) {
+      var provedBlock = findBlockById(currentBlock.proves, semantics);
+      if (provedBlock && provedBlock.element) elementsToScan.push(provedBlock.element);
+    }
+    for (var eIdx = 0; eIdx < elementsToScan.length && results.length < limit; eIdx++) {
+      var links = elementsToScan[eIdx].querySelectorAll('a.mx-ref[href^="#"]');
+      for (var lIdx = 0; lIdx < links.length && results.length < limit; lIdx++) {
+        var href = links[lIdx].getAttribute("href") || "";
+        var refId = href.slice(1);
+        var refText = (links[lIdx].textContent || "").trim();
+        addTarget(refId, refText ? ("cites " + refText) : "cited");
+      }
+    }
+
+    // 2. Outgoing dependency edges from compiled MindMapData
+    var edges = getMindMapEdges();
+    var sourceIds = Object.create(null);
+    if (currentBlock.id) sourceIds[currentBlock.id] = true;
+    if (currentBlock.proves) sourceIds[currentBlock.proves] = true;
+    for (var i = 0; i < edges.length && results.length < limit; i++) {
+      var edge = edges[i];
+      if (edge && sourceIds[edge.from] && edge.to) {
+        addTarget(edge.to, edge.label || "dependency");
+      }
+    }
+
+    return results;
+  }
+
+  // Lightweight client-side BM25 + LaTeX symbol retriever for document-wide Q&A
+  var FOLD_MAP = { "ي": "ی", "ى": "ی", "ك": "ک", "ة": "ه", "أ": "ا", "إ": "ا", "آ": "ا" };
+  function tokenizeForSearch(text) {
+    if (!text) return [];
+    var folded = String(text)
+      .replace(/[ـً-ٰٟ‌‍­]/g, "")
+      .replace(/[يوىكـةأإآ]/g, function (c) { return FOLD_MAP[c] || c; })
+      .toLowerCase();
+    var tokens = [];
+    // Capture LaTeX commands (\alpha, \int) and words/identifiers
+    var matches = folded.match(/\\[a-z]+|[a-z0-9\u0600-\u06ff]+/gi) || [];
+    for (var i = 0; i < matches.length; i++) {
+      var tok = matches[i];
+      if (tok.length >= 2 || tok.charAt(0) === "\\") {
+        tokens.push(tok);
+      }
+    }
+    return tokens;
+  }
+
+  function retrieveRelevantBlocks(query, maxBlocks) {
+    var limit = typeof maxBlocks === "number" ? maxBlocks : 4;
+    var qTokens = tokenizeForSearch(query);
+    var semantics = getSemanticBlocks();
+    if (semantics.length === 0) return [];
+    if (qTokens.length === 0) return semantics.slice(0, limit);
+
+    var docs = [];
+    var df = Object.create(null);
+    var totalLen = 0;
+    for (var i = 0; i < semantics.length; i++) {
+      var b = semantics[i];
+      var text = (getBlockTitle(b) + " " + extractCleanBlockText(b));
+      var toks = tokenizeForSearch(text);
+      var tf = Object.create(null);
+      for (var j = 0; j < toks.length; j++) {
+        tf[toks[j]] = (tf[toks[j]] || 0) + 1;
+      }
+      for (var term in tf) {
+        if (Object.prototype.hasOwnProperty.call(tf, term)) {
+          df[term] = (df[term] || 0) + 1;
+        }
+      }
+      totalLen += toks.length;
+      docs.push({ block: b, tf: tf, len: toks.length });
+    }
+
+    var N = docs.length;
+    var avgdl = (totalLen / Math.max(1, N)) || 1;
+    var k1 = 1.5;
+    var bParam = 0.75;
+
+    var scored = [];
+    for (var d = 0; d < docs.length; d++) {
+      var doc = docs[d];
+      var score = 0;
+      for (var q = 0; q < qTokens.length; q++) {
+        var qt = qTokens[q];
+        var freq = doc.tf[qt] || 0;
+        if (!freq) continue;
+        var docFreq = df[qt] || 1;
+        var idf = Math.log(1 + (N - docFreq + 0.5) / (docFreq + 0.5));
+        score += idf * ((freq * (k1 + 1)) / (freq + k1 * (1 - bParam + bParam * (doc.len / avgdl))));
+      }
+      if (score > 0) {
+        scored.push({ block: doc.block, score: score });
+      }
+    }
+
+    scored.sort(function (a, b) { return b.score - a.score; });
+    var chosen = [];
+    var seen = Object.create(null);
+    for (var s = 0; s < scored.length && chosen.length < limit; s++) {
+      var blk = scored[s].block;
+      seen[blk.id] = true;
+      chosen.push(blk);
+    }
+
+    // 1-hop graph expansion: pull in key prerequisites of top hits if space remains
+    var baseCount = chosen.length;
+    for (var c = 0; c < baseCount && chosen.length < limit + 2; c++) {
+      var deps = collectDependencyBlocks(chosen[c], seen, 1);
+      for (var dp = 0; dp < deps.length && chosen.length < limit + 2; dp++) {
+        seen[deps[dp].block.id] = true;
+        chosen.push(deps[dp].block);
+      }
+    }
+
+    return chosen.length > 0 ? chosen : semantics.slice(0, Math.min(limit, semantics.length));
+  }
 
   function isValidConversationItem(item) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return false;
@@ -1663,6 +1926,24 @@
         }
       }
 
+      // Graph-RAG: include referenced results and definition dependencies
+      var excludeIds = Object.create(null);
+      if (currentBlock && currentBlock.id) excludeIds[currentBlock.id] = true;
+      if (prev && prev.id) excludeIds[prev.id] = true;
+      if (next && next.id) excludeIds[next.id] = true;
+      if (proved && proved.id) excludeIds[proved.id] = true;
+      var deps = collectDependencyBlocks(currentBlock, excludeIds, MAX_DEP_BLOCKS);
+      for (var dIdx = 0; dIdx < deps.length; dIdx++) {
+        var dep = deps[dIdx];
+        var dTitle = getBlockTitle(dep.block);
+        var dType = dep.block.type || "block";
+        var dHead = dTitle ? (dType + " (" + dTitle + ")") : dType;
+        var dText = truncateText(extractCleanBlockText(dep.block), MAX_DEP_CHARS);
+        if (dText) {
+          contextSections.push("Referenced dependency (" + dep.reason + "): " + dHead + "\n" + dText);
+        }
+      }
+
       if (contextSections.length > 0) {
         parts.push("Context:\n" + contextSections.join("\n\n"));
       }
@@ -1784,6 +2065,10 @@
     }
     if (input) input.disabled = !isAvail || streaming;
     if (sendBtn) sendBtn.disabled = !isAvail;
+    var presets = panel.querySelectorAll(".mx-ai-preset");
+    for (var i = 0; i < presets.length; i++) {
+      presets[i].disabled = !isAvail || streaming;
+    }
   }
 
   function updateAllPanelKeyNotices() {
@@ -1794,6 +2079,9 @@
     var figures = document.querySelectorAll(".mx-ai-figure-wrap");
     for (var j = 0; j < figures.length; j++) {
       if (typeof figures[j]._refresh === "function") figures[j]._refresh();
+    }
+    if (typeof refreshGuideAvailability === "function") {
+      refreshGuideAvailability();
     }
   }
 
@@ -1876,6 +2164,28 @@
     chatLog.setAttribute("aria-atomic", "false");
     chatLog.setAttribute("aria-label", t.chatLogAria);
     panel.appendChild(chatLog);
+
+    // 1b. Block-type Pedagogical Study Mode Presets
+    var presetDefs = getPresetsForBlock(block);
+    var presetsRow = document.createElement("div");
+    presetsRow.className = "mx-ai-presets";
+    presetsRow.setAttribute("role", "group");
+    presetsRow.setAttribute("aria-label", t.presetsAria);
+    for (var prIdx = 0; prIdx < presetDefs.length; prIdx++) {
+      (function (preset) {
+        var chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "mx-ai-preset";
+        chip.textContent = preset.label;
+        chip.addEventListener("click", function () {
+          if (panelState.isStreaming || !available()) return;
+          textarea.value = preset.prompt;
+          triggerSend();
+        });
+        presetsRow.appendChild(chip);
+      })(presetDefs[prIdx]);
+    }
+    panel.appendChild(presetsRow);
 
     // 2. Question Textarea
     var textarea = document.createElement("textarea");
@@ -1969,6 +2279,7 @@
       sendBtn.hidden = true;
       stopBtn.hidden = false;
       panelState.isStreaming = true;
+      updatePanelKeyNotice(panel);
 
       var controller = new AbortController();
       panelState.abortController = controller;
@@ -1985,7 +2296,7 @@
       }
 
       complete({
-        system: ASK_SYSTEM_PROMPT,
+        system: buildAskSystemPrompt(block),
         messages: apiMessages,
         signal: controller.signal,
         onDelta: function (delta, fullText) {
@@ -2046,7 +2357,7 @@
           panelState.abortController = null;
           sendBtn.hidden = false;
           stopBtn.hidden = true;
-          textarea.disabled = !available();
+          updatePanelKeyNotice(panel);
           if (!textarea.disabled) {
             textarea.focus();
           }
@@ -2278,16 +2589,41 @@
     return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
   }
 
+  function diagnoseSvgFailure(text) {
+    if (typeof text !== "string" || !text.trim()) {
+      return "The reply was empty. Return one complete <svg viewBox=\"0 0 400 240\" xmlns=\"http://www.w3.org/2000/svg\">...</svg> figure inside a ```svg fence.";
+    }
+    var match = text.match(/<svg\b[\s\S]*?<\/svg\s*>/i);
+    if (!match) {
+      return "The reply did not contain a complete <svg>...</svg> element. Return one self-contained SVG inside a ```svg fence.";
+    }
+    return "The SVG failed XML validation or sanitization (for example unclosed tags, malformed attributes, or disallowed elements). Return a clean, well-formed SVG using only basic shapes, paths, markers, gradients, and text.";
+  }
+
   function assembleIllustratePrompt(block) {
     var title = getBlockTitle(block);
     var type = block.type || "block";
     var rtl = block.element && block.element.getAttribute("dir") === "rtl";
-    return [
+    var parts = [
       "Block: " + (title ? type + " (" + title + ")" : type),
-      truncateText(extractCleanBlockText(block), MAX_PRIMARY_CHARS),
-      "Language of the block: " + (rtl ? "Persian" : "English") + ".",
-      "Draw one figure that helps a student understand this block."
-    ].join("\n\n");
+      truncateText(extractCleanBlockText(block), MAX_PRIMARY_CHARS)
+    ];
+    var deps = collectDependencyBlocks(block, null, 2);
+    if (deps.length > 0) {
+      var depLines = [];
+      for (var i = 0; i < deps.length; i++) {
+        var d = deps[i];
+        var dHead = getBlockTitle(d.block) || d.block.type || "block";
+        var dText = truncateText(extractCleanBlockText(d.block), 900);
+        if (dText) depLines.push(dHead + ": " + dText);
+      }
+      if (depLines.length > 0) {
+        parts.push("Relevant definitions / prerequisites:\n" + depLines.join("\n"));
+      }
+    }
+    parts.push("Language of the block: " + (rtl ? "Persian" : "English") + ".");
+    parts.push("Draw one figure that helps a student understand this block.");
+    return parts.join("\n\n");
   }
 
   function createFigureWrap(block) {
@@ -2382,13 +2718,30 @@
       setStatus(t.drawing, false);
       refresh();
 
+      var initialPrompt = assembleIllustratePrompt(block);
       complete({
         system: ILLUSTRATE_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: assembleIllustratePrompt(block) }],
+        messages: [{ role: "user", content: initialPrompt }],
         signal: controller.signal
       })
         .then(function (text) {
           var figure = parseFigureResponse(text);
+          if (figure) return figure;
+          if (controller.signal.aborted) return null;
+          setStatus(t.repairing, false);
+          return complete({
+            system: ILLUSTRATE_SYSTEM_PROMPT,
+            messages: [
+              { role: "user", content: initialPrompt },
+              { role: "assistant", content: String(text || "") },
+              { role: "user", content: diagnoseSvgFailure(text) }
+            ],
+            signal: controller.signal
+          }).then(function (repairedText) {
+            return parseFigureResponse(repairedText);
+          });
+        })
+        .then(function (figure) {
           if (!figure) throw new Error(t.noFigure);
           state.figure = figure;
           saveFigure(block, figure);
@@ -2480,6 +2833,241 @@
     tagAiActionButtons("illustrate");
   }
 
+  // =========================================================================
+  // S5: Document-Wide "Ask the Study Guide" Dialog (BM25 + Graph Retrieval)
+  // =========================================================================
+
+  var guideToggleBtn = document.createElement("button");
+  guideToggleBtn.id = "mx-ai-guide-toggle";
+  guideToggleBtn.className = "mx-ai-guide-toggle";
+  guideToggleBtn.type = "button";
+  guideToggleBtn.setAttribute("aria-label", t.guideToggleAria);
+  guideToggleBtn.setAttribute("title", t.guideToggleAria);
+  guideToggleBtn.textContent = "?";
+  document.body.appendChild(guideToggleBtn);
+
+  var guideDialog = document.createElement("dialog");
+  guideDialog.id = "mx-ai-guide-dialog";
+  guideDialog.className = "mx-ai-dialog mx-ai-guide-dialog";
+  guideDialog.setAttribute("aria-label", t.guideTitle);
+
+  var guideHeader = document.createElement("div");
+  guideHeader.className = "mx-ai-dialog-header";
+  var guideTitleEl = document.createElement("h3");
+  guideTitleEl.className = "mx-ai-dialog-title";
+  guideTitleEl.textContent = t.guideTitle;
+  var guideCloseBtn = document.createElement("button");
+  guideCloseBtn.type = "button";
+  guideCloseBtn.className = "mx-ai-btn mx-ai-btn-sm";
+  guideCloseBtn.textContent = t.close;
+  guideHeader.appendChild(guideTitleEl);
+  guideHeader.appendChild(guideCloseBtn);
+  guideDialog.appendChild(guideHeader);
+
+  var guideState = { history: [], isStreaming: false, abortController: null };
+  var guideLog = document.createElement("div");
+  guideLog.className = "mx-ai-chat-log mx-ai-guide-log";
+  guideLog.setAttribute("role", "log");
+  guideLog.setAttribute("aria-live", "polite");
+  guideDialog.appendChild(guideLog);
+
+  var guideInput = document.createElement("textarea");
+  guideInput.className = "mx-ai-input mx-ai-textarea";
+  guideInput.rows = 2;
+  guideInput.setAttribute("dir", "auto");
+  guideInput.placeholder = t.guidePlaceholder;
+  guideInput.setAttribute("aria-label", t.guideTitle);
+  guideDialog.appendChild(guideInput);
+
+  var guideControls = document.createElement("div");
+  guideControls.className = "mx-ai-controls";
+  var guideBtnGroup = document.createElement("div");
+  guideBtnGroup.className = "mx-ai-btn-group";
+  var guideSendBtn = document.createElement("button");
+  guideSendBtn.type = "button";
+  guideSendBtn.className = "mx-ai-btn mx-ai-btn-send mx-ai-btn-primary";
+  guideSendBtn.textContent = t.send;
+  var guideStopBtn = document.createElement("button");
+  guideStopBtn.type = "button";
+  guideStopBtn.className = "mx-ai-btn mx-ai-btn-stop";
+  guideStopBtn.textContent = t.stop;
+  guideStopBtn.hidden = true;
+  var guideClearBtn = document.createElement("button");
+  guideClearBtn.type = "button";
+  guideClearBtn.className = "mx-ai-btn mx-ai-btn-clear";
+  guideClearBtn.textContent = t.clear;
+  guideBtnGroup.appendChild(guideSendBtn);
+  guideBtnGroup.appendChild(guideStopBtn);
+  guideBtnGroup.appendChild(guideClearBtn);
+  guideControls.appendChild(guideBtnGroup);
+  guideDialog.appendChild(guideControls);
+  document.body.appendChild(guideDialog);
+
+  function refreshGuideAvailability() {
+    var avail = available();
+    if (avail) {
+      hideUnavailableNotice(guideDialog);
+    } else {
+      showUnavailableNotice(guideDialog, guideLog);
+    }
+    guideInput.disabled = !avail || guideState.isStreaming;
+    guideSendBtn.disabled = !avail;
+  }
+
+  function closeGuideDialog() {
+    if (guideState.isStreaming && guideState.abortController) {
+      try { guideState.abortController.abort(); } catch (e) {}
+    }
+    if (typeof guideDialog.close === "function") guideDialog.close();
+    else guideDialog.removeAttribute("open");
+  }
+
+  function sendGuideQuestion() {
+    var question = guideInput.value.trim();
+    if (!question || guideState.isStreaming) return;
+    if (!available()) {
+      refreshGuideAvailability();
+      return;
+    }
+
+    var retrieved = retrieveRelevantBlocks(question, 4);
+    var contextParts = [];
+    for (var i = 0; i < retrieved.length; i++) {
+      var blk = retrieved[i];
+      var head = getBlockTitle(blk) || blk.type || blk.id;
+      var txt = truncateText(extractCleanBlockText(blk), MAX_DEP_CHARS);
+      if (txt) contextParts.push("[" + head + "]\n" + txt);
+    }
+    var promptContent = contextParts.length > 0
+      ? ("Relevant excerpts from the study guide:\n\n" + contextParts.join("\n\n") + "\n\nQuestion: " + question)
+      : ("Question: " + question);
+
+    var userTurn = { role: "user", content: promptContent, display: question };
+    guideState.history.push(userTurn);
+
+    var userBubble = document.createElement("div");
+    userBubble.className = "mx-ai-bubble mx-ai-bubble-user";
+    userBubble.setAttribute("dir", "auto");
+    userBubble.textContent = question;
+    guideLog.appendChild(userBubble);
+
+    guideInput.value = "";
+    guideState.isStreaming = true;
+    guideSendBtn.hidden = true;
+    guideStopBtn.hidden = false;
+    refreshGuideAvailability();
+
+    var assistantBubble = document.createElement("div");
+    assistantBubble.className = "mx-ai-bubble mx-ai-bubble-assistant";
+    assistantBubble.setAttribute("dir", "auto");
+    guideLog.appendChild(assistantBubble);
+    guideLog.scrollTop = guideLog.scrollHeight;
+
+    var controller = new AbortController();
+    guideState.abortController = controller;
+    var renderer = createThrottledRenderer(assistantBubble);
+    var accumulatedText = "";
+
+    var apiMessages = [];
+    for (var m = 0; m < guideState.history.length; m++) {
+      apiMessages.push({ role: guideState.history[m].role, content: guideState.history[m].content });
+    }
+
+    complete({
+      system: ASK_SYSTEM_PROMPT + " Answer using the provided excerpts from the study guide and mention specific theorem, lemma, or definition titles when relevant.",
+      messages: apiMessages,
+      signal: controller.signal,
+      onDelta: function (delta, fullText) {
+        accumulatedText = fullText;
+        renderer.update(fullText);
+        guideLog.scrollTop = guideLog.scrollHeight;
+      }
+    })
+      .then(function (finalText) {
+        if (!finalText || !finalText.trim()) throw new Error(t.emptyAnswer);
+        renderer.finish(finalText);
+        guideState.history.push({ role: "assistant", content: finalText });
+        if (retrieved.length > 0) {
+          var srcRow = document.createElement("div");
+          srcRow.className = "mx-ai-guide-sources";
+          var lbl = document.createElement("span");
+          lbl.textContent = t.guideSources + " ";
+          srcRow.appendChild(lbl);
+          for (var r = 0; r < retrieved.length; r++) {
+            (function (targetBlk) {
+              var link = document.createElement("a");
+              link.className = "mx-ai-guide-source-link";
+              link.href = "#" + targetBlk.id;
+              link.textContent = getBlockTitle(targetBlk) || targetBlk.id;
+              link.addEventListener("click", function () {
+                closeGuideDialog();
+              });
+              srcRow.appendChild(link);
+            })(retrieved[r]);
+          }
+          assistantBubble.appendChild(srcRow);
+        }
+      })
+      .catch(function (err) {
+        renderer.cancel();
+        if (controller.signal.aborted && accumulatedText.trim()) {
+          renderer.finish(accumulatedText);
+          guideState.history.push({ role: "assistant", content: accumulatedText });
+        } else {
+          guideState.history.pop();
+          if (controller.signal.aborted) {
+            if (assistantBubble.parentNode) assistantBubble.parentNode.removeChild(assistantBubble);
+          } else {
+            assistantBubble.classList.add("mx-ai-error");
+            assistantBubble.textContent = (err && err.message) ? err.message : "Error generating answer.";
+          }
+        }
+      })
+      .then(function () {
+        if (guideState.abortController === controller) {
+          guideState.isStreaming = false;
+          guideState.abortController = null;
+          guideSendBtn.hidden = false;
+          guideStopBtn.hidden = true;
+          refreshGuideAvailability();
+          if (!guideInput.disabled) guideInput.focus();
+        }
+      });
+  }
+
+  guideToggleBtn.addEventListener("click", function () {
+    refreshGuideAvailability();
+    if (typeof guideDialog.showModal === "function") guideDialog.showModal();
+    else guideDialog.setAttribute("open", "");
+    if (!guideInput.disabled) guideInput.focus();
+  });
+  guideCloseBtn.addEventListener("click", closeGuideDialog);
+  guideDialog.addEventListener("click", function (e) {
+    if (e.target === guideDialog) closeGuideDialog();
+  });
+  guideSendBtn.addEventListener("click", sendGuideQuestion);
+  guideStopBtn.addEventListener("click", function () {
+    if (guideState.abortController) {
+      try { guideState.abortController.abort(); } catch (e) {}
+    }
+  });
+  guideClearBtn.addEventListener("click", function () {
+    if (guideState.isStreaming && guideState.abortController) {
+      try { guideState.abortController.abort(); } catch (e) {}
+    }
+    guideState.history = [];
+    while (guideLog.firstChild) guideLog.removeChild(guideLog.firstChild);
+    guideInput.value = "";
+    refreshGuideAvailability();
+  });
+  guideInput.addEventListener("keydown", function (e) {
+    if (e.isComposing || e.keyCode === 229) return;
+    if ((e.key === "Enter" && !e.shiftKey) || (e.key === "Enter" && (e.ctrlKey || e.metaKey))) {
+      e.preventDefault();
+      if (!guideSendBtn.disabled && !guideSendBtn.hidden) sendGuideQuestion();
+    }
+  });
+
   // Expose Mathia.ai
   if (!window.Mathia) {
     window.Mathia = {};
@@ -2500,6 +3088,11 @@
       sanitizeSvg: sanitizeSvg,
       markdownToNodes: markdownToNodes,
       assembleInitialPrompt: assembleInitialPrompt,
+      buildAskSystemPrompt: buildAskSystemPrompt,
+      getPresetsForBlock: getPresetsForBlock,
+      collectDependencyBlocks: collectDependencyBlocks,
+      retrieveRelevantBlocks: retrieveRelevantBlocks,
+      diagnoseSvgFailure: diagnoseSvgFailure,
       extractCleanBlockText: extractCleanBlockText,
       getSemanticBlocks: getSemanticBlocks,
       truncateText: truncateText,
