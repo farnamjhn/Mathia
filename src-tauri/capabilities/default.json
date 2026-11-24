@@ -31,6 +31,9 @@
     "allow-get-decision-model",
     "allow-set-decision-model",
     "allow-test-decision-model",
-    "allow-run-decision-model"
+    "allow-run-decision-model",
+    "allow-app-version",
+    "allow-check-for-update",
+    "allow-install-update"
   ]
 }

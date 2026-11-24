@@ -15,6 +15,8 @@ pub fn build_app_menu<R: Runtime>(
         let app_menu = SubmenuBuilder::new(app, "Mathia")
             .about(None)
             .separator()
+            .item(&MenuItemBuilder::with_id("check_update", "Check for Updates…").build(app)?)
+            .separator()
             .item(
                 &MenuItemBuilder::with_id("scoring", "Detection Settings…")
                     .accelerator("CmdOrCtrl+,")

@@ -29,6 +29,9 @@ const COMMANDS: &[&str] = &[
     "set_decision_model",
     "test_decision_model",
     "run_decision_model",
+    "app_version",
+    "check_for_update",
+    "install_update",
 ];
 
 fn main() {

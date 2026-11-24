@@ -14,6 +14,7 @@ mod dock;
 mod menu;
 mod session;
 mod theme;
+mod update;
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -832,6 +833,24 @@ async fn run_decision_model(
     Ok(run)
 }
 
+/// The running app's version (also shown in the About window).
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Looks for a newer published release; `None` means the app is current.
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<Option<update::UpdateInfo>, String> {
+    update::check_manual(&app).await
+}
+
+/// Downloads and installs the newest release, then restarts the app.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    update::install(&app).await
+}
+
 fn main() {
     // A development launch starts from a raw executable, so macOS initially
     // assigns it the generic `exec` icon. Initializing AppKit and replacing
@@ -840,6 +859,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
             if let Some(recent_path) = id.strip_prefix("recent:") {
@@ -883,6 +903,10 @@ fn main() {
             // Waiting for `RunEvent::Ready` leaves the light bundle icon visible
             // while the application is starting in Dark Mode.
             dock::refresh(None);
+            // Dev builds must never replace themselves with a downloaded
+            // release, so the automatic check only runs in release builds.
+            #[cfg(not(debug_assertions))]
+            update::spawn_periodic_check(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -944,6 +968,9 @@ fn main() {
             set_decision_model,
             test_decision_model,
             run_decision_model,
+            app_version,
+            check_for_update,
+            install_update,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Mathia")
