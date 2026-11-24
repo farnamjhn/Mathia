@@ -13,3 +13,4 @@ tests/js/node_modules
 __pycache__/
 *.py[cod]
 ignoreme
+.secrets/

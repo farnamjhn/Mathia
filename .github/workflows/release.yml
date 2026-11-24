@@ -35,6 +35,27 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Tag matches workspace version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, tomllib
+          tag = os.environ["GITHUB_REF_NAME"]
+          version = tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"]
+
+          def norm(value):
+              parts = (value[1:] if value.startswith("v") else value).split(".")
+              parts += ["0"] * (3 - len(parts))
+              return tuple(int(part) for part in parts[:3])
+
+          if norm(tag) != norm(version):
+              raise SystemExit(
+                  f"::error::Tag {tag} does not match the workspace version {version}. "
+                  "Bump [workspace.package].version in Cargo.toml before tagging."
+              )
+          print(f"tag {tag} matches version {version}")
+          PY
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -51,6 +72,15 @@ jobs:
           ./scripts/vendor-fonts.sh
       - name: Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
+      - name: Check updater signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. Add the updater private key as a repository secret (see README: Auto-updates)."
+            exit 1
+          fi
       - name: Build bundles
         shell: bash
         env:
@@ -60,6 +90,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         working-directory: src-tauri
         run: |
           # Tauri tries to sign whenever these are set, even when empty, so
@@ -78,6 +110,9 @@ jobs:
             target/${{ matrix.target }}/release/bundle/**/*.deb
             target/${{ matrix.target }}/release/bundle/**/*.rpm
             target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            target/${{ matrix.target }}/release/bundle/**/*.tar.gz
+            target/${{ matrix.target }}/release/bundle/**/*.zip
+            target/${{ matrix.target }}/release/bundle/**/*.sig
           if-no-files-found: error
 
   release:
@@ -85,9 +120,16 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
+      - name: Build updater manifest
+        run: |
+          python3 scripts/make-latest-json.py \
+            --dir dist \
+            --repo "${{ github.repository }}" \
+            --tag "${{ github.ref_name }}"
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
