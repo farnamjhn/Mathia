@@ -8,8 +8,8 @@ tests/js/node_modules
 /src-tauri/gen
 .claude
 /ml/.venv/
-/ml/data/*.jsonl
-/ml/data/*.json
+/ml/data/**/*.jsonl
+/ml/data/**/*.json
 __pycache__/
 *.py[cod]
 ignoreme
