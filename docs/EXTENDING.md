@@ -133,24 +133,31 @@ This guide provides concrete, repeatable recipes for making common architectural
 3. **Generate Synthetic Bilingual Datasets (Optional if data already exists)**:
    ```bash
    uv run python -m mathia_ml.dataset_gen \
-       --input-dir ../sample-data \
+       --sources ../sample-data \
        --output-dir data/
    ```
 
-4. **Split Dataset into Train / Validation / Test**:
+4. **Split Combined Data (or Verify an Existing Split)**:
    ```bash
+   # Partition a single combined LabeledDocument JSONL (e.g. real_labeled.jsonl)
    uv run python -m mathia_ml.split \
-       --data-dir data/ \
+       --input data/real_labeled.jsonl \
+       --output-dir data/ \
        --train-ratio 0.8 \
        --val-ratio 0.1 \
        --test-ratio 0.1
+
+   # Verify train/val/test.jsonl have zero document leakage
+   uv run python -m mathia_ml.split --verify-dir data/
    ```
+   *`dataset_gen.py` already writes `train.jsonl`/`val.jsonl`/`test.jsonl`, so
+   this step is only needed for combined labeled data or split verification.*
 
 5. **Train CRF with Hyperparameter Tuning and Export Weights**:
    ```bash
    uv run python -m mathia_ml.train_crf \
-       --train-path data/train.jsonl \
-       --val-path data/val.jsonl \
+       --train-file data/train.jsonl \
+       --val-file data/val.jsonl \
        --output-weights ../crates/math-core/src/crf_weights.json
    ```
    *Note: This automatically tunes L1 ($c_1$) and L2 ($c_2$) penalties via L-BFGS, optimizes for exact-span F1 on validation, and writes the compact JSON weights directly to the core Rust crate.*
@@ -158,8 +165,8 @@ This guide provides concrete, repeatable recipes for making common architectural
 6. **Benchmark Exact-Span F1**:
    ```bash
    uv run python -m mathia_ml.evaluate \
-       --test-path data/test.jsonl \
-       --weights-path ../crates/math-core/src/crf_weights.json
+       --test-file data/test.jsonl \
+       --weights-file ../crates/math-core/src/crf_weights.json
    ```
 
 7. **Verify Rust Test Suite & Benchmarks**:

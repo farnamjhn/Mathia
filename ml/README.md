@@ -63,19 +63,28 @@ Mathematical textbooks with LaTeX theorem-like environments (`\begin{theorem}...
 
 ```bash
 uv run python -m mathia_ml.dataset_gen \
-    --input-dir ../sample-data \
+    --sources ../sample-data \
     --output-dir data/
 ```
 
 ### Step 2: Stratified Partitioning (`split.py`)
 Partitions documents into 80% train, 10% validation, and 10% test splits. Partitioning is strictly at the **document level** to eliminate sequence leakage, and stratified by language (English / Persian).
 
+`dataset_gen.py` already writes `train.jsonl`/`val.jsonl`/`test.jsonl`, so this
+step is only needed for a single combined labeled dataset (for example
+`real_labeled.jsonl` from the real-notes pipeline) or to verify an existing split.
+
 ```bash
+# Partition a combined LabeledDocument JSONL
 uv run python -m mathia_ml.split \
-    --data-dir data/ \
+    --input data/real_labeled.jsonl \
+    --output-dir data/ \
     --train-ratio 0.8 \
     --val-ratio 0.1 \
     --test-ratio 0.1
+
+# Verify train/val/test.jsonl have zero document leakage
+uv run python -m mathia_ml.split --verify-dir data/
 ```
 
 ### Step 3: CRF Training & Weights Export (`train_crf.py`)
@@ -86,8 +95,8 @@ Trains a Linear-Chain CRF using `sklearn-crfsuite` with L-BFGS:
 
 ```bash
 uv run python -m mathia_ml.train_crf \
-    --train-path data/train.jsonl \
-    --val-path data/val.jsonl \
+    --train-file data/train.jsonl \
+    --val-file data/val.jsonl \
     --output-weights ../crates/math-core/src/crf_weights.json
 ```
 
@@ -111,8 +120,8 @@ Benchmarks the trained CRF against the baseline heuristic scorer using `seqeval`
 
 ```bash
 uv run python -m mathia_ml.evaluate \
-    --test-path data/test.jsonl \
-    --weights-path ../crates/math-core/src/crf_weights.json
+    --test-file data/test.jsonl \
+    --weights-file ../crates/math-core/src/crf_weights.json
 ```
 
 ### Labeling Real Notes with an LLM
@@ -124,10 +133,12 @@ exactly.
 
 ```bash
 # 1. Extract unlabeled documents (full JSONL + compact LLM input)
-uv run python -m mathia_ml.prepare_unlabeled ../sample-data/notes \
+uv run python -m mathia_ml.prepare_unlabeled ../sample-data \
     --output data/unlabeled.jsonl \
-    --llm-input data/unlabeled_for_llm.jsonl \
-    --config ../scoring.toml
+    --llm-input data/unlabeled_for_llm.jsonl
+
+# Optional: pass --config path/to/scoring.toml to score with a custom config
+# instead of the built-in defaults.
 
 # 2. Give prompts/label_bio_tags.md plus data/unlabeled_for_llm.jsonl to an LLM
 #    and save its JSONL reply as data/llm_labels.jsonl
@@ -140,8 +151,8 @@ uv run python -m mathia_ml.import_labeled \
 
 # 4. Feed the result into the normal split → train → evaluate pipeline
 uv run python -m mathia_ml.split --input data/real_labeled.jsonl --output-dir data/
-uv run python -m mathia_ml.train_crf --train-path data/train.jsonl --val-path data/val.jsonl
-uv run python -m mathia_ml.evaluate --test-path data/test.jsonl
+uv run python -m mathia_ml.train_crf --train-file data/train.jsonl --val-file data/val.jsonl
+uv run python -m mathia_ml.evaluate --test-file data/test.jsonl
 ```
 
 `import_labeled` enforces tag vocabulary, length alignment, legal BIO

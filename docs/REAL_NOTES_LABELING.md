@@ -48,11 +48,13 @@ flowchart LR
 
 ```bash
 cd ml
-uv run python -m mathia_ml.prepare_unlabeled ../sample-data/notes \
+uv run python -m mathia_ml.prepare_unlabeled ../sample-data \
     --output data/unlabeled.jsonl \
-    --llm-input data/unlabeled_for_llm.jsonl \
-    --config ../scoring.toml
+    --llm-input data/unlabeled_for_llm.jsonl
 ```
+
+Add `--config path/to/scoring.toml` to score with a custom configuration
+instead of the built-in defaults; the file must exist or the CLI aborts.
 
 `prepare_unlabeled.py` accepts a single supported file or a directory
 (`--recursive` for nested folders). It runs `mathia dump-features` for every
@@ -142,8 +144,8 @@ documents imported, total nodes, and span counts per block type.
 
 ```bash
 uv run python -m mathia_ml.split --input data/real_labeled.jsonl --output-dir data/
-uv run python -m mathia_ml.train_crf --train-path data/train.jsonl --val-path data/val.jsonl
-uv run python -m mathia_ml.evaluate --test-path data/test.jsonl
+uv run python -m mathia_ml.train_crf --train-file data/train.jsonl --val-file data/val.jsonl
+uv run python -m mathia_ml.evaluate --test-file data/test.jsonl
 ```
 
 Real notes can be mixed with synthetic documents before splitting; no schema
