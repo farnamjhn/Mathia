@@ -145,7 +145,34 @@ class TestTrainCRF(unittest.TestCase):
 
         labels = data["labels"]
         self.assertIn("O", labels)
-        expected_b_labels = [
+
+        # Every label must be a valid BIO tag over the 12 semantic BlockTypes.
+        semantic_types = [
+            "THEOREM",
+            "LEMMA",
+            "PROPOSITION",
+            "COROLLARY",
+            "DEFINITION",
+            "PROOF",
+            "EXAMPLE",
+            "REMARK",
+            "EXERCISE",
+            "SOLUTION",
+            "CLAIM",
+            "NOTATION",
+        ]
+        allowed_labels = {"O"} | {
+            f"{prefix}-{kind}" for prefix in ("B", "I") for kind in semantic_types
+        }
+        for label in labels:
+            self.assertIn(
+                label, allowed_labels, f"Unexpected label {label} in crf_weights.json"
+            )
+
+        # Core types must always be learnable from the shipped dataset.
+        # SOLUTION/CLAIM are only emitted when the training data contains such
+        # spans, so they are validated for spelling above but not required here.
+        required_b_labels = [
             "B-THEOREM",
             "B-LEMMA",
             "B-PROPOSITION",
@@ -155,11 +182,9 @@ class TestTrainCRF(unittest.TestCase):
             "B-EXAMPLE",
             "B-REMARK",
             "B-EXERCISE",
-            "B-SOLUTION",
-            "B-CLAIM",
             "B-NOTATION",
         ]
-        for b_label in expected_b_labels:
+        for b_label in required_b_labels:
             self.assertIn(b_label, labels, f"Missing {b_label} in crf_weights.json")
 
         # File size must be under 100 KB
