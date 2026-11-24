@@ -117,7 +117,8 @@ def tune_hyperparameters(
             all_possible_transitions=True,
         )
         model.fit(X_train, y_train)
-        y_pred = model.predict(X_val)
+        # sklearn-crfsuite returns numpy arrays here; seqeval requires plain lists.
+        y_pred = [list(seq) for seq in model.predict(X_val)]
         score = float(f1_score(y_val, y_pred))
 
         trial = {
@@ -364,7 +365,7 @@ def train_and_export(
     )
 
     # Validation evaluation
-    y_pred = crf.predict(X_val)
+    y_pred = [list(seq) for seq in crf.predict(X_val)]
     val_f1 = float(f1_score(y_val, y_pred))
     report = classification_report(y_val, y_pred)
     logger.info("Validation Exact-Span F1: %.4f\n%s", val_f1, report)

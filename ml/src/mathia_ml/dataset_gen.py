@@ -160,8 +160,12 @@ def run_dump_features(
             cmd,
             capture_output=True,
             text=True,
-            check=True,
         )
+        if proc.returncode != 0:
+            detail = proc.stderr.strip() or proc.stdout.strip() or "no output"
+            raise RuntimeError(
+                f"mathia dump-features failed (exit {proc.returncode}): {detail}"
+            )
         data = json.loads(proc.stdout)
         return FeatureDump.model_validate(data)
     finally:
