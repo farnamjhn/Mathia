@@ -130,6 +130,9 @@
       <button type="button" class="menu-action" data-action="about">
         <span>About Mathia</span>
       </button>
+      <button type="button" class="menu-action" data-action="check_update">
+        <span>Check for Updates…</span>
+      </button>
       <button type="button" class="menu-action" data-action="guide">
         <span>Prompt Guide</span>
       </button>
@@ -622,11 +625,32 @@ BEFORE YOU ANSWER, CHECK
     <p style="font-size: 13px; color: var(--muted);">Accessible Mathematics Reader and Compiler</p>
   </header>
   <div style="padding: 16px 20px; font-size: 13px; color: var(--text); line-height: 1.5; text-align: center;">
-    <p>Version 0.1.0</p>
+    <p id="about-version">Version …</p>
     <p style="margin-top: 8px; color: var(--muted);">Reads, structures, and compiles mathematical documents into accessible, responsive textbooks.</p>
   </div>
   <footer class="dialog-actions" style="justify-content: center;">
     <button id="about-close" class="btn primary" type="button">Close</button>
+  </footer>
+</dialog>
+
+<dialog id="update-dialog" class="dialog narrow" aria-labelledby="update-title">
+  <header class="dialog-head">
+    <h2 id="update-title">Update available</h2>
+    <p id="update-summary"></p>
+  </header>
+  <div class="update-body">
+    <p id="update-notes" class="update-notes" hidden></p>
+    <div id="update-progress-wrap" class="update-progress" hidden>
+      <div id="update-progress-track" class="update-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-labelledby="update-progress-text">
+        <div id="update-progress-fill" class="update-progress-fill"></div>
+      </div>
+      <p id="update-progress-text" class="update-progress-text"></p>
+    </div>
+    <p id="update-error" class="config-error" role="alert" hidden></p>
+  </div>
+  <footer class="dialog-actions">
+    <button id="update-later" class="btn" type="button">Later</button>
+    <button id="update-install" class="btn primary" type="button">Install and Restart</button>
   </footer>
 </dialog>
 

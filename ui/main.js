@@ -67,6 +67,15 @@
     recentWrap: $("recent-wrap"), recentButton: $("recent-button"), recentMenu: $("recent-menu"),
     winMenubar: $("win-menubar"),
     aboutDialog: $("about-dialog"), aboutClose: $("about-close"),
+    aboutVersion: $("about-version"),
+    updateDialog: $("update-dialog"), updateTitle: $("update-title"),
+    updateSummary: $("update-summary"), updateNotes: $("update-notes"),
+    updateProgressWrap: $("update-progress-wrap"),
+    updateProgressTrack: $("update-progress-track"),
+    updateProgressFill: $("update-progress-fill"),
+    updateProgressText: $("update-progress-text"),
+    updateError: $("update-error"),
+    updateLater: $("update-later"), updateInstall: $("update-install"),
     winRecentMenu: $("win-recent-menu"), winRecentEmpty: $("win-recent-empty"),
     winRecentDivider: $("win-recent-divider"), winRecentClear: $("win-recent-clear"),
     corrections: $("corrections"), correctionsCount: $("corrections-count"),
@@ -1558,6 +1567,92 @@
     });
   }
 
+  let updateInstalling = false;
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes < 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB"];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit += 1;
+    }
+    return value.toFixed(unit === 0 ? 0 : 1) + " " + units[unit];
+  }
+
+  function showUpdateDialog(info) {
+    if (el.updateTitle) el.updateTitle.textContent = "Update available";
+    if (el.updateSummary) {
+      el.updateSummary.textContent = "Mathia " + info.version + " is available. You are running " + info.currentVersion + ".";
+    }
+    if (el.updateNotes) {
+      const notes = (info.notes || "").trim();
+      el.updateNotes.textContent = notes;
+      el.updateNotes.hidden = notes.length === 0;
+    }
+    if (el.updateError) {
+      el.updateError.textContent = "";
+      el.updateError.hidden = true;
+    }
+    if (el.updateProgressWrap) el.updateProgressWrap.hidden = true;
+    if (el.updateProgressFill) el.updateProgressFill.style.width = "0%";
+    if (el.updateInstall) {
+      el.updateInstall.disabled = false;
+      el.updateInstall.textContent = "Install and Restart";
+    }
+    if (el.updateLater) el.updateLater.disabled = false;
+    updateInstalling = false;
+    if (el.updateDialog && !el.updateDialog.open) el.updateDialog.showModal();
+  }
+
+  async function checkForUpdate(manual) {
+    if (updateInstalling) return;
+    if (manual) setStatus("Checking for updates…");
+    try {
+      const info = await invoke("check_for_update");
+      if (info) {
+        if (manual) setStatus("");
+        showUpdateDialog(info);
+      } else if (manual) {
+        setStatus("Mathia is up to date.");
+      }
+    } catch (error) {
+      if (manual) setStatus("Update check failed: " + error, true);
+    }
+  }
+
+  async function installUpdate() {
+    if (updateInstalling) return;
+    updateInstalling = true;
+    if (el.updateError) {
+      el.updateError.textContent = "";
+      el.updateError.hidden = true;
+    }
+    if (el.updateInstall) {
+      el.updateInstall.disabled = true;
+      el.updateInstall.textContent = "Installing…";
+    }
+    if (el.updateLater) el.updateLater.disabled = true;
+    if (el.updateProgressWrap) el.updateProgressWrap.hidden = false;
+    if (el.updateProgressText) el.updateProgressText.textContent = "Downloading…";
+    try {
+      await invoke("install_update");
+      // A successful install restarts the app before this resolves.
+    } catch (error) {
+      updateInstalling = false;
+      if (el.updateInstall) {
+        el.updateInstall.disabled = false;
+        el.updateInstall.textContent = "Install and Restart";
+      }
+      if (el.updateLater) el.updateLater.disabled = false;
+      if (el.updateError) {
+        el.updateError.textContent = String(error);
+        el.updateError.hidden = false;
+      }
+    }
+  }
+
   function handleMenuAction(action) {
     switch (action) {
       case "open":
@@ -1655,6 +1750,9 @@
         if (el.aboutDialog && !el.aboutDialog.open) {
           el.aboutDialog.showModal();
         }
+        break;
+      case "check_update":
+        checkForUpdate(true);
         break;
     }
   }
@@ -2025,6 +2123,25 @@
   if (el.aboutClose && el.aboutDialog) {
     el.aboutClose.addEventListener("click", () => el.aboutDialog.close());
   }
+  if (el.updateLater && el.updateDialog) {
+    el.updateLater.addEventListener("click", () => el.updateDialog.close());
+  }
+  if (el.updateInstall) {
+    el.updateInstall.addEventListener("click", installUpdate);
+  }
+  if (el.updateDialog) {
+    el.updateDialog.addEventListener("click", (event) => {
+      if (event.target === el.updateDialog && !updateInstalling) el.updateDialog.close();
+    });
+    el.updateDialog.addEventListener("cancel", (event) => {
+      if (updateInstalling) event.preventDefault();
+    });
+  }
+  invoke("app_version")
+    .then((version) => {
+      if (el.aboutVersion) el.aboutVersion.textContent = "Version " + version;
+    })
+    .catch(() => {});
 
   window.addEventListener("keydown", (event) => {
     if (el.guideDialog.open || el.configDialog.open || (el.aboutDialog && el.aboutDialog.open)) return;
@@ -2102,6 +2219,23 @@
   });
   listen("menu-open-recent", (event) => {
     if (event.payload) openRecent(event.payload);
+  });
+  listen("update-available", (event) => {
+    if (!event.payload) return;
+    if (el.updateDialog && el.updateDialog.open) return;
+    showUpdateDialog(event.payload);
+  });
+  listen("update-progress", (event) => {
+    const data = event.payload;
+    if (!data) return;
+    if (el.updateProgressWrap) el.updateProgressWrap.hidden = false;
+    const percent = Math.round((data.percent || 0) * 100);
+    if (el.updateProgressFill) el.updateProgressFill.style.width = percent + "%";
+    if (el.updateProgressTrack) el.updateProgressTrack.setAttribute("aria-valuenow", String(percent));
+    if (el.updateProgressText) {
+      const total = data.total ? " of " + formatBytes(data.total) : "";
+      el.updateProgressText.textContent = "Downloading… " + percent + "% (" + formatBytes(data.downloaded) + total + ")";
+    }
   });
 
   listen("tauri://drag-enter", () => { el.drop.hidden = false; });
