@@ -516,6 +516,98 @@ fn compact(text: &str, first_sentence: bool) -> String {
     out.trim().to_string()
 }
 
+fn is_linkable_term(folded: &str) -> bool {
+    let non_ws = folded.chars().filter(|c| !c.is_whitespace()).count();
+    let has_non_ascii = folded.chars().any(|c| !c.is_ascii());
+    let min_len = if has_non_ascii { 3 } else { 4 };
+    if non_ws < min_len || folded.chars().count() > 60 {
+        return false;
+    }
+    if folded.contains('$') || folded.chars().all(|c| !c.is_alphabetic()) {
+        return false;
+    }
+    !matches!(
+        folded,
+        "definition"
+            | "theorem"
+            | "lemma"
+            | "proposition"
+            | "corollary"
+            | "proof"
+            | "example"
+            | "remark"
+            | "note"
+            | "exercise"
+            | "solution"
+            | "claim"
+            | "notation"
+            | "تعریف"
+            | "قضیه"
+            | "لم"
+            | "گزاره"
+            | "نتیجه"
+            | "برهان"
+            | "مثال"
+            | "تذکر"
+            | "نکته"
+            | "تمرین"
+            | "حل"
+            | "ادعا"
+            | "نمادگذاری"
+    )
+}
+
+fn extract_definition_terms(doc: &Document, block: &SemanticBlock) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut seen = HashSet::new();
+
+    let mut push_term = |raw: &str| {
+        let cleaned = raw
+            .trim()
+            .trim_end_matches(['.', ':', '：', ',', '،', ';', '؛'])
+            .trim();
+        let folded = crate::text::fold(cleaned);
+        if is_linkable_term(&folded) && seen.insert(folded) {
+            terms.push(cleaned.to_string());
+        }
+    };
+
+    if let Some(ref name) = block.name {
+        push_term(name);
+    }
+
+    let start = block.span.start.min(doc.nodes.len());
+    let end = block.span.end.min(doc.nodes.len());
+    for (offset, node) in doc.nodes[start..end].iter().enumerate() {
+        let dom = Dom::parse(&node.html);
+        let emphasized = dom.find_all(dom.root(), |d, id| {
+            d.is_tag(id, "strong") || d.is_tag(id, "em")
+        });
+        for (idx, emp_id) in emphasized.into_iter().enumerate() {
+            // Skip the leading block opener badge like "**Definition 1.**"
+            if offset == 0 && idx == 0 && node.leading_emphasis {
+                continue;
+            }
+            let raw = rich_text(&dom, emp_id);
+            let cleaned = compact(&raw, false);
+            push_term(&cleaned);
+        }
+    }
+
+    terms
+}
+
+struct EdgeIndex {
+    valid_node_ids: HashSet<String>,
+    id_targets: HashSet<String>,
+    num_targets: BTreeMap<(String, String), String>,
+    block_order: BTreeMap<String, usize>,
+    /// (folded_name, display_name, target_block_id) sorted longest-first
+    name_targets: Vec<(String, String, String)>,
+    /// (folded_term, display_term, def_block_id, def_order) sorted longest-first
+    def_terms: Vec<(String, String, String, usize)>,
+}
+
 fn detect_edges(doc: &Document, root: &MindMapNode) -> Vec<MindMapEdge> {
     let mut valid_node_ids = HashSet::new();
     fn collect_ids(node: &MindMapNode, out: &mut HashSet<String>) {
@@ -528,6 +620,11 @@ fn detect_edges(doc: &Document, root: &MindMapNode) -> Vec<MindMapEdge> {
 
     let mut num_targets: BTreeMap<(String, String), String> = BTreeMap::new();
     let mut id_targets: HashSet<String> = HashSet::new();
+    let mut block_order: BTreeMap<String, usize> = BTreeMap::new();
+    let mut name_targets: Vec<(String, String, String)> = Vec::new();
+    let mut seen_names: HashSet<String> = HashSet::new();
+    let mut def_terms: Vec<(String, String, String, usize)> = Vec::new();
+    let mut seen_def_terms: HashSet<String> = HashSet::new();
 
     let kind_keywords = |kind: BlockType| -> Vec<&'static str> {
         match kind {
@@ -542,10 +639,11 @@ fn detect_edges(doc: &Document, root: &MindMapNode) -> Vec<MindMapEdge> {
         }
     };
 
-    for block in &doc.blocks {
+    for (order, block) in doc.blocks.iter().enumerate() {
         if !valid_node_ids.contains(&block.id) {
             continue;
         }
+        block_order.insert(block.id.clone(), order);
         id_targets.insert(block.id.clone());
         if let Some(ref num) = block.number {
             let folded = fold_digits(num);
@@ -553,7 +651,33 @@ fn detect_edges(doc: &Document, root: &MindMapNode) -> Vec<MindMapEdge> {
                 num_targets.insert((kw.to_string(), folded.clone()), block.id.clone());
             }
         }
+        if let Some(ref name) = block.name {
+            let folded = crate::text::fold(name);
+            if is_linkable_term(&folded) && seen_names.insert(folded.clone()) {
+                name_targets.push((folded, name.trim().to_string(), block.id.clone()));
+            }
+        }
+        if block.kind == BlockType::Definition {
+            for term in extract_definition_terms(doc, block) {
+                let folded = crate::text::fold(&term);
+                if seen_def_terms.insert(folded.clone()) {
+                    def_terms.push((folded, term, block.id.clone(), order));
+                }
+            }
+        }
     }
+
+    name_targets.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    def_terms.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+
+    let index = EdgeIndex {
+        valid_node_ids,
+        id_targets,
+        num_targets,
+        block_order,
+        name_targets,
+        def_terms,
+    };
 
     let mut edges: Vec<MindMapEdge> = Vec::new();
     let mut seen_edges: HashSet<(String, String)> = HashSet::new();
@@ -561,24 +685,14 @@ fn detect_edges(doc: &Document, root: &MindMapNode) -> Vec<MindMapEdge> {
     fn scan_node(
         node: &MindMapNode,
         doc: &Document,
-        valid_node_ids: &HashSet<String>,
-        id_targets: &HashSet<String>,
-        num_targets: &BTreeMap<(String, String), String>,
+        index: &EdgeIndex,
         edges: &mut Vec<MindMapEdge>,
         seen: &mut HashSet<(String, String)>,
     ) {
         if node.id != "mx-main" {
             let Some(block) = doc.blocks.iter().find(|b| b.id == node.id) else {
                 for child in &node.children {
-                    scan_node(
-                        child,
-                        doc,
-                        valid_node_ids,
-                        id_targets,
-                        num_targets,
-                        edges,
-                        seen,
-                    );
+                    scan_node(child, doc, index, edges, seen);
                 }
                 return;
             };
@@ -595,9 +709,9 @@ fn detect_edges(doc: &Document, root: &MindMapNode) -> Vec<MindMapEdge> {
                     html_corpus.push(' ');
                     html_corpus.push_str(&n.html);
                 }
-            } else {
-                html_corpus.push_str(&block.html);
             }
+            html_corpus.push(' ');
+            html_corpus.push_str(&block.html);
 
             if let Some(proof_block) = node
                 .proof_id
@@ -613,13 +727,13 @@ fn detect_edges(doc: &Document, root: &MindMapNode) -> Vec<MindMapEdge> {
                         html_corpus.push(' ');
                         html_corpus.push_str(&n.html);
                     }
-                } else {
-                    html_corpus.push_str(&proof_block.html);
                 }
+                html_corpus.push(' ');
+                html_corpus.push_str(&proof_block.html);
             }
 
             let mut add_edge = |target_id: &str, label: Option<String>| {
-                if target_id != node.id && valid_node_ids.contains(target_id) {
+                if target_id != node.id && index.valid_node_ids.contains(target_id) {
                     let key = (node.id.clone(), target_id.to_string());
                     if seen.insert(key) {
                         edges.push(MindMapEdge {
@@ -637,7 +751,7 @@ fn detect_edges(doc: &Document, root: &MindMapNode) -> Vec<MindMapEdge> {
                 let start = cursor + idx + 7;
                 if let Some(end_quote) = html_corpus[start..].find('"') {
                     let target_id = &html_corpus[start..start + end_quote];
-                    if id_targets.contains(target_id) {
+                    if index.id_targets.contains(target_id) {
                         add_edge(target_id, Some("uses".into()));
                     }
                     cursor = start + end_quote;
@@ -652,7 +766,7 @@ fn detect_edges(doc: &Document, root: &MindMapNode) -> Vec<MindMapEdge> {
                 let start = cursor + idx + 2;
                 if let Some(end_paren) = text_corpus[start..].find(')') {
                     let target_id = &text_corpus[start..start + end_paren];
-                    if id_targets.contains(target_id) {
+                    if index.id_targets.contains(target_id) {
                         add_edge(target_id, Some("uses".into()));
                     }
                     cursor = start + end_paren;
@@ -661,7 +775,7 @@ fn detect_edges(doc: &Document, root: &MindMapNode) -> Vec<MindMapEdge> {
                 }
             }
 
-            // C. Textual citations
+            // C. Textual numbered citations
             let keywords = [
                 "theorem",
                 "lemma",
@@ -719,7 +833,9 @@ fn detect_edges(doc: &Document, root: &MindMapNode) -> Vec<MindMapEdge> {
                         let raw_num = trimmed[..num_end].trim_end_matches(['.', '-', '–']);
                         if !raw_num.is_empty() {
                             let folded = fold_digits(raw_num);
-                            if let Some(target_id) = num_targets.get(&(kw.to_string(), folded)) {
+                            if let Some(target_id) =
+                                index.num_targets.get(&(kw.to_string(), folded))
+                            {
                                 let matched_text = format!("{} {}", kw, raw_num);
                                 add_edge(target_id, Some(matched_text));
                             }
@@ -727,30 +843,41 @@ fn detect_edges(doc: &Document, root: &MindMapNode) -> Vec<MindMapEdge> {
                     }
                 }
             }
+
+            // D. Named-result citations & E. Definition-term dependencies
+            if block.kind.is_semantic() {
+                let folded_corpus = crate::text::fold(&text_corpus);
+
+                for (folded_name, orig_name, target_id) in &index.name_targets {
+                    if target_id != &node.id
+                        && crate::text::contains_word(&folded_corpus, folded_name)
+                    {
+                        add_edge(target_id, Some(format!("cites {orig_name}")));
+                    }
+                }
+
+                let cur_order = index
+                    .block_order
+                    .get(&node.id)
+                    .copied()
+                    .unwrap_or(usize::MAX);
+                for (folded_term, orig_term, def_id, def_order) in &index.def_terms {
+                    if *def_order < cur_order
+                        && def_id != &node.id
+                        && crate::text::contains_word(&folded_corpus, folded_term)
+                    {
+                        add_edge(def_id, Some(format!("uses {orig_term}")));
+                    }
+                }
+            }
         }
 
         for child in &node.children {
-            scan_node(
-                child,
-                doc,
-                valid_node_ids,
-                id_targets,
-                num_targets,
-                edges,
-                seen,
-            );
+            scan_node(child, doc, index, edges, seen);
         }
     }
 
-    scan_node(
-        root,
-        doc,
-        &valid_node_ids,
-        &id_targets,
-        &num_targets,
-        &mut edges,
-        &mut seen_edges,
-    );
+    scan_node(root, doc, &index, &mut edges, &mut seen_edges);
     edges
 }
 
@@ -937,5 +1064,86 @@ mod tests {
         assert!(data.edges.iter().any(|e| e.to == "block-definition-2"));
         // Edge from قضیه ۲ -> Theorem 1 via explicit anchor (#block-theorem-1)
         assert!(data.edges.iter().any(|e| e.to == "block-theorem-1"));
+    }
+
+    #[test]
+    fn named_result_and_definition_term_edges_bilingual() {
+        let source = "\
+# Analysis
+
+**Definition 1.** A **metric space** $(X, d)$ is a set equipped with a distance function.
+
+**Theorem 1 (Bolzano-Weierstrass).** Every bounded sequence in a metric space has a convergent subsequence.
+
+**Corollary 1.** By Bolzano-Weierstrass, every compact subset of a metric space is sequentially compact.
+
+**تعریف ۲.** مجموعه‌ای که در آن هر پوشش باز زیرپوشش متناهی دارد، **مجموعه فشرده** نامیده می‌شود.
+
+**قضیه ۲ (هاینه–کانتور).** هر تابع پیوسته روی مجموعه فشرده یکنواخت پیوسته است.
+
+**نتیجه ۲.** طبق هاینه–کانتور این نگاشت پیوسته یکنواخت است.
+";
+        let doc = analyze(source, &ScoringConfig::default());
+        let data = extract(&doc, "analysis.md");
+
+        // Theorem 1 uses "metric space" defined in Definition 1 (without citing "Definition 1")
+        assert!(
+            data.edges
+                .iter()
+                .any(|e| e.from == "block-theorem-1" && e.to == "block-definition-1"),
+            "expected definition-term edge Theorem 1 -> Definition 1, got {:?}",
+            data.edges
+        );
+
+        // Corollary 1 cites Bolzano-Weierstrass (Theorem 1) by name and uses metric space (Definition 1)
+        assert!(
+            data.edges
+                .iter()
+                .any(|e| e.from == "block-corollary-1" && e.to == "block-theorem-1"),
+            "expected named-result edge Corollary 1 -> Theorem 1, got {:?}",
+            data.edges
+        );
+
+        // Persian: قضیه ۲ uses "مجموعه فشرده" defined in تعریف ۲
+        let def2_id = doc
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockType::Definition && b.number.as_deref() == Some("۲"))
+            .map(|b| b.id.clone())
+            .unwrap();
+        let thm2_id = doc
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockType::Theorem && b.number.as_deref() == Some("۲"))
+            .map(|b| b.id.clone())
+            .unwrap();
+        let cor2_id = doc
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockType::Corollary && b.number.as_deref() == Some("۲"))
+            .map(|b| b.id.clone())
+            .unwrap();
+
+        assert!(
+            data.edges
+                .iter()
+                .any(|e| e.from == thm2_id && e.to == def2_id),
+            "expected Persian definition-term edge {thm2_id} -> {def2_id}, got {:?}",
+            data.edges
+        );
+        assert!(
+            data.edges
+                .iter()
+                .any(|e| e.from == cor2_id && e.to == thm2_id),
+            "expected Persian named-result edge {cor2_id} -> {thm2_id}, got {:?}",
+            data.edges
+        );
+
+        // Earlier definitions must not create backward edges to later definitions/theorems
+        assert!(
+            !data.edges.iter().any(|e| e.from == "block-definition-1"),
+            "Definition 1 should have no outgoing dependency edges, got {:?}",
+            data.edges
+        );
     }
 }
