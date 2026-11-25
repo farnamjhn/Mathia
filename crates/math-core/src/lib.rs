@@ -33,7 +33,7 @@ pub use classifier::{
     Verdict,
 };
 pub use clean_html::{analyze_html, analyze_html_detailed, clean_html, is_html, is_html_file};
-pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, ScoringConfig};
+pub use config::{CONFIG_SCHEMA_VERSION, ConfigFormat, ScoringConfig, TaggerModel, Weights};
 pub use crf::{CrfModel, CrfTagger, RawCrfWeights};
 pub use error::{Error, Result};
 pub use features::{
@@ -50,7 +50,7 @@ pub use model::{
 };
 pub use normalize::normalize_markdown;
 pub use repair::{Repair, repair_markdown, wrap_bare_math};
-pub use tagger::{BioTag, SequenceTagger, TaggedNode};
+pub use tagger::{BioTag, HeuristicTagger, NodeScore, SequenceTagger, TaggedNode};
 
 /// A [`Document`] together with the evidence behind every decision: the static
 /// features and BIO tag of every node, and (on each block) why its scope ended.

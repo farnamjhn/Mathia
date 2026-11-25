@@ -4,8 +4,9 @@
 //!
 //! 1. **Static features** — [`crate::features::Lexicon`] extracts a
 //!    [`NodeFeatures`] record per node.
-//! 2. **CRF tagging** — [`CrfTagger`] runs Viterbi over the sequence and
-//!    returns BIO tags with a confidence margin per node.
+//! 2. **Sequence tagging** — the configured tagger ([`CrfTagger`] Viterbi, or
+//!    the linear weighted-sum [`crate::tagger::HeuristicTagger`]) returns BIO
+//!    tags with a confidence per node.
 //! 3. **Deterministic guardrails** — labelled leads are anchored, references
 //!    and keyword mentions are demoted, argument openers are sanitized, and
 //!    strongly labelled openers get structural scopes.
@@ -23,7 +24,7 @@ use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::ScoringConfig;
+use crate::config::{ScoringConfig, TaggerModel};
 use crate::crf::CrfTagger;
 use crate::crossref;
 use crate::features::{Features, Lexicon, NodeFeatures};
@@ -31,7 +32,7 @@ use crate::model::{
     BlockType, Direction, EndReason, Node, NodeKind, SemanticBlock, document_direction,
 };
 use crate::scoping;
-use crate::tagger::{BioTag, SequenceTagger, TaggedNode};
+use crate::tagger::{BioTag, HeuristicTagger, SequenceTagger, TaggedNode};
 use crate::text::fold_digits;
 
 /// Blocks plus everything needed to explain them.
@@ -463,6 +464,7 @@ pub struct BlockClassifier {
     config: ScoringConfig,
     lexicon: Lexicon,
     crf: CrfTagger,
+    weighted: HeuristicTagger,
 }
 
 /// Backwards-compatible name for [`BlockClassifier`].
@@ -478,10 +480,12 @@ impl BlockClassifier {
     pub fn new(config: ScoringConfig) -> Self {
         let lexicon = Lexicon::new(&config);
         let crf = CrfTagger::new();
+        let weighted = HeuristicTagger::new(config.clone(), lexicon.clone());
         BlockClassifier {
             config,
             lexicon,
             crf,
+            weighted,
         }
     }
 
@@ -495,6 +499,18 @@ impl BlockClassifier {
 
     pub fn crf(&self) -> &CrfTagger {
         &self.crf
+    }
+
+    pub fn weighted(&self) -> &HeuristicTagger {
+        &self.weighted
+    }
+
+    /// The tagger selected by [`ScoringConfig::tagger`].
+    pub fn tagger(&self) -> &dyn SequenceTagger {
+        match self.config.tagger {
+            TaggerModel::Crf => &self.crf,
+            TaggerModel::WeightedSum => &self.weighted,
+        }
     }
 
     /// Classifies with the default scoping.
@@ -512,7 +528,7 @@ impl BlockClassifier {
 
     /// [`Self::classify_with_overrides`], keeping the features and BIO tags.
     pub fn classify_detailed(&self, nodes: &[Node], overrides: &ScopeOverrides) -> Classification {
-        self.classify_with_tagger(nodes, overrides, &self.crf)
+        self.classify_with_tagger(nodes, overrides, self.tagger())
     }
 
     /// Classifies nodes using an arbitrary [`SequenceTagger`] to predict BIO tags.
@@ -866,12 +882,17 @@ impl BlockClassifier {
         let mut log = Vec::new();
         let mut rounds = 0;
 
-        // Step 1: Run EnvSpan bypass first, then CrfTagger across the document
+        // Step 1: Run EnvSpan bypass first, then the configured tagger across
+        // the document.
         let features: Vec<NodeFeatures> = nodes.iter().map(|n| self.lexicon.extract(n)).collect();
-        let crf_tags = self.crf.tag(nodes, &features);
+        let tags = self.tagger().tag(nodes, &features);
+        let confidence_floor = match self.config.tagger {
+            TaggerModel::Crf => self.config.ml_confidence_threshold,
+            TaggerModel::WeightedSum => self.config.threshold,
+        };
 
         let mut blocks = self
-            .tags_to_blocks(nodes, &crf_tags, &features, &overrides)
+            .tags_to_blocks(nodes, &tags, &features, &overrides)
             .blocks;
 
         while rounds < max_rounds {
@@ -902,20 +923,19 @@ impl BlockClassifier {
                     }
 
                     // Confidence Gating:
-                    // 1. CrfTagger confidence margin falls below config.ml_confidence_threshold
+                    // 1. The tagger's confidence falls below the configured floor.
                     let low_confidence = (b.span.start..b.span.end.min(nodes.len())).any(|idx| {
-                        crf_tags
-                            .get(idx)
-                            .is_some_and(|t| t.confidence < self.config.ml_confidence_threshold)
-                    }) || crf_tags
+                        tags.get(idx)
+                            .is_some_and(|t| t.confidence < confidence_floor)
+                    }) || tags
                         .get(b.span.end)
-                        .is_some_and(|t| t.confidence < self.config.ml_confidence_threshold);
+                        .is_some_and(|t| t.confidence < confidence_floor);
 
                     // 2. An Outside paragraph with high logic_density immediately follows a Theorem or Lemma
                     let logic_after_thm = matches!(b.kind, BlockType::Theorem | BlockType::Lemma)
                         && b.span.end < nodes.len()
                         && matches!(nodes[b.span.end].kind, NodeKind::Paragraph)
-                        && crf_tags
+                        && tags
                             .get(b.span.end)
                             .is_some_and(|t| t.tag == BioTag::Outside)
                         && (crate::crf::bucket_logic_density(features[b.span.end].logic_density)
@@ -949,7 +969,7 @@ impl BlockClassifier {
                 break;
             }
             blocks = self
-                .tags_to_blocks(nodes, &crf_tags, &features, &overrides)
+                .tags_to_blocks(nodes, &tags, &features, &overrides)
                 .blocks;
         }
         JudgedClassification {
@@ -2184,6 +2204,19 @@ mod tests {
         assert_eq!(res.blocks.len(), 2);
         assert_eq!(res.blocks[0].kind, BlockType::Theorem);
         assert_eq!(res.blocks[1].kind, BlockType::Proof);
+    }
+
+    #[test]
+    fn weighted_sum_tagger_is_selectable() {
+        let mut config = ScoringConfig::default();
+        config.tagger = TaggerModel::WeightedSum;
+        let c = HeuristicClassifier::new(config);
+        let blocks = c.classify(&parse_markdown(
+            "**Theorem 1.** Statement.\n\nProof. Follows.",
+        ));
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].kind, BlockType::Theorem);
+        assert_eq!(blocks[1].kind, BlockType::Proof);
     }
 
     struct FixedTagger(Vec<BioTag>);

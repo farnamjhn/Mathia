@@ -130,7 +130,8 @@ pub struct AnalysisView {
     pub tags: Vec<TagView>,
     /// For every node, the index in `document.blocks` of its block.
     pub block_of: Vec<usize>,
-    /// CRF Viterbi margin below which a block is considered ambiguous.
+    /// Confidence below which a block is considered ambiguous for the
+    /// currently selected tagger.
     pub confidence_threshold: f32,
 }
 
@@ -461,11 +462,15 @@ impl Session {
 
     pub fn analyze(&self, source: &Source) -> Result<AnalysisView, String> {
         let analysis = self.classify(source)?;
+        let confidence_threshold = match self.config.tagger {
+            math_core::TaggerModel::Crf => self.config.ml_confidence_threshold,
+            math_core::TaggerModel::WeightedSum => self.config.threshold,
+        };
         Ok(AnalysisView {
             document: analysis.document,
             tags: analysis.tags.into_iter().map(tag_view).collect(),
             block_of: analysis.block_of,
-            confidence_threshold: self.config.ml_confidence_threshold,
+            confidence_threshold,
         })
     }
 
@@ -749,6 +754,18 @@ mod tests {
 
         assert!(is_markdown(Path::new("notes.MD")));
         assert!(!is_markdown(Path::new("notes.html")));
+    }
+
+    #[test]
+    fn session_switches_between_crf_and_weighted_sum() {
+        let mut session = Session::default();
+        assert_eq!(session.config().tagger, math_core::TaggerModel::Crf);
+        let mut config = session.config().clone();
+        config.tagger = math_core::TaggerModel::WeightedSum;
+        session.set_config(config).unwrap();
+        assert_eq!(session.config().tagger, math_core::TaggerModel::WeightedSum);
+        let view = session.analyze(&text()).unwrap();
+        assert!(!view.document.blocks.is_empty());
     }
 
     #[test]

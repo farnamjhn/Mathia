@@ -10,13 +10,19 @@ use crate::model::BlockType;
 
 /// Current version of the [`ScoringConfig`] file format. Files written by a
 /// newer Mathia (a higher number) are rejected rather than half-understood.
-pub const CONFIG_SCHEMA_VERSION: u32 = 2;
+pub const CONFIG_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ScoringConfig {
     /// Version of this file format; see [`CONFIG_SCHEMA_VERSION`].
     pub schema_version: u32,
+    /// Which block-detection model to use.
+    pub tagger: TaggerModel,
+    /// A weighted-sum node opens a block when its best type score reaches this.
+    pub threshold: f32,
+    /// Feature weights for the weighted-sum tagger.
+    pub weights: Weights,
     pub scope: ScopeConfig,
     pub keywords: Vec<KeywordRule>,
     /// Counted case-sensitively (`\Rightarrow` is not `\rightarrow`).
@@ -37,6 +43,50 @@ pub struct ScoringConfig {
     pub ml_telemetry: bool,
 }
 
+/// Which sequence tagger computes block boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaggerModel {
+    /// Pure-Rust Linear-Chain CRF decoded with Viterbi over embedded weights.
+    #[default]
+    Crf,
+    /// Linear weighted sum of the static features, with greedy structural scoping.
+    #[serde(
+        alias = "linear",
+        alias = "heuristic",
+        alias = "linear_tree",
+        alias = "weighted"
+    )]
+    WeightedSum,
+}
+
+/// Feature weights for [`TaggerModel::WeightedSum`]. Each feature is in
+/// `[0, 1]`; the weighted sum is the score.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Weights {
+    /// The node starts with a keyword of the type.
+    pub lead: f32,
+    /// …followed by a number, a `(name)`, or `.`/`:` — i.e. it reads as a label.
+    pub label: f32,
+    /// …and the node starts with bold/italic text.
+    pub emphasis: f32,
+    /// The keyword only appears somewhere inside the node.
+    pub mention: f32,
+    /// QED / Halmos ending (proofs).
+    pub qed: f32,
+    /// Density of implication and quantifier symbols.
+    pub logic: f32,
+    /// Share of the node that is LaTeX.
+    pub math: f32,
+    /// "is called", "گوییم", `:=` … (definitions).
+    pub definitional: f32,
+    /// Type-specific phrasing ("suppose", "فرض کنید", "if … then", "آنگاه").
+    pub cue: f32,
+    /// An unlabelled paragraph directly after a statement (keyword-less proofs).
+    pub after_statement: f32,
+}
+
 /// Default scope limits, counted in top-level Markdown nodes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -52,6 +102,40 @@ pub struct ScopeConfig {
 pub struct KeywordRule {
     pub kind: BlockType,
     pub words: Vec<String>,
+}
+
+impl Weights {
+    pub fn named(&self) -> [(&'static str, f32); 10] {
+        [
+            ("lead", self.lead),
+            ("label", self.label),
+            ("emphasis", self.emphasis),
+            ("mention", self.mention),
+            ("qed", self.qed),
+            ("logic", self.logic),
+            ("math", self.math),
+            ("definitional", self.definitional),
+            ("cue", self.cue),
+            ("after_statement", self.after_statement),
+        ]
+    }
+}
+
+impl Default for Weights {
+    fn default() -> Self {
+        Weights {
+            lead: 0.45,
+            label: 0.20,
+            emphasis: 0.15,
+            mention: 0.10,
+            qed: 0.30,
+            logic: 0.15,
+            math: 0.10,
+            definitional: 0.25,
+            cue: 0.10,
+            after_statement: 0.25,
+        }
+    }
 }
 
 impl Default for ScopeConfig {
@@ -75,6 +159,9 @@ impl Default for ScoringConfig {
         };
         ScoringConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
+            tagger: TaggerModel::default(),
+            threshold: 0.5,
+            weights: Weights::default(),
             scope: ScopeConfig::default(),
             keywords: vec![
                 rule(BlockType::Theorem, &["قضیه", "theorem", "thm"]),
@@ -275,6 +362,17 @@ impl ScoringConfig {
                 self.ml_confidence_threshold
             ));
         }
+        if !(0.0..=1.0).contains(&self.threshold) {
+            return fail(format!(
+                "threshold must be in [0, 1], got {}",
+                self.threshold
+            ));
+        }
+        for (name, weight) in self.weights.named() {
+            if !(0.0..=1.0).contains(&weight) {
+                return fail(format!("weights.{name} must be in [0, 1], got {weight}"));
+            }
+        }
         if self.scope.statement_max_nodes == 0 || self.scope.proof_max_nodes == 0 {
             return fail("scope limits must be at least 1".into());
         }
@@ -364,7 +462,10 @@ mod tests {
             );
         }
         let toml = config.serialize(ConfigFormat::Toml).unwrap();
-        assert!(toml.contains("schema_version = 2"));
+        assert!(toml.contains("schema_version = 3"));
+        assert!(toml.contains("tagger = \"crf\""));
+        assert!(toml.contains("threshold = 0.5"));
+        assert!(toml.contains("[weights]"));
         assert!(toml.contains("[scope]"));
         assert!(toml.contains("statement_max_nodes = 6"));
     }
@@ -391,13 +492,29 @@ mod tests {
         };
         assert!(message("keywords = []").contains("keywords must not be empty"));
         assert!(message("schema_version = 99").contains("schema_version 99"));
-        assert!(message("threshold = 0.4").contains("unknown field"));
+        assert!(message("threshold = 1.5").contains("threshold must be in [0, 1]"));
+        assert!(message("[weights]\nqed = -0.1").contains("weights.qed"));
         assert!(message("[scope]\nproof_max_nodes = 0").contains("at least 1"));
         assert!(
             message("[[keywords]]\nkind = \"heading\"\nwords = [\"x\"]")
                 .contains("not a block type")
         );
         assert!(message("[[keywords]]\nkind = \"lemma\"\nwords = [\" \"]").contains("non-empty"));
+    }
+
+    #[test]
+    fn tagger_model_round_trips_and_accepts_old_names() {
+        let mut config = ScoringConfig::default();
+        config.tagger = TaggerModel::WeightedSum;
+        for format in [ConfigFormat::Toml, ConfigFormat::Json] {
+            let text = config.serialize(format).unwrap();
+            assert_eq!(ScoringConfig::parse(&text, format).unwrap(), config);
+        }
+        for alias in ["linear", "heuristic", "linear_tree", "weighted"] {
+            let parsed =
+                ScoringConfig::parse(&format!("tagger = \"{alias}\""), ConfigFormat::Toml).unwrap();
+            assert_eq!(parsed.tagger, TaggerModel::WeightedSum);
+        }
     }
 
     #[test]

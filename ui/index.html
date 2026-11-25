@@ -113,6 +113,10 @@
         <span>Detection Settings…</span>
       </button>
       <div class="menu-divider"></div>
+      <button type="button" class="menu-action menu-toggle" data-action="toggle_model" id="win-menu-model">
+        <span class="menu-check" aria-hidden="true">✓</span>
+        <span>Use CRF Model for Detection</span>
+      </button>
       <button type="button" class="menu-action menu-toggle" data-action="toggle_render_math" id="win-menu-render-math">
         <span class="menu-check" aria-hidden="true">✓</span>
         <span>Render Formulas</span>
@@ -203,6 +207,13 @@
         <svg class="caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5"/></svg>
       </button>
       <div id="options-menu" class="menu menu-end" hidden>
+        <label class="option">
+          <input id="opt-crf-model" type="checkbox" checked>
+          <span class="option-text">
+            <span class="option-name">CRF model for detection</span>
+            <span class="option-hint">Turn off to use the linear weighted-sum scorer instead.</span>
+          </span>
+        </label>
         <label class="option">
           <input id="render-math" type="checkbox" checked>
           <span class="option-text">
@@ -555,8 +566,24 @@ BEFORE YOU ANSWER, CHECK
   </header>
   <form id="config-form" class="config-form" method="dialog">
     <fieldset>
+      <legend>Method</legend>
+      <label>Detection model
+        <select id="cfg-tagger">
+          <option value="crf">CRF model</option>
+          <option value="weighted_sum">Linear weighted sum</option>
+        </select>
+        <span class="hint">CRF learns boundaries from training data; the weighted sum scores each node from configurable feature weights.</span>
+      </label>
+    </fieldset>
+    <fieldset>
       <legend>Scope limits <span class="hint">(nodes)</span></legend>
       <div id="cfg-scope" class="config-grid"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Weights <span class="hint">(weighted sum only)</span></legend>
+      <div id="cfg-weights" class="config-grid"></div>
+      <label>Threshold <input id="cfg-threshold" type="number" min="0" max="1" step="0.01" required>
+        <span class="hint">Raise it to detect fewer blocks, lower it to detect more.</span></label>
     </fieldset>
     <fieldset>
       <legend>Keywords <span class="hint">(comma-separated)</span></legend>

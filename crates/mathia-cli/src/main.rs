@@ -2,7 +2,7 @@
 //! a thin CLI over `math-core`, handy for trying the compiler on real files:
 //!
 //! ```text
-//! mathia notes.md [-o notes.html] [--config scoring.toml] [--explain] [--font F.woff2] [--ai] [--ai-custom URL]
+//! mathia notes.md [-o notes.html] [--config scoring.toml] [--tagger crf|weighted-sum] [--explain] [--font F.woff2] [--ai] [--ai-custom URL]
 //! mathia chapters/ [-o site/] [--watch]
 //! mathia notes.md --fix [-o notes.fixed.md]
 //! ```
@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime};
 
 use math_core::{
     AiOptions, AiProvider, ConfigFormat, CustomProvider, EmbeddedFont, HtmlOptions, KatexAssets,
-    MathAssets, ScopeOverrides, ScoringConfig,
+    MathAssets, ScopeOverrides, ScoringConfig, TaggerModel,
 };
 use math_judge::{CachedJudge, CommandJudge, Policy, Replay};
 
@@ -32,6 +32,7 @@ const USAGE: &str = "usage: mathia <input.md | input.html | folder> [options]
                         (default output: input with .fixed.md; -o may name the input itself)
       --dump-features   dump AST nodes and extracted NodeFeatures as JSON (or subcommand: mathia dump-features <input.md | input.html>)
       --config FILE     scoring configuration (.toml or .json)
+      --tagger MODEL    block detection model: crf (default) or weighted-sum
       --dump-config     print the default scoring configuration as TOML and exit
       --explain         print every node's BIO tag and why each block ended
       --font FILE       embed a WOFF2 text font (repeatable; family from the file name);
@@ -96,6 +97,7 @@ fn run() -> Result<(), String> {
     let mut output: Option<PathBuf> = None;
     let mut katex_dir: Option<PathBuf> = None;
     let mut config_path: Option<PathBuf> = None;
+    let mut tagger: Option<TaggerModel> = None;
     let mut fonts: Vec<PathBuf> = Vec::new();
     let mut title: Option<String> = None;
     let mut no_math = false;
@@ -123,6 +125,20 @@ fn run() -> Result<(), String> {
             "-o" | "--output" => output = Some(value(&mut args, &arg)?.into()),
             "--katex-dir" => katex_dir = Some(value(&mut args, &arg)?.into()),
             "--config" => config_path = Some(value(&mut args, &arg)?.into()),
+            "--tagger" => {
+                let name = value(&mut args, &arg)?;
+                tagger = Some(match name.trim().to_ascii_lowercase().as_str() {
+                    "crf" => TaggerModel::Crf,
+                    "weighted-sum" | "weighted_sum" | "weighted" | "linear" | "heuristic" => {
+                        TaggerModel::WeightedSum
+                    }
+                    other => {
+                        return Err(format!(
+                            "--tagger: unknown model '{other}' (use crf or weighted-sum)"
+                        ));
+                    }
+                });
+            }
             "--font" => fonts.push(value(&mut args, &arg)?.into()),
             "--title" => title = Some(value(&mut args, &arg)?),
             "--no-math" => no_math = true,
@@ -223,10 +239,13 @@ fn run() -> Result<(), String> {
         if input.is_dir() {
             return Err("dump-features takes a Markdown or HTML file, not a folder".into());
         }
-        let config = match config_path {
+        let mut config = match config_path {
             Some(path) => ScoringConfig::load(path).map_err(|e| e.to_string())?,
             None => ScoringConfig::default(),
         };
+        if let Some(tagger) = tagger {
+            config.tagger = tagger;
+        }
         let overrides = match overrides_path {
             Some(path) => Some(load_overrides(&path)?),
             None => None,
@@ -249,10 +268,13 @@ fn run() -> Result<(), String> {
         return fix_files(&input, output);
     }
 
-    let config = match config_path {
+    let mut config = match config_path {
         Some(path) => ScoringConfig::load(path).map_err(|e| e.to_string())?,
         None => ScoringConfig::default(),
     };
+    if let Some(tagger) = tagger {
+        config.tagger = tagger;
+    }
     if no_font && !fonts.is_empty() {
         return Err("--font and --no-font exclude each other".into());
     }

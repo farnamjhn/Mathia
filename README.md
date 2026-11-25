@@ -92,7 +92,7 @@ Similar fields should be fine with this compiler as well.
 
 | Path | Purpose |
 |---|---|
-| `crates/math-core` | Parser, feature extraction, block classifier (Heuristic / Tree / CRF) and HTML/Markdown renderers |
+| `crates/math-core` | Parser, feature extraction, block classifier (weighted-sum / CRF) and HTML/Markdown renderers |
 | `crates/math-judge` | Decision models around the classifier: JSON contract, external-process judge, verdict cache, replay logs |
 | `crates/mathia-cli` | Command-line front end (`mathia`) and feature dumper |
 | `src-tauri`, `ui` | Desktop app (Tauri v2, `mathia-app`) and sandboxed UI |
@@ -217,6 +217,8 @@ interval. English words and parenthesised glosses are never touched.
 
 - `--config scoring.toml` — scoring configuration (TOML or JSON); `--dump-config` prints the
   defaults.
+- `--tagger crf|weighted-sum` — choose block detection: the trained CRF (default) or the
+  deterministic linear weighted-sum scorer.
 - `--explain` — print every node's BIO tag and confidence, and why each block ended where it did.
 - `--font F.woff2` — embed this WOFF2 text font instead of the bundled Vazirmatn; `--no-font`
   embeds none.
@@ -230,10 +232,12 @@ interval. English words and parenthesised glosses are never touched.
 
 ### Decision Pipeline
 
-Block detection runs one pipeline:
+Block detection runs one pipeline with a selectable tagger:
 
 1. **Static lexical features** — [`Lexicon`](crates/math-core/src/features.rs) extracts a feature record per node.
-2. **Linear-Chain CRF** — a joint BIO sequence labeling model trained with `sklearn-crfsuite` on bilingual textbook datasets and decoded in pure Rust via Viterbi dynamic programming with embedded compile-time weights (`crf_weights.json`).
+2. **Sequence tagger** — choose one of:
+   - **Linear-Chain CRF** (default) — a joint BIO sequence labeling model trained with `sklearn-crfsuite` on bilingual textbook datasets and decoded in pure Rust via Viterbi dynamic programming with embedded compile-time weights (`crf_weights.json`).
+   - **Linear weighted sum** — a deterministic score per candidate type from the configurable `[weights]` and `threshold`, with greedy structural scoping. Switch with `--tagger weighted-sum`, `tagger = "weighted_sum"` in the config, or **Options → CRF model for detection** in the desktop app.
 3. **Deterministic guardrails** — labelled leads are anchored, references and keyword mentions are demoted, argument openers are sanitized, and strongly labelled openers get structural scopes.
 4. **Optional External Judge (`--judge CMD`)** — lets an external model review proposed blocks. `CMD` reads one JSON request per line on stdin (block text with LaTeX, neighbours, proposed type and scope) and answers one verdict per line (`accept`, `incomplete`, `overreach`, `reject`, `{"retype": "lemma"}`, `{"end_at": 7}`, `{"start_at": 3}`, optionally with a `confidence`).
 
@@ -242,7 +246,7 @@ unchanged document is not sent again; `--judge-log FILE` records the resulting c
 and `--overrides FILE` replays them later without the model. The contract is documented in
 `crates/math-judge`.
 
-In the desktop app and CLI, confidence gating can automatically escalate ambiguous spans (where the CRF confidence margin is low or high-logic paragraphs follow a statement) to the judge layer while keeping clean documents instant and free.
+In the desktop app and CLI, confidence gating can automatically escalate ambiguous spans (where the selected tagger's confidence is low, or high-logic paragraphs follow a statement) to the judge layer while keeping clean documents instant and free.
 
 ### Interactive AI
 

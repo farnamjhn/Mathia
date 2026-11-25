@@ -62,9 +62,9 @@ This guide provides concrete, repeatable recipes for making common architectural
 
 ---
 
-## 2. Adding a New Feature to the Classifier & CRF
+## 2. Adding a New Feature to the Classifier, Weighted Sum & CRF
 
-**Context:** Extracting a new structural or lexical signal (e.g., detecting indentation, list bullet styles, or specific Persian transitional markers) for both heuristic scoring and the machine learning model.
+**Context:** Extracting a new structural or lexical signal (e.g., detecting indentation, list bullet styles, or specific Persian transitional markers) for the weighted-sum scorer and the machine learning model.
 
 > **CRITICAL INVARIANT:** Feature key generation in `crates/math-core/src/crf.rs` and `ml/src/mathia_ml/features.py` must maintain **100% exact string-for-string parity**. Any discrepancy causes silent training-serving skew.
 
@@ -80,6 +80,7 @@ This guide provides concrete, repeatable recipes for making common architectural
      }
      ```
    - In `Lexicon::extract(&self, node: &Node) -> Features`, implement the extraction logic from AST node data.
+   - If the weighted-sum tagger should use it, add a weight to `Weights` in `crates/math-core/src/config.rs` and include it in `HeuristicTagger::score` in `crates/math-core/src/tagger.rs`.
 
 2. **Add to Pure-Rust CRF Feature Visitor (`crates/math-core/src/crf.rs`)**:
    - In `extract_node_base_features_visitor()`, emit the feature string at offset prefix `p`:

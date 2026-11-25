@@ -288,13 +288,18 @@ For every AST node, [`Lexicon::extract`](../crates/math-core/src/features.rs) ex
 - `continuation: bool`: Matches continuation connectives ("where", "که در آن", "بطوریکه").
 
 ### Stage 3: Sequence Tagging
-The document is tagged by [`CrfTagger`](../crates/math-core/src/crf.rs), which runs the trained linear-chain CRF model via Viterbi decoding over embedded weights in [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json), assigning global optimal `Begin(BlockType)`, `Inside(BlockType)`, or `Outside` tags. Each tag carries a confidence margin (the gap to the best alternative path). Custom models can still be injected through the [`SequenceTagger`](../crates/math-core/src/tagger.rs) trait.
+The tagger is selected by [`config.tagger`](../crates/math-core/src/config.rs):
+
+- [`TaggerModel::Crf`](../crates/math-core/src/config.rs) (default) uses [`CrfTagger`](../crates/math-core/src/crf.rs), which runs the trained linear-chain CRF model via Viterbi decoding over embedded weights in [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json), assigning global optimal `Begin(BlockType)`, `Inside(BlockType)`, or `Outside` tags. Each tag carries a confidence margin (the gap to the best alternative path).
+- [`TaggerModel::WeightedSum`](../crates/math-core/src/config.rs) uses [`HeuristicTagger`](../crates/math-core/src/tagger.rs), which scores every candidate type with `Σ weight × feature` from [`config.weights`](../crates/math-core/src/config.rs) and opens a block when the best score reaches [`config.threshold`](../crates/math-core/src/config.rs).
+
+Both implement [`SequenceTagger`](../crates/math-core/src/tagger.rs), so custom models can still be injected. Users switch models with `--tagger crf|weighted-sum`, `tagger = "weighted_sum"` in the config file, or the desktop **Options → CRF model for detection** toggle.
 
 ### Stage 4: Scoping & Block Construction ([`classifier.rs`](../crates/math-core/src/classifier.rs))
 In [`tags_to_blocks`](../crates/math-core/src/classifier.rs):
 1. **LaTeX Environment Bypass**: Any [`EnvSpan`](../crates/math-core/src/model.rs) (`\begin{theorem}`) automatically commands score `1.0` and exact boundary coverage, overriding CRF decisions unless explicitly suppressed by a user override.
 2. **Deterministic Guardrails**: Labelled leads are anchored to their keyword's type, references and unlabelled keyword mentions are demoted to prose, `B-` tags on non-openable nodes (display math, rules, tables) are dropped, and argument openers that do not follow the statement they argue about are sanitized.
-3. **CRF-Driven Scope with a Structural Floor**:
+3. **Tagger-Driven Scope with a Structural Floor**:
    - The CRF's `I-*` run may extend a block beyond the structural rules, capped by the configured size limit and, for arguments, by the first `qed` marker.
    - Structural scoping remains a floor: statements still absorb subsequent `DisplayMath`, `List`, `Table`, and continuation paragraphs until encountering a new opener, a heading, a non-continuation paragraph, or hitting [`scope.statement_max_nodes`](../crates/math-core/src/config.rs) (default 6).
    - Arguments (Proofs, Solutions) still run to their `qed` marker or [`scope.proof_max_nodes`](../crates/math-core/src/config.rs) (default 12), and a `B-*` argument tag on a continuation paragraph is folded back into the preceding statement.
