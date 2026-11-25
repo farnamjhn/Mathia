@@ -91,6 +91,8 @@ uv run python -m mathia_ml.split --verify-dir data/
 Trains a Linear-Chain CRF using `sklearn-crfsuite` with L-BFGS:
 - Performs grid search over L1 ($c_1$) and L2 ($c_2$) regularization penalties on `val.jsonl`.
 - Selects the parameter pair maximizing exact-span F1.
+- Oversamples `user_correction` / `real_notes` documents (`--correction-weight`, default `3`).
+- Sweeps inference-time transition temperatures on `val.jsonl` and reports the winner.
 - Exports compact, deterministic weights to `crates/math-core/src/crf_weights.json`:
 
 ```bash
@@ -105,15 +107,24 @@ uv run python -m mathia_ml.train_crf \
 The synthetic corpus is small, so the learned transition prior is overconfident:
 a proof self-loop can dwarf the emission evidence and Viterbi then never leaves
 `I-PROOF`. `train_crf.py` therefore damps every transition weight by
-`TRANSITION_TEMPERATURE = 0.4` during decoding, and `crates/math-core/src/crf.rs`
+`TRANSITION_TEMPERATURE` during decoding, and `crates/math-core/src/crf.rs`
 applies the same constant in both its forward and confidence Viterbi passes.
-Keep the two values in sync. The raw `sklearn-crfsuite` parity check still runs
-at temperature `1.0`, so it compares unmodified transition weights.
+The current shipped value is `0.8`. The trainer sweeps
+`[0.4, 0.6, 0.8, 1.0]` by default and prints a reminder when the winning value
+differs from the constant in `crates/math-core/src/crf.rs`; keep both values in
+sync and rerun training so `test_viterbi_expected.json` matches. The raw
+`sklearn-crfsuite` parity check still runs at temperature `1.0`, so it compares
+unmodified transition weights.
 
 Because damped transitions let the emission model decide boundaries, explicit
 openers are anchored deterministically in Rust: a labelled or numbered lead
-("Theorem 2.", "برهان (Proof):", "قضیه ۳-۱") always starts its block, and its
-body span follows the structural rules rather than the CRF's `I-` run.
+("Theorem 2.", "برهان (Proof):", "قضیه ۳-۱") always starts its block. The CRF's
+`I-*` run may extend the block, while structural scoping remains a floor:
+statements still absorb display math and continuation paragraphs, and
+arguments still run to their QED marker or configured size limit.
+
+For the full correction → export → retrain → rebuild loop, see
+[`docs/RETRAINING.md`](../docs/RETRAINING.md).
 
 ### Step 4: Model Evaluation (`evaluate.py`)
 Benchmarks the trained CRF against the baseline heuristic scorer using `seqeval` exact-span F1, precision, and recall metrics, broken down by language and BlockType:

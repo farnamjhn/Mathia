@@ -321,6 +321,7 @@ Comprehensive architecture, design, and extension documentation is available in 
 - [**Extension Guide (`docs/EXTENDING.md`)**](docs/EXTENDING.md) — Step-by-step developer recipes for adding new semantic block types, adding feature signals, retraining & deploying CRF weights, adding CLI options, adding Tauri IPC commands, and integrating new AI providers.
 - [**Known Issues & Technical Debt (`docs/KNOWN_ISSUES.md`)**](docs/KNOWN_ISSUES.md) — Detailed catalog of grounded architectural constraints, implicit assumptions, fragile couplings, and edge cases.
 - [**Real-Notes LLM Labeling (`docs/REAL_NOTES_LABELING.md`)**](docs/REAL_NOTES_LABELING.md) — End-to-end guide to extracting real Markdown/HTML notes, labeling BIO tags with an LLM, validating the output, and feeding it into CRF training.
+- [**CRF Retraining (`docs/RETRAINING.md`)**](docs/RETRAINING.md) — Operational loop for collecting user corrections and real notes, exporting feedback, retraining, syncing the transition temperature, rebuilding, and verifying snapshots.
 - [**ML Flywheel Developer Guide (`ml/README.md`)**](ml/README.md) — Guide to the offline Python workspace: synthetic OCR dataset generation, hyperparameter tuning, exact-span F1 evaluation, and weight export.
 
 <!-- DEVELOPMENT -->

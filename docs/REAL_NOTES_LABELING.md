@@ -149,7 +149,10 @@ uv run python -m mathia_ml.evaluate --test-file data/test.jsonl
 ```
 
 Real notes can be mixed with synthetic documents before splitting; no schema
-conversion is needed.
+conversion is needed. `train_crf.py` oversamples `real_notes` documents
+(`--correction-weight`, default `3`) and sweeps transition temperatures on
+validation; see [`RETRAINING.md`](RETRAINING.md) for the full retrain, rebuild,
+and verification loop.
 
 ---
 

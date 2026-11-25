@@ -17,6 +17,7 @@ This document records architectural trade-offs, fragile couplings, implicit envi
   ```
 - **Constraint:** When a user sets a manual override in the desktop app with `ml_telemetry = true`, Mathia attempts to write directly to the relative path `ml/data/feedback.jsonl`.
 - **Impact:** This succeeds only when running the development binary from the repository root via `cargo run -p mathia-app`. When running as a packaged bundle (`.app` on macOS, `.exe` on Windows) launched from the dock or desktop, the current working directory is typically not the repository root, so this write silently no-ops. Telemetry is still saved to the OS app data directory (`data_dir(&app).join("telemetry.jsonl")`), but direct repo synchronization requires manual developer extraction.
+- **Retraining:** See [`RETRAINING.md`](RETRAINING.md) for extracting the app-data telemetry, exporting it as `user_correction` documents, and retraining the embedded model.
 
 ### CRLF vs LF Line-Ending Sensitivity in Content Security Policy (CSP)
 - **Canonical Location:** [`crates/math-core/src/html.rs`](../crates/math-core/src/html.rs#L474-L483)
@@ -41,9 +42,9 @@ This document records architectural trade-offs, fragile couplings, implicit envi
 - **Canonical Locations:**
   - Rust: [`crates/math-core/src/crf.rs`](../crates/math-core/src/crf.rs#L139-L260) (`extract_node_base_features_visitor`)
   - Python: [`ml/src/mathia_ml/features.py`](../ml/src/mathia_ml/features.py) (`extract_node_features`)
-- **Constraint:** The pure-Rust Viterbi decoder uses lookup keys in `model.state_features` (e.g., `"-1:node_kind=paragraph"`, `"0:math_density=medium"`, `"+1:qed=true"`). These string keys are produced independently by Rust at inference time and by Python at training time.
+- **Constraint:** The pure-Rust Viterbi decoder uses lookup keys in `model.state_features` (e.g., `"-1:node_kind=paragraph"`, `"0:math_density=medium"`, `"0:char_len_bucket=short"`, `"0:dist_from_lead=2"`, `"+1:qed=true"`). These string keys are produced independently by Rust at inference time and by Python at training time.
 - **Risk:** If a developer alters feature naming, threshold buckets, or whitespace trimming in one language without mirroring it identically in the other, model inference will silently encounter missing keys and degrade to default transitions without error or panic.
-- **Guardrail:** The unit test `crf::tests::feature_functions_parity` in `crates/math-core/src/crf.rs` enforces parity across identical test inputs.
+- **Guardrail:** The unit tests `crf::tests::feature_functions_parity` and `crf::tests::boundary_scope_feature_keys_exact` in `crates/math-core/src/crf.rs` (mirrored by `ml/tests/test_features.py`) enforce parity across identical test inputs.
 
 ### Compile-Time Model Embedding & Panic on Corrupt Weights
 - **Canonical Location:** [`crates/math-core/src/crf.rs`](../crates/math-core/src/crf.rs#L19,L403-L410)

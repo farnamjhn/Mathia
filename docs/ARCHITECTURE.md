@@ -294,9 +294,11 @@ The document is tagged by [`CrfTagger`](../crates/math-core/src/crf.rs), which r
 In [`tags_to_blocks`](../crates/math-core/src/classifier.rs):
 1. **LaTeX Environment Bypass**: Any [`EnvSpan`](../crates/math-core/src/model.rs) (`\begin{theorem}`) automatically commands score `1.0` and exact boundary coverage, overriding CRF decisions unless explicitly suppressed by a user override.
 2. **Deterministic Guardrails**: Labelled leads are anchored to their keyword's type, references and unlabelled keyword mentions are demoted to prose, `B-` tags on non-openable nodes (display math, rules, tables) are dropped, and argument openers that do not follow the statement they argue about are sanitized.
-3. **Greedy Scope Absorption**:
-   - For statements (Theorems, Lemmas, Propositions, Corollaries, Definitions), the scope absorbs subsequent `DisplayMath`, `List`, `Table`, and continuation paragraphs until encountering a new opener, a heading, a non-continuation paragraph, or hitting [`scope.statement_max_nodes`](../crates/math-core/src/config.rs) (default 6).
-   - For arguments (Proofs, Solutions), the scope extends until encountering a `qed` marker, a structural heading, or hitting [`scope.proof_max_nodes`](../crates/math-core/src/config.rs) (default 12).
+3. **CRF-Driven Scope with a Structural Floor**:
+   - The CRF's `I-*` run may extend a block beyond the structural rules, capped by the configured size limit and, for arguments, by the first `qed` marker.
+   - Structural scoping remains a floor: statements still absorb subsequent `DisplayMath`, `List`, `Table`, and continuation paragraphs until encountering a new opener, a heading, a non-continuation paragraph, or hitting [`scope.statement_max_nodes`](../crates/math-core/src/config.rs) (default 6).
+   - Arguments (Proofs, Solutions) still run to their `qed` marker or [`scope.proof_max_nodes`](../crates/math-core/src/config.rs) (default 12), and a `B-*` argument tag on a continuation paragraph is folded back into the preceding statement.
+   - Blocks never cross headings, the next opener, or thematic rules; manual `ScopeOverrides` always win.
 4. **Argument Linking**: Proofs and Solutions are linked to their corresponding statements ([`SemanticBlock.proves`](../crates/math-core/src/model.rs)) by explicit reference first (`refers_to`), falling back to the nearest preceding unlinked statement.
 5. **Cross-Referencing ([`crossref.rs`](../crates/math-core/src/crossref.rs))**: Textual references in prose (e.g., "by Theorem 3.2", "طبق لم ۱") are converted to internal hyperlinks pointing to the target block's HTML id (`#block-theorem-1`).
 
@@ -326,6 +328,12 @@ Features for node $t$ incorporate context from window $[t-1, t, t+1]$, aligned i
 - Relational transition features:
   - `math_density_delta`: `up` ($> +0.05$), `down` ($< -0.05$), `flat`, or `none`.
   - Boundary signals: `is_first_node`, `is_last_node`.
+- Boundary & scope features (block-size learning):
+  - `char_len_bucket`: `tiny` ($\le 40$), `short` ($\le 140$), `medium` ($\le 400$), `long` ($> 400$) characters. Uses `DumpNode.char_len`, which survives telemetry anonymization.
+  - `prev_ends_continuation_punct`: node $t-1$ ends with `,`, `،`, `:`, or `：`.
+  - `starts_lowercase`: node text starts with an ASCII lowercase letter (English continuation signal).
+  - `starts_math`: node text starts with `$` or `$$`.
+  - `dist_from_lead`: `0`, `1`, `2`, `3_5`, `6_plus`, or `none` — nodes since the most recent non-reference labelled opener, resetting at headings. Lets the CRF learn realistic block lengths per type without an overconfident self-loop.
 
 ### CRF Viterbi Trellis Diagram
 
@@ -375,7 +383,7 @@ graph LR
 - **Data Splitting**: [`ml/src/mathia_ml/split.py`](../ml/src/mathia_ml/split.py) produces document-stratified 80/10/10 splits with zero cross-document data leakage.
 - **Model Training**: [`ml/src/mathia_ml/train_crf.py`](../ml/src/mathia_ml/train_crf.py) fits L-BFGS CRF parameters using `sklearn-crfsuite`, searches L1/L2 penalties, and serializes optimized weights to [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json).
 - **Exact-Span Evaluation**: [`ml/src/mathia_ml/evaluate.py`](../ml/src/mathia_ml/evaluate.py) evaluates F1 exact span performance using `seqeval`.
-- **User Feedback Loop**: [`ml/src/mathia_ml/export_feedback.py`](../ml/src/mathia_ml/export_feedback.py) translates manual overrides collected in the desktop app into new training instances.
+- **User Feedback Loop**: [`ml/src/mathia_ml/export_feedback.py`](../ml/src/mathia_ml/export_feedback.py) translates manual overrides collected in the desktop app into `user_correction` training instances; `train_crf.py` oversamples those and `real_notes` documents, then sweeps transition temperatures on validation. See [`docs/RETRAINING.md`](RETRAINING.md).
 - **Real-Notes LLM Labeling**: [`ml/src/mathia_ml/prepare_unlabeled.py`](../ml/src/mathia_ml/prepare_unlabeled.py) extracts AST nodes and features from real Markdown/HTML notes, [`ml/prompts/label_bio_tags.md`](../ml/prompts/label_bio_tags.md) provides the labeling prompt, and [`ml/src/mathia_ml/import_labeled.py`](../ml/src/mathia_ml/import_labeled.py) validates and merges the LLM's BIO tags back into `LabeledDocument` JSONL. See [`docs/REAL_NOTES_LABELING.md`](REAL_NOTES_LABELING.md).
 
 ---

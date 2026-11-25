@@ -109,8 +109,10 @@ This guide provides concrete, repeatable recipes for making common architectural
 5. **Verify Python-Rust Parity**:
    - Run the dedicated cross-validation test in Rust:
      ```bash
-     cargo test -p math-core test_feature_functions_parity
+     cargo test -p math-core feature_functions_parity
+     cargo test -p math-core boundary_scope_feature_keys_exact
      ```
+   - The mirrored Python tests live in `ml/tests/test_features.py`.
 
 ---
 
@@ -160,7 +162,13 @@ This guide provides concrete, repeatable recipes for making common architectural
        --val-file data/val.jsonl \
        --output-weights ../crates/math-core/src/crf_weights.json
    ```
-   *Note: This automatically tunes L1 ($c_1$) and L2 ($c_2$) penalties via L-BFGS, optimizes for exact-span F1 on validation, and writes the compact JSON weights directly to the core Rust crate.*
+   *Note: This oversamples `user_correction` / `real_notes` documents
+   (`--correction-weight`, default `3`), tunes L1 ($c_1$) and L2 ($c_2$)
+   penalties via L-BFGS, sweeps transition temperatures on validation, and
+   writes the compact JSON weights directly to the core Rust crate. If the
+   winning temperature differs from `TRANSITION_TEMPERATURE`, update both
+   `crates/math-core/src/crf.rs` and `ml/src/mathia_ml/train_crf.py`, then
+   rerun training so `test_viterbi_expected.json` matches.*
 
 6. **Benchmark Exact-Span F1**:
    ```bash
@@ -172,8 +180,23 @@ This guide provides concrete, repeatable recipes for making common architectural
 7. **Verify Rust Test Suite & Benchmarks**:
    ```bash
    cd ..
-   cargo test -p math-core crf::tests
+   cargo fmt --all --check
+   cargo test --workspace
    ```
+
+8. **Rebuild the App and Regenerate Snapshots if Spans Changed**:
+   ```bash
+   cargo build -p mathia-app
+   MATHIA_UPDATE_SNAPSHOTS=1 cargo test -p math-core --test corpus
+   git diff crates/math-core/tests/snapshots
+   ```
+
+   *The weights are embedded with `include_str!`, so a rebuild is required.
+   Review snapshot diffs before committing; score-only changes are expected,
+   span changes should be intentional.*
+
+For the full telemetry → export → retrain → rebuild loop, including real-note
+labeling and troubleshooting, see [`RETRAINING.md`](RETRAINING.md).
 
 ---
 
