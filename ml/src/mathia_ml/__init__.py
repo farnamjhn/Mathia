@@ -34,11 +34,14 @@ from mathia_ml.split import (
     write_split_jsonl,
 )
 from mathia_ml.train_crf import (
+    document_source,
     export_crf_weights_json,
     format_crf_weights,
+    oversample_correction_documents,
     train_and_export,
     train_crf_model,
     tune_hyperparameters,
+    tune_transition_temperature,
     verify_viterbi_parity,
     viterbi_decode,
 )
@@ -63,6 +66,9 @@ __all__ = [
     "summarize_features",
     "train_crf_model",
     "tune_hyperparameters",
+    "tune_transition_temperature",
+    "oversample_correction_documents",
+    "document_source",
     "format_crf_weights",
     "export_crf_weights_json",
     "viterbi_decode",

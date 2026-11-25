@@ -247,12 +247,27 @@ pub fn create_override_telemetry(
 }
 
 /// Appends a [`TelemetryEntry`] as a JSON line to the target local JSONL file.
+///
+/// Entries are deduplicated by `doc_id`: the id is a hash of the anonymized
+/// structure and corrected BIO tags, so re-applying the same correction (or
+/// toggling it back and forth) does not append duplicate training rows.
 pub fn append_telemetry_entry(
     path: &std::path::Path,
     entry: &TelemetryEntry,
 ) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
+    }
+    if path.is_file()
+        && let Ok(existing) = std::fs::read_to_string(path)
+        && existing.lines().any(|line| {
+            serde_json::from_str::<serde_json::Value>(line.trim())
+                .ok()
+                .and_then(|value| value.get("doc_id")?.as_str().map(str::to_owned))
+                .is_some_and(|id| id == entry.doc_id)
+        })
+    {
+        return Ok(());
     }
     let mut file = std::fs::OpenOptions::new()
         .create(true)

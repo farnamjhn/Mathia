@@ -102,6 +102,7 @@ class TestExportFeedback(unittest.TestCase):
 
         self.assertEqual(doc.doc_id, "feedback_test_01")
         self.assertEqual(doc.language, "en")
+        self.assertEqual(doc.metadata["source"], "user_correction")
         self.assertGreater(len(doc.nodes), 3)
         self.assertEqual(len(doc.nodes), len(doc.bio_tags))
         self.assertIn("B-LEMMA", doc.bio_tags)
@@ -122,6 +123,7 @@ class TestExportFeedback(unittest.TestCase):
             docs_from_dir = export_feedback_directory(tmp_path, mathia_bin=mathia_bin)
             self.assertEqual(len(docs_from_dir), 1)
             self.assertEqual(docs_from_dir[0].doc_id, "feedback_algebra")
+            self.assertEqual(docs_from_dir[0].metadata["source"], "user_correction")
             self.assertIn("B-PROPOSITION", docs_from_dir[0].bio_tags)
 
             # Create telemetry JSONL file
@@ -138,6 +140,7 @@ class TestExportFeedback(unittest.TestCase):
             self.assertEqual(len(docs_from_tel), 1)
             self.assertEqual(docs_from_tel[0].doc_id, "tel_001")
             self.assertEqual(docs_from_tel[0].language, "fa")
+            self.assertEqual(docs_from_tel[0].metadata["source"], "user_correction")
             self.assertIn("B-LEMMA", docs_from_tel[0].bio_tags)
 
             # Test merge and resplit

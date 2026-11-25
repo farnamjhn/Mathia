@@ -31,13 +31,52 @@ DEFAULT_OUTPUT_WEIGHTS = Path("crates/math-core/src/crf_weights.json")
 DEFAULT_C1_CANDIDATES: tuple[float, ...] = (0.05, 0.1, 0.2, 0.3)
 DEFAULT_C2_CANDIDATES: tuple[float, ...] = (0.05, 0.1, 0.2, 0.3)
 
+# Documents from these sources carry real block-size signal and are
+# oversampled so they are not drowned out by the synthetic corpus.
+CORRECTION_SOURCES: tuple[str, ...] = ("user_correction", "real_notes")
+DEFAULT_CORRECTION_WEIGHT: int = 3
+
+# Validation candidates for the inference-time transition temperature.
+DEFAULT_TEMPERATURE_CANDIDATES: tuple[float, ...] = (0.4, 0.6, 0.8, 1.0)
+
 # Transition temperature. The corpus is small and synthetic, so the learned
 # transition prior is overconfident: a proof self-loop of +5 dwarfs the
 # emission evidence and Viterbi never leaves a proof once it enters one. Damping
 # the transition matrix lets the (lexically and structurally grounded) emission
 # model decide block boundaries. 0.4 keeps held-out exact-span F1 high while
 # keeping proof spans bounded on real compiled notes.
-TRANSITION_TEMPERATURE: float = 0.4
+TRANSITION_TEMPERATURE: float = 0.8
+
+
+def document_source(doc: Any) -> Optional[str]:
+    """Return ``metadata["source"]`` for a raw or model document, if present."""
+    if isinstance(doc, Mapping):
+        metadata = doc.get("metadata")
+    else:
+        metadata = getattr(doc, "metadata", None)
+    if isinstance(metadata, Mapping):
+        source = metadata.get("source")
+        return str(source) if source is not None else None
+    return None
+
+
+def oversample_correction_documents(
+    docs: Sequence[Any],
+    correction_weight: int = DEFAULT_CORRECTION_WEIGHT,
+) -> list[Any]:
+    """Repeat user-correction / real-note documents in the training split.
+
+    Synthetic documents are kept once; real block-size corrections are
+    repeated ``correction_weight`` times so the CRF learns realistic spans.
+    """
+    weight = max(1, int(correction_weight))
+    if weight == 1:
+        return list(docs)
+    weighted: list[Any] = []
+    for doc in docs:
+        repeats = weight if document_source(doc) in CORRECTION_SOURCES else 1
+        weighted.extend([doc] * repeats)
+    return weighted
 
 
 def load_jsonl_dataset(path: Path) -> list[dict[str, Any]]:
@@ -305,6 +344,42 @@ def verify_viterbi_parity(
     return parity, matches, total_tokens
 
 
+def tune_transition_temperature(
+    weights: Mapping[str, Any],
+    X_val: Sequence[Sequence[Mapping[str, float]]],
+    y_val: Sequence[Sequence[str]],
+    candidates: Sequence[float] = DEFAULT_TEMPERATURE_CANDIDATES,
+) -> tuple[float, float, list[dict[str, Any]]]:
+    """Sweep inference-time transition temperatures on the validation set.
+
+    The exported weights are fixed; only the damping factor applied to the
+    learned transition prior changes. Returns the temperature that maximizes
+    exact-span F1, its score, and every trial.
+    """
+    best_temperature = float(candidates[0]) if candidates else TRANSITION_TEMPERATURE
+    best_score = -1.0
+    trials: list[dict[str, Any]] = []
+
+    for temperature in candidates:
+        temperature = float(temperature)
+        preds = [
+            viterbi_decode(seq, weights, transition_temperature=temperature)
+            for seq in X_val
+        ]
+        score = float(f1_score(y_val, preds)) if y_val else 0.0
+        trials.append({"temperature": temperature, "val_f1": round(score, 4)})
+        logger.info(
+            "Temperature trial: T=%.2f -> val exact-span F1=%.4f",
+            temperature,
+            score,
+        )
+        if score > best_score:
+            best_score = score
+            best_temperature = temperature
+
+    return best_temperature, max(best_score, 0.0), trials
+
+
 def train_and_export(
     train_path: Path = DEFAULT_TRAIN_PATH,
     val_path: Path = DEFAULT_VAL_PATH,
@@ -315,10 +390,26 @@ def train_and_export(
     max_iterations: int = 100,
     precision: int = 5,
     compact: bool = False,
+    correction_weight: int = DEFAULT_CORRECTION_WEIGHT,
+    temperature_candidates: Sequence[float] = DEFAULT_TEMPERATURE_CANDIDATES,
+    tune_temperature: bool = True,
 ) -> dict[str, Any]:
     """Train CRF, tune if requested, evaluate, and export weights to JSON."""
     logger.info("Loading training dataset from %s...", train_path)
     train_docs = load_jsonl_dataset(train_path)
+    raw_train_docs = len(train_docs)
+    correction_docs = sum(
+        1 for doc in train_docs if document_source(doc) in CORRECTION_SOURCES
+    )
+    train_docs = oversample_correction_documents(train_docs, correction_weight)
+    if len(train_docs) != raw_train_docs:
+        logger.info(
+            "Oversampled %d correction/real-note documents (weight %d): %d -> %d training docs.",
+            correction_docs,
+            max(1, correction_weight),
+            raw_train_docs,
+            len(train_docs),
+        )
     X_train, y_train = extract_dataset(train_docs)
 
     logger.info("Loading validation dataset from %s...", val_path)
@@ -375,6 +466,33 @@ def train_and_export(
     export_crf_weights_json(weights, output_path, compact=compact)
     file_size_kb = output_path.stat().st_size / 1024
 
+    # Sweep the inference-time transition temperature on the validation set.
+    if tune_temperature and X_val:
+        logger.info(
+            "Sweeping transition temperature over %s on validation set...",
+            list(temperature_candidates),
+        )
+        best_temperature, best_temperature_f1, temperature_trials = (
+            tune_transition_temperature(weights, X_val, y_val, temperature_candidates)
+        )
+        logger.info(
+            "Selected transition temperature: T=%.2f (Val exact-span F1: %.4f)",
+            best_temperature,
+            best_temperature_f1,
+        )
+        if abs(best_temperature - TRANSITION_TEMPERATURE) > 1e-9:
+            logger.warning(
+                "Reminder: update TRANSITION_TEMPERATURE in "
+                "crates/math-core/src/crf.rs from %.2f to %.2f to match the "
+                "winning validation temperature.",
+                TRANSITION_TEMPERATURE,
+                best_temperature,
+            )
+    else:
+        best_temperature = TRANSITION_TEMPERATURE
+        best_temperature_f1 = val_f1
+        temperature_trials = []
+
     # Write expected predictions on test.jsonl for Rust Viterbi parity verification
     test_path = train_path.parent / "test.jsonl"
     if test_path.exists():
@@ -409,6 +527,10 @@ def train_and_export(
         "file_size_kb": round(file_size_kb, 2),
         "viterbi_parity": round(parity * 100.0, 2),
         "tuning_trials": tuning_trials,
+        "correction_weight": max(1, int(correction_weight)),
+        "transition_temperature": best_temperature,
+        "val_f1_at_temperature": round(best_temperature_f1, 4),
+        "temperature_trials": temperature_trials,
     }
     return summary
 
@@ -470,6 +592,27 @@ def main() -> None:
         action="store_true",
         help="Export compact JSON without indentations",
     )
+    parser.add_argument(
+        "--correction-weight",
+        type=int,
+        default=DEFAULT_CORRECTION_WEIGHT,
+        help=(
+            "Oversampling weight for user_correction / real_notes training "
+            "documents (default: 3)"
+        ),
+    )
+    parser.add_argument(
+        "--temperatures",
+        type=float,
+        nargs="+",
+        default=list(DEFAULT_TEMPERATURE_CANDIDATES),
+        help="Transition temperatures to sweep on the validation set",
+    )
+    parser.add_argument(
+        "--no-temp-sweep",
+        action="store_true",
+        help="Skip the validation-set transition temperature sweep",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -484,6 +627,9 @@ def main() -> None:
         max_iterations=args.max_iterations,
         precision=args.precision,
         compact=args.compact,
+        correction_weight=args.correction_weight,
+        temperature_candidates=tuple(args.temperatures),
+        tune_temperature=not args.no_temp_sweep,
     )
 
     print("\n=== Mathia CRF Training & Export Complete ===")
@@ -493,6 +639,18 @@ def main() -> None:
     print(f"Number of State Features:{summary['num_state_features']}")
     print(f"Weights File:            {summary['output_path']} ({summary['file_size_kb']} KB)")
     print(f"Viterbi Parity:          {summary['viterbi_parity']}%")
+    print(f"Correction Weight:       {summary['correction_weight']}")
+    print(
+        f"Transition Temperature:  {summary['transition_temperature']} "
+        f"(Val exact-span F1: {summary['val_f1_at_temperature']})"
+    )
+    if abs(summary["transition_temperature"] - TRANSITION_TEMPERATURE) > 1e-9:
+        print(
+            "REMINDER: update TRANSITION_TEMPERATURE in "
+            f"crates/math-core/src/crf.rs from {TRANSITION_TEMPERATURE} to "
+            f"{summary['transition_temperature']} to match the winning "
+            "validation temperature."
+        )
 
 
 if __name__ == "__main__":

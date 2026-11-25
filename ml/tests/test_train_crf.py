@@ -9,10 +9,13 @@ import unittest
 
 from mathia_ml.train_crf import (
     DEFAULT_OUTPUT_WEIGHTS,
+    document_source,
     export_crf_weights_json,
     format_crf_weights,
+    oversample_correction_documents,
     train_crf_model,
     tune_hyperparameters,
+    tune_transition_temperature,
     verify_viterbi_parity,
     viterbi_decode,
 )
@@ -126,6 +129,43 @@ class TestTrainCRF(unittest.TestCase):
         self.assertIn(best_params[0], [0.1, 0.2])
         self.assertIn(best_params[1], [0.1, 0.2])
         self.assertGreaterEqual(best_score, 0.0)
+
+    def test_document_source_and_oversampling(self) -> None:
+        docs = [
+            {"doc_id": "synthetic", "metadata": {"source": "synthetic"}},
+            {"doc_id": "real", "metadata": {"source": "real_notes"}},
+            {"doc_id": "corr", "metadata": {"source": "user_correction"}},
+            {"doc_id": "bare"},
+        ]
+        self.assertEqual(document_source(docs[1]), "real_notes")
+        self.assertIsNone(document_source(docs[3]))
+
+        weighted = oversample_correction_documents(docs, correction_weight=3)
+        ids = [d["doc_id"] for d in weighted]
+        self.assertEqual(ids.count("synthetic"), 1)
+        self.assertEqual(ids.count("real"), 3)
+        self.assertEqual(ids.count("corr"), 3)
+        self.assertEqual(ids.count("bare"), 1)
+        self.assertEqual(len(weighted), 8)
+
+        self.assertEqual(oversample_correction_documents(docs, 1), docs)
+
+    def test_tune_transition_temperature(self) -> None:
+        crf = train_crf_model(self.X_train, self.y_train, c1=0.1, c2=0.1, max_iterations=20)
+        weights = format_crf_weights(crf, precision=5)
+
+        best_temp, best_f1, trials = tune_transition_temperature(
+            weights,
+            self.X_train,
+            self.y_train,
+            candidates=[0.4, 0.6, 0.8, 1.0],
+        )
+        self.assertIn(best_temp, [0.4, 0.6, 0.8, 1.0])
+        self.assertGreaterEqual(best_f1, 0.0)
+        self.assertEqual(len(trials), 4)
+        self.assertEqual(
+            [t["temperature"] for t in trials], [0.4, 0.6, 0.8, 1.0]
+        )
 
     def test_exported_crf_weights_json_file(self) -> None:
         weights_path = Path(DEFAULT_OUTPUT_WEIGHTS)

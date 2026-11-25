@@ -222,6 +222,10 @@ def export_feedback_from_markdown_and_overrides(
                 break
 
     metadata["num_nodes"] = len(dump.nodes)
+    # Feedback pairs are user corrections by definition. Keep the original
+    # file-name/in-memory source for provenance.
+    metadata.setdefault("override_source", metadata.get("source"))
+    metadata["source"] = "user_correction"
 
     return LabeledDocument(
         doc_id=doc_id,
@@ -300,7 +304,12 @@ def export_feedback_telemetry(
             # Check if entry already has full LabeledDocument schema
             if "nodes" in entry and "features" in entry and "bio_tags" in entry:
                 try:
-                    docs.append(LabeledDocument.model_validate(entry))
+                    doc = LabeledDocument.model_validate(entry)
+                    original_source = doc.metadata.get("source")
+                    if original_source and original_source != "user_correction":
+                        doc.metadata.setdefault("telemetry_source", original_source)
+                    doc.metadata["source"] = "user_correction"
+                    docs.append(doc)
                     continue
                 except Exception:
                     pass
