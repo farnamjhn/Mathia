@@ -677,11 +677,10 @@ impl BlockClassifier {
                     .map_or(0.0, |t| t.confidence);
 
                 let original_kind = tags.get(i).and_then(|t| t.tag.block_type());
-                // A strongly labelled opener names the block outright, so its
-                // body is delimited structurally (the heuristic rules) rather
-                // than by the tagger's `I-` run. Without this the CRF leaves
-                // every body paragraph as separate text, because its emission
-                // model rarely predicts `I-` states on real notes.
+                // A strongly labelled opener names the block outright. Its
+                // structural scope is a floor (applied below): the CRF may
+                // extend the block, but structural rules keep a valid body
+                // from being truncated when the CRF emits no `I-` states.
                 let strong_lead = features[i].lead.as_ref().is_some_and(|lead| {
                     !lead.reference
                         && lead.kind == kind
@@ -694,7 +693,57 @@ impl BlockClassifier {
                     || (retype(i).is_some()
                         && (tags.get(i).is_none_or(|t| !t.tag.is_begin())
                             || original_kind != Some(kind)));
-                let (natural, reason) = if structural {
+
+                // The CRF's `I-*` run can extend the block beyond the
+                // structural floor. It is capped by the configured size limit
+                // and, for arguments, by the first QED marker.
+                let mut crf_end = i + 1;
+                while crf_end < scope_limit
+                    && tags
+                        .get(crf_end)
+                        .is_some_and(|t| t.tag == BioTag::Inside(kind))
+                {
+                    crf_end += 1;
+                }
+                let max_nodes = if kind.is_argument() {
+                    self.config.scope.proof_max_nodes
+                } else {
+                    self.config.scope.statement_max_nodes
+                }
+                .max(1);
+                // Hard guardrail: never exceed the configured size limit.
+                let crf_capped = crf_end.min(i + max_nodes);
+
+                let (crf_natural, crf_reason) = if crf_capped > i + 1 {
+                    // Hard guardrail: an argument stops at its first QED marker.
+                    let (end, qed_hit) = if kind.is_argument() {
+                        match (i..crf_capped).find(|&j| features[j].qed) {
+                            Some(j) => (j + 1, true),
+                            None => (crf_capped, false),
+                        }
+                    } else {
+                        (crf_capped, false)
+                    };
+                    let reason = if qed_hit {
+                        EndReason::Qed
+                    } else if end == i + max_nodes && end < scope_limit {
+                        EndReason::SizeLimit
+                    } else if end == scope_limit {
+                        at_scope_limit
+                    } else {
+                        EndReason::NoContinuation
+                    };
+                    (end, reason)
+                } else {
+                    (i + 1, EndReason::NoContinuation)
+                };
+
+                // Structural scoping is a floor, not a bypass: statements still
+                // absorb display math and continuation paragraphs, and
+                // arguments still run to their QED marker. The CRF may extend a
+                // block beyond this floor, but never truncates a structurally
+                // valid one.
+                let (structural_natural, structural_reason) = if structural {
                     match kind {
                         BlockType::Proof => scoping::argument_end(
                             features,
@@ -732,41 +781,12 @@ impl BlockClassifier {
                         ),
                     }
                 } else {
-                    let mut end = i + 1;
-                    while end < scope_limit
-                        && tags.get(end).is_some_and(|t| t.tag == BioTag::Inside(kind))
-                    {
-                        end += 1;
-                    }
-                    let reason = if matches!(kind, BlockType::Proof | BlockType::Solution)
-                        && (i..end).any(|j| features[j].qed)
-                    {
-                        EndReason::Qed
-                    } else if end
-                        == (i + if kind.is_argument() {
-                            self.config.scope.proof_max_nodes
-                        } else {
-                            self.config.scope.statement_max_nodes
-                        }
-                        .max(1))
-                        .min(scope_limit)
-                        && end < scope_limit
-                    {
-                        EndReason::SizeLimit
-                    } else if end == scope_limit {
-                        if at_scope_limit == EndReason::NextOpener
-                            && !tags.get(end).is_some_and(|t| t.tag.is_begin())
-                            && !env_first[end]
-                            && retype(end).is_none()
-                        {
-                            EndReason::NoContinuation
-                        } else {
-                            at_scope_limit
-                        }
-                    } else {
-                        EndReason::NoContinuation
-                    };
-                    (end, reason)
+                    (i + 1, EndReason::NoContinuation)
+                };
+                let (natural, reason) = if structural && structural_natural >= crf_natural {
+                    (structural_natural, structural_reason)
+                } else {
+                    (crf_natural, crf_reason)
                 };
 
                 let (end, reason) = adjust(natural, reason);
@@ -1107,6 +1127,27 @@ fn sanitize_argument_openers(tags: &[TaggedNode], features: &[NodeFeatures]) -> 
                 let continues = last_emitted
                     .and_then(|tag| tag.block_type())
                     .is_some_and(|prev| prev == kind);
+
+                // A paragraph that continues the previous statement ("where …",
+                // a display-math body, or the body of a heading opener) is not
+                // a new argument. The CRF can score `B-PROOF` on such a node
+                // because proof bodies look structurally similar; fold it back
+                // into the statement instead of opening a spurious block.
+                let continues_statement = i > 0
+                    && (feature.is_some_and(|feature| feature.continuation)
+                        || features.get(i - 1).is_some_and(|prev| {
+                            prev.lead
+                                .as_ref()
+                                .is_some_and(|lead| lead.body_empty && lead.kind.is_statement())
+                        }));
+                if !has_lead
+                    && continues_statement
+                    && let Some(prev) = last_begin.filter(|kind| kind.is_statement())
+                {
+                    tagged.tag = BioTag::Inside(prev);
+                    last_emitted = Some(tagged.tag);
+                    continue;
+                }
 
                 if has_lead {
                     last_begin = Some(kind);
@@ -1685,7 +1726,11 @@ mod tests {
         assert_eq!(proves, [Some("block-theorem-1"), None, None]);
 
         let blocks = classify("قضیه ۲.۱. الف.\n\nمتن میانی.\n\nبرهان. ساده است. □");
-        assert_eq!(blocks[2].proves.as_deref(), Some("block-theorem-1"));
+        let proof = blocks
+            .iter()
+            .find(|b| b.kind == BlockType::Proof)
+            .expect("proof block");
+        assert_eq!(proof.proves.as_deref(), Some("block-theorem-1"));
     }
 
     #[test]
@@ -2141,6 +2186,93 @@ mod tests {
         assert_eq!(res.blocks[1].kind, BlockType::Proof);
     }
 
+    struct FixedTagger(Vec<BioTag>);
+
+    impl SequenceTagger for FixedTagger {
+        fn tag(&self, _nodes: &[Node], _features: &[NodeFeatures]) -> Vec<TaggedNode> {
+            self.0
+                .iter()
+                .map(|&tag| TaggedNode {
+                    tag,
+                    confidence: 1.0,
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn crf_inside_run_controls_block_length() {
+        let c = HeuristicClassifier::default();
+        let md = "# Section\n\n\
+                  **Theorem 1.** First.\n\n\
+                  Second paragraph.\n\n\
+                  Third paragraph.\n\n\
+                  Proof. Argument.\n\n\
+                  More argument. $\\blacksquare$\n\n\
+                  After QED.";
+        let nodes = parse_markdown(md);
+        assert_eq!(nodes.len(), 7, "unexpected node split: {nodes:?}");
+
+        let tags = vec![
+            BioTag::Outside,
+            BioTag::Begin(BlockType::Theorem),
+            BioTag::Inside(BlockType::Theorem),
+            BioTag::Inside(BlockType::Theorem),
+            BioTag::Begin(BlockType::Proof),
+            BioTag::Inside(BlockType::Proof),
+            BioTag::Inside(BlockType::Proof),
+        ];
+        let tagger = FixedTagger(tags);
+        let res = c.classify_with_tagger(&nodes, &ScopeOverrides::default(), &tagger);
+
+        let theorem = res
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockType::Theorem)
+            .expect("theorem block");
+        // Structural scoping would stop at node 2; the CRF's I-run extends it.
+        assert_eq!(theorem.span, 1..4);
+
+        let proof = res
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockType::Proof)
+            .expect("proof block");
+        // The I-run would reach node 7, but the QED guardrail stops at node 6.
+        assert_eq!(proof.span, 4..6);
+        assert_eq!(proof.end, EndReason::Qed);
+    }
+
+    #[test]
+    fn crf_inside_run_respects_statement_size_limit() {
+        let mut config = ScoringConfig::default();
+        config.scope.statement_max_nodes = 2;
+        let c = HeuristicClassifier::new(config);
+        let md = "# Section\n\n\
+                  **Theorem 1.** First.\n\n\
+                  Second paragraph.\n\n\
+                  Third paragraph.\n\n\
+                  Fourth paragraph.";
+        let nodes = parse_markdown(md);
+        assert_eq!(nodes.len(), 5);
+
+        let tags = vec![
+            BioTag::Outside,
+            BioTag::Begin(BlockType::Theorem),
+            BioTag::Inside(BlockType::Theorem),
+            BioTag::Inside(BlockType::Theorem),
+            BioTag::Inside(BlockType::Theorem),
+        ];
+        let res = c.classify_with_tagger(&nodes, &ScopeOverrides::default(), &FixedTagger(tags));
+        let theorem = res
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockType::Theorem)
+            .expect("theorem block");
+        assert_eq!(theorem.span, 1..3);
+        assert_eq!(theorem.end, EndReason::SizeLimit);
+    }
+
     struct CallCountJudge(std::sync::Mutex<usize>);
     impl BlockJudge for CallCountJudge {
         fn judge(&self, _: &SemanticBlock, _: &[Node]) -> Verdict {
@@ -2256,7 +2388,10 @@ mod tests {
 
         let tmp = std::env::temp_dir().join(format!("mathia-tel-{}.jsonl", std::process::id()));
         crate::features::append_telemetry_entry(&tmp, &tel).unwrap();
+        // Re-applying the same correction must not duplicate the row.
+        crate::features::append_telemetry_entry(&tmp, &tel).unwrap();
         let line = std::fs::read_to_string(&tmp).unwrap();
+        assert_eq!(line.lines().count(), 1);
         let parsed: crate::features::TelemetryEntry = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(parsed, tel);
         std::fs::remove_file(&tmp).unwrap();
