@@ -937,7 +937,11 @@ mod tests {
 
         // A program that cannot run leaves the heuristic result alone.
         let broken = CommandJudge::new(dir.join("missing"), Vec::new(), "none");
-        let doc = math_core::analyze_with_judge("Theorem 1. A.", &config, &broken, 4);
+        // Force the (high-confidence) theorem to be reviewed so the missing
+        // command is actually invoked and its error recorded.
+        let mut review_all = ScoringConfig::default();
+        review_all.ml_confidence_threshold = 1e9;
+        let doc = math_core::analyze_with_judge("Theorem 1. A.", &review_all, &broken, 4);
         assert_eq!(doc.blocks[0].kind, BlockType::Theorem);
         assert_eq!(broken.errors().len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
