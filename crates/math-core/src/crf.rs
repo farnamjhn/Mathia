@@ -46,7 +46,7 @@ pub const CHAR_MEDIUM_MAX: usize = 400;
 /// Viterbi never leaves a proof once it enters one. Damping the transitions
 /// lets the (lexically and structurally grounded) emission model decide block
 /// boundaries. Mirrors `TRANSITION_TEMPERATURE` in `ml/src/mathia_ml/train_crf.py`.
-pub const TRANSITION_TEMPERATURE: f32 = 0.4;
+pub const TRANSITION_TEMPERATURE: f32 = 0.8;
 
 /// View trait abstracting over parsed AST [`Node`] and deserialized [`DumpNode`].
 pub trait CrfNode {
