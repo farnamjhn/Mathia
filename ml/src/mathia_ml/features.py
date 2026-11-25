@@ -5,6 +5,9 @@ Extracts joint opener and scoping features over a sliding window [i-1, i, i+1] f
   math_density bucketed, logic_density bucketed, cues, mentions, ends_colon).
 - Relational / delta features (math_density_delta: up/down/flat,
   is_first_node, is_last_node, bias).
+- Boundary & scope features (char_len_bucket, starts_lowercase, starts_math,
+  prev_ends_continuation_punct, dist_from_lead) that let the CRF learn
+  realistic block lengths per type.
 
 This specification is shared identically between Python training (sklearn-crfsuite)
 and the pure-Rust Viterbi inference engine (crates/math-core/src/crf.rs).
@@ -22,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 from mathia_ml.schema import DumpNode, FeatureDump, LabeledDocument, NodeFeatures
 
-FEATURE_SPEC_VERSION: str = "1.0.0"
+FEATURE_SPEC_VERSION: str = "1.1.0"
 
 # Offsets for the sliding context window
 WINDOW_OFFSETS: tuple[int, ...] = (-1, 0, 1)
@@ -38,6 +41,11 @@ LOGIC_MED_THRESHOLD: float = 0.70
 
 # Delta threshold for math density change
 MATH_DELTA_THRESHOLD: float = 0.05
+
+# Character-length bucket boundaries for the block-size feature
+CHAR_TINY_MAX: int = 40
+CHAR_SHORT_MAX: int = 140
+CHAR_MEDIUM_MAX: int = 400
 
 
 def offset_prefix(offset: int) -> str:
@@ -95,6 +103,68 @@ def node_ends_with_colon(flat_text: str) -> bool:
     """Return True if flat_text ends with an ASCII or full-width colon."""
     t = flat_text.strip()
     return t.endswith(":") or t.endswith("：")
+
+
+def bucket_char_len(char_len: int) -> str:
+    """Bucket a node's character length into the block-size feature categories."""
+    if char_len <= CHAR_TINY_MAX:
+        return "tiny"
+    elif char_len <= CHAR_SHORT_MAX:
+        return "short"
+    elif char_len <= CHAR_MEDIUM_MAX:
+        return "medium"
+    else:
+        return "long"
+
+
+def starts_with_ascii_lowercase(flat_text: str) -> bool:
+    """Return True if flat_text starts (after whitespace) with an ASCII lowercase letter."""
+    stripped = flat_text.lstrip()
+    return bool(stripped) and "a" <= stripped[0] <= "z"
+
+
+def starts_with_math(flat_text: str) -> bool:
+    """Return True if flat_text starts (after whitespace) with '$' or '$$'."""
+    return flat_text.lstrip().startswith("$")
+
+
+def ends_with_continuation_punct(flat_text: str) -> bool:
+    """Return True if flat_text ends with ',', '،', ':' or '：'."""
+    stripped = flat_text.rstrip()
+    return bool(stripped) and stripped[-1] in {",", "،", ":", "："}
+
+
+def bucket_dist_from_lead(dist: int) -> str:
+    """Bucket the distance (in nodes) since the most recent labelled opener."""
+    if dist == 0:
+        return "0"
+    elif dist == 1:
+        return "1"
+    elif dist == 2:
+        return "2"
+    elif 3 <= dist <= 5:
+        return "3_5"
+    else:
+        return "6_plus"
+
+
+def dist_from_lead(nodes: Sequence[Any], features: Sequence[Any], i: int) -> str:
+    """Distance in nodes since the most recent non-reference labelled opener.
+
+    Resets at headings. Returns 'none' when no such opener precedes ``i``.
+    """
+    for j in range(i, -1, -1):
+        kind = str(_get_attr_or_item(nodes[j], "kind", "")).lower().strip()
+        if kind == "heading":
+            return "none"
+        lead = _get_attr_or_item(features[j], "lead")
+        if (
+            lead is not None
+            and bool(_get_attr_or_item(lead, "labelled", False))
+            and not bool(_get_attr_or_item(lead, "reference", False))
+        ):
+            return bucket_dist_from_lead(i - j)
+    return "none"
 
 
 def _get_attr_or_item(obj: Any, key: str, default: Any = None) -> Any:
@@ -248,6 +318,29 @@ def extract_node_features(
     else:
         curr_math = float(_get_attr_or_item(features[i], "math_density", 0.0) or 0.0)
         feats[f"0:math_density_delta={get_math_density_delta(curr_math, None)}"] = 1.0
+
+    # Boundary & scope features (block-size learning). Derivable from
+    # `kind`, `flat_text`, `char_len` and `NodeFeatures` alone, so the offline
+    # Python extractor and live Rust inference stay in lockstep.
+    curr_node = nodes[i]
+    flat_text = _get_attr_or_item(curr_node, "flat_text", "") or ""
+    char_len = _get_attr_or_item(curr_node, "char_len")
+    if char_len is None:
+        char_len = len(flat_text)
+    feats[f"0:char_len_bucket={bucket_char_len(int(char_len))}"] = 1.0
+
+    if starts_with_ascii_lowercase(flat_text):
+        feats["0:starts_lowercase=true"] = 1.0
+
+    if starts_with_math(flat_text):
+        feats["0:starts_math=true"] = 1.0
+
+    if i > 0:
+        prev_flat = _get_attr_or_item(nodes[i - 1], "flat_text", "") or ""
+        if ends_with_continuation_punct(prev_flat):
+            feats["0:prev_ends_continuation_punct=true"] = 1.0
+
+    feats[f"0:dist_from_lead={dist_from_lead(nodes, features, i)}"] = 1.0
 
     return feats
 

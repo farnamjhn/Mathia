@@ -34,6 +34,11 @@ pub const LOGIC_MED_THRESHOLD: f32 = 0.70;
 /// Math density change threshold for delta feature.
 pub const MATH_DELTA_THRESHOLD: f32 = 0.05;
 
+/// Character-length bucket boundaries for the block-size feature.
+pub const CHAR_TINY_MAX: usize = 40;
+pub const CHAR_SHORT_MAX: usize = 140;
+pub const CHAR_MEDIUM_MAX: usize = 400;
+
 /// Damping factor applied to every learned transition weight.
 ///
 /// The training corpus is small and synthetic, so the learned transition prior
@@ -47,6 +52,11 @@ pub const TRANSITION_TEMPERATURE: f32 = 0.4;
 pub trait CrfNode {
     fn node_kind(&self) -> &str;
     fn flat_text(&self) -> &str;
+    /// Character length of the node's flattened text.
+    ///
+    /// [`DumpNode`] carries this explicitly so anonymized telemetry (whose
+    /// `flat_text` is stripped) still exposes its true length.
+    fn char_len(&self) -> usize;
 }
 
 impl CrfNode for Node {
@@ -68,6 +78,10 @@ impl CrfNode for Node {
     fn flat_text(&self) -> &str {
         &self.flat
     }
+
+    fn char_len(&self) -> usize {
+        self.flat.chars().count()
+    }
 }
 
 impl CrfNode for DumpNode {
@@ -77,6 +91,10 @@ impl CrfNode for DumpNode {
 
     fn flat_text(&self) -> &str {
         &self.flat_text
+    }
+
+    fn char_len(&self) -> usize {
+        self.char_len
     }
 }
 
@@ -142,6 +160,80 @@ pub fn get_math_density_delta(curr_density: f32, prev_density: Option<f32>) -> &
 pub fn node_ends_with_colon(flat_text: &str) -> bool {
     let t = flat_text.trim();
     t.ends_with(':') || t.ends_with('：')
+}
+
+/// Bucket a node's character length into the block-size feature categories.
+#[inline]
+pub fn bucket_char_len(char_len: usize) -> &'static str {
+    if char_len <= CHAR_TINY_MAX {
+        "tiny"
+    } else if char_len <= CHAR_SHORT_MAX {
+        "short"
+    } else if char_len <= CHAR_MEDIUM_MAX {
+        "medium"
+    } else {
+        "long"
+    }
+}
+
+/// Return true if `flat_text` starts (after leading whitespace) with an ASCII
+/// lowercase letter — a strong English continuation signal.
+#[inline]
+pub fn starts_with_ascii_lowercase(flat_text: &str) -> bool {
+    flat_text
+        .trim_start()
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase())
+}
+
+/// Return true if `flat_text` starts (after leading whitespace) with `$` or `$$`.
+#[inline]
+pub fn starts_with_math(flat_text: &str) -> bool {
+    flat_text.trim_start().starts_with('$')
+}
+
+/// Return true if `flat_text` ends with a continuation punctuation mark.
+#[inline]
+pub fn ends_with_continuation_punct(flat_text: &str) -> bool {
+    flat_text
+        .trim_end()
+        .chars()
+        .next_back()
+        .is_some_and(|c| matches!(c, ',' | '،' | ':' | '：'))
+}
+
+/// Bucket the distance (in nodes) since the most recent labelled opener.
+#[inline]
+pub fn bucket_dist_from_lead(dist: usize) -> &'static str {
+    match dist {
+        0 => "0",
+        1 => "1",
+        2 => "2",
+        3..=5 => "3_5",
+        _ => "6_plus",
+    }
+}
+
+/// Distance in nodes since the most recent non-reference labelled opener,
+/// resetting at headings. Returns `"none"` when no such opener precedes `i`.
+pub fn dist_from_lead<N: CrfNode>(
+    nodes: &[N],
+    features: &[NodeFeatures],
+    i: usize,
+) -> &'static str {
+    for j in (0..=i).rev() {
+        if nodes[j].node_kind().trim().eq_ignore_ascii_case("heading") {
+            return "none";
+        }
+        if let Some(lead) = &features[j].lead
+            && lead.labelled
+            && !lead.reference
+        {
+            return bucket_dist_from_lead(i - j);
+        }
+    }
+    "none"
 }
 
 /// Extract base features for a node at given context window offset into a visitor callback.
@@ -355,6 +447,37 @@ pub fn extract_node_features_visitor<N: CrfNode, F: FnMut(&str)>(
         let _ = write!(buf, "0:math_density_delta={delta}");
         visit(buf);
     }
+
+    // Boundary & scope features (block-size learning). These are derivable
+    // from `kind`, `flat_text`, `char_len` and `NodeFeatures` alone, so the
+    // offline Python extractor and live Rust inference stay in lockstep.
+    buf.clear();
+    let _ = write!(
+        buf,
+        "0:char_len_bucket={}",
+        bucket_char_len(nodes[i].char_len())
+    );
+    visit(buf);
+
+    if starts_with_ascii_lowercase(nodes[i].flat_text()) {
+        visit("0:starts_lowercase=true");
+    }
+
+    if starts_with_math(nodes[i].flat_text()) {
+        visit("0:starts_math=true");
+    }
+
+    if i > 0 && ends_with_continuation_punct(nodes[i - 1].flat_text()) {
+        visit("0:prev_ends_continuation_punct=true");
+    }
+
+    buf.clear();
+    let _ = write!(
+        buf,
+        "0:dist_from_lead={}",
+        dist_from_lead(nodes, features, i)
+    );
+    visit(buf);
 }
 
 /// Extract all sliding-window [i-1, i, i+1] and relational feature keys for node `i` as a `Vec<String>`.
@@ -392,8 +515,8 @@ pub fn extract_sequence_features<N: CrfNode>(
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RawCrfWeights {
     pub labels: Vec<String>,
-    pub transitions: Vec<Vec<f32>>,
-    pub state_features: HashMap<String, HashMap<String, f32>>,
+    pub transitions: Vec<Vec<f64>>,
+    pub state_features: HashMap<String, HashMap<String, f64>>,
 }
 
 /// In-memory optimized Linear-Chain CRF model weights.
@@ -402,9 +525,9 @@ pub struct CrfModel {
     pub labels: Vec<String>,
     pub bio_tags: Vec<BioTag>,
     /// Transition weights: `transitions[from_idx][to_idx]`.
-    pub transitions: Vec<Vec<f32>>,
+    pub transitions: Vec<Vec<f64>>,
     /// State feature lookup: `feature_key -> Vec<(label_idx, weight)>`.
-    pub state_features: HashMap<String, Vec<(usize, f32)>>,
+    pub state_features: HashMap<String, Vec<(usize, f64)>>,
 }
 
 impl CrfModel {
@@ -524,7 +647,7 @@ impl CrfTagger {
         }
 
         // 1. Compute state emissions: emissions[t][label_idx]
-        let mut emissions = vec![vec![0.0f32; k]; n];
+        let mut emissions = vec![vec![0.0f64; k]; n];
         let mut buf = String::with_capacity(64);
 
         for (t, emission_t) in emissions.iter_mut().enumerate().take(n) {
@@ -538,7 +661,7 @@ impl CrfTagger {
         }
 
         // 2. Forward Viterbi dynamic programming
-        let mut dp = vec![vec![0.0f32; k]; n];
+        let mut dp = vec![vec![0.0f64; k]; n];
         let mut backpointers = vec![vec![0usize; k]; n];
 
         dp[0] = emissions[0].clone();
@@ -546,9 +669,10 @@ impl CrfTagger {
         for t in 1..n {
             for j in 0..k {
                 let mut best_prev = 0;
-                let mut best_score = f32::NEG_INFINITY;
+                let mut best_score = f64::NEG_INFINITY;
                 for (prev, &prev_dp) in dp[t - 1].iter().enumerate().take(k) {
-                    let score = prev_dp + self.model.transitions[prev][j] * TRANSITION_TEMPERATURE;
+                    let score = prev_dp
+                        + self.model.transitions[prev][j] * f64::from(TRANSITION_TEMPERATURE);
                     if score > best_score {
                         best_score = score;
                         best_prev = prev;
@@ -561,7 +685,7 @@ impl CrfTagger {
 
         // 3. Backtracking for the optimal sequence path
         let mut best_last = 0;
-        let mut max_final = f32::NEG_INFINITY;
+        let mut max_final = f64::NEG_INFINITY;
         for (j, &score) in dp[n - 1].iter().enumerate().take(k) {
             if score > max_final {
                 max_final = score;
@@ -576,12 +700,13 @@ impl CrfTagger {
         }
 
         // 4. Backward pass for max-marginal Viterbi scores
-        let mut b = vec![vec![0.0f32; k]; n];
+        let mut b = vec![vec![0.0f64; k]; n];
         for t in (0..n - 1).rev() {
             for j in 0..k {
-                let mut max_b = f32::NEG_INFINITY;
+                let mut max_b = f64::NEG_INFINITY;
                 for next_j in 0..k {
-                    let score = self.model.transitions[j][next_j] * TRANSITION_TEMPERATURE
+                    let score = self.model.transitions[j][next_j]
+                        * f64::from(TRANSITION_TEMPERATURE)
                         + emissions[t + 1][next_j]
                         + b[t + 1][next_j];
                     if score > max_b {
@@ -599,7 +724,7 @@ impl CrfTagger {
             let tag = self.model.bio_tags[label_idx];
 
             let best_score = dp[t][label_idx] + b[t][label_idx];
-            let mut second_best = f32::NEG_INFINITY;
+            let mut second_best = f64::NEG_INFINITY;
             for j in 0..k {
                 if j != label_idx {
                     let s = dp[t][j] + b[t][j];
@@ -610,7 +735,7 @@ impl CrfTagger {
             }
 
             let confidence = if k > 1 && second_best.is_finite() {
-                (best_score - second_best).max(0.0)
+                (best_score - second_best).max(0.0) as f32
             } else {
                 1.0
             };
@@ -738,6 +863,125 @@ mod tests {
         assert!(keys.contains(&"0:emphasized=true".to_string()));
         assert!(keys.contains(&"0:math_density=low".to_string()));
         assert!(keys.contains(&"0:logic_density=zero".to_string()));
+    }
+
+    #[test]
+    fn boundary_scope_feature_keys_exact() {
+        // Mirrors `test_boundary_scope_feature_keys_exact` in
+        // `ml/tests/test_features.py`; both must produce identical key sets.
+        let nodes = vec![
+            DumpNode {
+                index: 0,
+                kind: "paragraph".to_string(),
+                flat_text: "Theorem 1: Let $X$ be compact.".to_string(),
+                char_len: 30,
+                env_span: None,
+            },
+            DumpNode {
+                index: 1,
+                kind: "paragraph".to_string(),
+                flat_text: "then $f$ is bounded,".to_string(),
+                char_len: 20,
+                env_span: None,
+            },
+        ];
+        let features = vec![
+            NodeFeatures {
+                lead: Some(KeywordHit {
+                    kind: BlockType::Theorem,
+                    number: Some("1".to_string()),
+                    name: None,
+                    labelled: true,
+                    body_empty: false,
+                    reference: false,
+                    refers_to: None,
+                }),
+                math_density: 0.25,
+                ..Default::default()
+            },
+            NodeFeatures::default(),
+        ];
+
+        let mut node0 = extract_node_features(&nodes, &features, 0);
+        node0.sort();
+        assert_eq!(
+            node0,
+            vec![
+                "+1:has_lead=false",
+                "+1:logic_density=zero",
+                "+1:math_density=zero",
+                "+1:node_kind=paragraph",
+                "0:char_len_bucket=tiny",
+                "0:dist_from_lead=0",
+                "0:has_lead=true",
+                "0:is_first_node=true",
+                "0:labelled=true",
+                "0:lead=theorem",
+                "0:lead_has_number=true",
+                "0:logic_density=zero",
+                "0:math_density=low",
+                "0:math_density_delta=none",
+                "0:node_kind=paragraph",
+                "bias",
+            ]
+        );
+
+        let mut node1 = extract_node_features(&nodes, &features, 1);
+        node1.sort();
+        assert_eq!(
+            node1,
+            vec![
+                "-1:has_lead=true",
+                "-1:labelled=true",
+                "-1:lead=theorem",
+                "-1:lead_has_number=true",
+                "-1:logic_density=zero",
+                "-1:math_density=low",
+                "-1:node_kind=paragraph",
+                "0:char_len_bucket=tiny",
+                "0:dist_from_lead=1",
+                "0:has_lead=false",
+                "0:is_last_node=true",
+                "0:logic_density=zero",
+                "0:math_density=zero",
+                "0:math_density_delta=down",
+                "0:node_kind=paragraph",
+                "0:starts_lowercase=true",
+                "bias",
+            ]
+        );
+    }
+
+    #[test]
+    fn boundary_scope_feature_helpers() {
+        assert_eq!(bucket_char_len(0), "tiny");
+        assert_eq!(bucket_char_len(40), "tiny");
+        assert_eq!(bucket_char_len(41), "short");
+        assert_eq!(bucket_char_len(140), "short");
+        assert_eq!(bucket_char_len(141), "medium");
+        assert_eq!(bucket_char_len(400), "medium");
+        assert_eq!(bucket_char_len(401), "long");
+
+        assert!(starts_with_ascii_lowercase("  then x"));
+        assert!(!starts_with_ascii_lowercase("Then x"));
+        assert!(!starts_with_ascii_lowercase("$x$"));
+        assert!(!starts_with_ascii_lowercase(""));
+
+        assert!(starts_with_math("$$x$$"));
+        assert!(starts_with_math("  $x$"));
+        assert!(!starts_with_math("x"));
+
+        assert!(ends_with_continuation_punct("a,"));
+        assert!(ends_with_continuation_punct("a،"));
+        assert!(ends_with_continuation_punct("a:"));
+        assert!(ends_with_continuation_punct("a："));
+        assert!(!ends_with_continuation_punct("a."));
+
+        assert_eq!(bucket_dist_from_lead(0), "0");
+        assert_eq!(bucket_dist_from_lead(2), "2");
+        assert_eq!(bucket_dist_from_lead(3), "3_5");
+        assert_eq!(bucket_dist_from_lead(5), "3_5");
+        assert_eq!(bucket_dist_from_lead(6), "6_plus");
     }
 
     #[test]

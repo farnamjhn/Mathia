@@ -11,8 +11,11 @@ import sklearn_crfsuite
 from mathia_ml.features import (
     FEATURE_SPEC_VERSION,
     WINDOW_OFFSETS,
+    bucket_char_len,
+    bucket_dist_from_lead,
     bucket_logic_density,
     bucket_math_density,
+    ends_with_continuation_punct,
     extract_dataset,
     extract_document_features,
     extract_node_base_features,
@@ -21,6 +24,8 @@ from mathia_ml.features import (
     get_math_density_delta,
     node_ends_with_colon,
     offset_prefix,
+    starts_with_ascii_lowercase,
+    starts_with_math,
     summarize_features,
 )
 from mathia_ml.schema import (
@@ -77,6 +82,105 @@ class TestFeatureExtraction(unittest.TestCase):
         self.assertFalse(node_ends_with_colon("Theorem 1."))
         self.assertFalse(node_ends_with_colon("Just text"))
         self.assertFalse(node_ends_with_colon(""))
+
+    def test_boundary_scope_feature_helpers(self) -> None:
+        self.assertEqual(bucket_char_len(0), "tiny")
+        self.assertEqual(bucket_char_len(40), "tiny")
+        self.assertEqual(bucket_char_len(41), "short")
+        self.assertEqual(bucket_char_len(140), "short")
+        self.assertEqual(bucket_char_len(141), "medium")
+        self.assertEqual(bucket_char_len(400), "medium")
+        self.assertEqual(bucket_char_len(401), "long")
+
+        self.assertTrue(starts_with_ascii_lowercase("  then x"))
+        self.assertFalse(starts_with_ascii_lowercase("Then x"))
+        self.assertFalse(starts_with_ascii_lowercase("$x$"))
+        self.assertFalse(starts_with_ascii_lowercase(""))
+
+        self.assertTrue(starts_with_math("$$x$$"))
+        self.assertTrue(starts_with_math("  $x$"))
+        self.assertFalse(starts_with_math("x"))
+
+        self.assertTrue(ends_with_continuation_punct("a,"))
+        self.assertTrue(ends_with_continuation_punct("a،"))
+        self.assertTrue(ends_with_continuation_punct("a:"))
+        self.assertTrue(ends_with_continuation_punct("a："))
+        self.assertFalse(ends_with_continuation_punct("a."))
+
+        self.assertEqual(bucket_dist_from_lead(0), "0")
+        self.assertEqual(bucket_dist_from_lead(2), "2")
+        self.assertEqual(bucket_dist_from_lead(3), "3_5")
+        self.assertEqual(bucket_dist_from_lead(5), "3_5")
+        self.assertEqual(bucket_dist_from_lead(6), "6_plus")
+
+    def test_boundary_scope_feature_keys_exact(self) -> None:
+        """Mirrors `boundary_scope_feature_keys_exact` in crates/math-core/src/crf.rs."""
+        nodes = [
+            DumpNode(
+                index=0,
+                kind="paragraph",
+                flat_text="Theorem 1: Let $X$ be compact.",
+                char_len=30,
+            ),
+            DumpNode(
+                index=1,
+                kind="paragraph",
+                flat_text="then $f$ is bounded,",
+                char_len=20,
+            ),
+        ]
+        feats = [
+            NodeFeatures(
+                lead=KeywordHit(kind="theorem", number="1", labelled=True),
+                math_density=0.25,
+            ),
+            NodeFeatures(),
+        ]
+
+        self.assertEqual(
+            sorted(extract_node_features(nodes, feats, 0)),
+            [
+                "+1:has_lead=false",
+                "+1:logic_density=zero",
+                "+1:math_density=zero",
+                "+1:node_kind=paragraph",
+                "0:char_len_bucket=tiny",
+                "0:dist_from_lead=0",
+                "0:has_lead=true",
+                "0:is_first_node=true",
+                "0:labelled=true",
+                "0:lead=theorem",
+                "0:lead_has_number=true",
+                "0:logic_density=zero",
+                "0:math_density=low",
+                "0:math_density_delta=none",
+                "0:node_kind=paragraph",
+                "bias",
+            ],
+        )
+
+        self.assertEqual(
+            sorted(extract_node_features(nodes, feats, 1)),
+            [
+                "-1:has_lead=true",
+                "-1:labelled=true",
+                "-1:lead=theorem",
+                "-1:lead_has_number=true",
+                "-1:logic_density=zero",
+                "-1:math_density=low",
+                "-1:node_kind=paragraph",
+                "0:char_len_bucket=tiny",
+                "0:dist_from_lead=1",
+                "0:has_lead=false",
+                "0:is_last_node=true",
+                "0:logic_density=zero",
+                "0:math_density=zero",
+                "0:math_density_delta=down",
+                "0:node_kind=paragraph",
+                "0:starts_lowercase=true",
+                "bias",
+            ],
+        )
 
     def test_single_node_boundaries(self) -> None:
         node = DumpNode(index=0, kind="paragraph", flat_text="A single line.", char_len=14)
