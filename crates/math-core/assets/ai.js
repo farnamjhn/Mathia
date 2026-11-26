@@ -2904,6 +2904,7 @@
   document.body.appendChild(guideDialog);
 
   function refreshGuideAvailability() {
+    if (!guideDialog || !guideInput || !guideSendBtn) return;
     var avail = available();
     if (avail) {
       hideUnavailableNotice(guideDialog);
