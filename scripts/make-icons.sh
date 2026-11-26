@@ -3,8 +3,13 @@
 #
 #   src-tauri/icons/source/mathia-{light,dark}.svg   the masters
 #   src-tauri/icons/{32x32,128x128,128x128@2x,icon}.png, icon.ico, icon.icns
-#                                                    general bundle icons (light)
-#   src-tauri/icons/icon-dark.icns                   dark .icns, for reference
+#                                                    general bundle icons (light);
+#                                                    icon.icns is the macOS app icon
+#                                                    so macOS can derive the dark
+#                                                    and tinted icon appearances
+#   src-tauri/icons/icon-dark.icns                   dark .icns, reference only,
+#                                                    not bundled (the app swaps the
+#                                                    Dock icon at runtime instead)
 #   src-tauri/icons/dock-{light,dark}.png            Dock icons the app swaps
 #                                                    between at runtime (macOS)
 #   ui/assets/mathia-{light,dark}.png                in-app logo and favicon
