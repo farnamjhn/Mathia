@@ -447,6 +447,7 @@ Possible verdicts:
    - Anthropic (`POST https://api.anthropic.com/v1/messages`)
    - OpenAI / Compatible (`POST https://api.openai.com/v1/chat/completions`)
    Constructs standardized multiple-choice and probability questions (`is_block`, `kind`, `next_continues`, `last_belongs`) and resolves responses against a strict truth table in [`crates/math-judge/src/jev.rs`](../crates/math-judge/src/jev.rs).
+   A local decision model served by Ollama speaks the same System One API at `POST http://localhost:11434/v1/systemone`, so `ApiProvider::TypeSafe` with that base URL, no key and a decision model such as `d1-omni` runs the judge without a hosted service. [`crates/math-judge/tests/live_decision_model.rs`](../crates/math-judge/tests/live_decision_model.rs) checks this end to end (ignored by default; it needs the server).
 3. **[`CachedJudge`](../crates/math-judge/src/lib.rs)**: Hashes `(block_text, block_type, model_version)` into SHA-256 keys. Cached verdicts bypass re-querying unchanged documents.
 4. **[`Replay`](../crates/math-judge/src/lib.rs)**: Records applied verdicts into a JSON log (`--judge-log`). Passing the log to `--overrides` reproduces the exact reviewed document offline without calling the model.
 5. **Desktop Integration ([`src-tauri/src/decision.rs`](../src-tauri/src/decision.rs))**: Desktop UI controls configure external judges and invoke test runs over IPC.
