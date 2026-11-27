@@ -11,7 +11,7 @@
 <br />
 <div align="center">
   <a href="https://github.com/farnamjhn/Mathia">
-    <img src="src-tauri/icons/dock-light.png" alt="Mathia logo" width="120" height="120">
+    <img src="src-tauri/icons/icon.png" alt="Mathia logo" width="120" height="120">
   </a>
 
   <h3 align="center">Mathia</h3>

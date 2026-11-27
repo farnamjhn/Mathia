@@ -200,7 +200,7 @@ flowchart TD
 - [`src/session.rs`](../src-tauri/src/session.rs): In-memory document session cache, compilation options, and active source file tracker.
 - [`src/decision.rs`](../src-tauri/src/decision.rs): Decision model configuration and external model runner integration.
 - [`src/theme.rs`](../src-tauri/src/theme.rs): Native window and OS light/dark theme synchronizer.
-- [`src/dock.rs`](../src-tauri/src/dock.rs): Platform dock icon and menu integration.
+- [`src/dock.rs`](../src-tauri/src/dock.rs): The running macOS Dock icon uses light artwork for Default and dark artwork for Dark. Clear and Tinted leave the current icon unchanged.
 - [`src/menu.rs`](../src-tauri/src/menu.rs): Native application menu definitions and recent file actions.
 
 #### Desktop UI Frontend (`ui/`)

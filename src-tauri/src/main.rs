@@ -899,10 +899,11 @@ fn main() {
                     let _ = app.set_menu(m);
                 }
             }
-            // Replace the static bundle icon as soon as AppKit is available.
-            // Waiting for `RunEvent::Ready` leaves the light bundle icon visible
-            // while the application is starting in Dark Mode.
+            // Tauri assigns a static raster icon in dev builds, and the bundle
+            // icon is fixed at rest; keep the running tile on the user's icon
+            // style and follow later changes in System Settings.
             dock::refresh(None);
+            dock::spawn_watcher(app.handle().clone());
             // Dev builds must never replace themselves with a downloaded
             // release, so the automatic check only runs in release builds.
             #[cfg(not(debug_assertions))]
@@ -974,31 +975,28 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Mathia")
-        .run(|_app_handle, event| {
-            match event {
-                RunEvent::Ready => {
-                    // In dev builds on macOS, Tauri sets the light bundle icon
-                    // right after `setup` returns (inside `RuntimeRunEvent::Ready`)
-                    // before emitting `RunEvent::Ready`, so apply ours here.
-                    dock::refresh(None);
-                }
-                RunEvent::Resumed => {
-                    dock::sync(None);
-                }
-                #[cfg(target_os = "macos")]
-                RunEvent::Reopen {
-                    has_visible_windows,
-                    ..
-                } => {
-                    if !has_visible_windows
-                        && let Some(window) = _app_handle.get_webview_window("main")
-                    {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                    dock::refresh(None);
-                }
-                _ => {}
+        .run(|_app_handle, event| match event {
+            RunEvent::Ready => {
+                // In dev builds on macOS, Tauri sets its raster icon right
+                // after `setup` returns, before emitting `RunEvent::Ready`, so
+                // apply ours again here.
+                dock::refresh(None);
             }
+            RunEvent::Resumed => {
+                dock::sync(None);
+            }
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => {
+                if !has_visible_windows && let Some(window) = _app_handle.get_webview_window("main")
+                {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+                dock::refresh(None);
+            }
+            _ => {}
         });
 }

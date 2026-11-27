@@ -4,18 +4,16 @@
 #   src-tauri/icons/source/mathia-{light,dark}.svg   the masters
 #   src-tauri/icons/{32x32,128x128,128x128@2x,icon}.png, icon.ico, icon.icns
 #                                                    general bundle icons (light);
-#                                                    icon.icns is the macOS app icon
-#                                                    so macOS can derive the dark
-#                                                    and tinted icon appearances
-#   src-tauri/icons/icon-dark.icns                   dark .icns, reference only,
-#                                                    not bundled (the app swaps the
-#                                                    Dock icon at runtime instead)
-#   src-tauri/icons/dock-{light,dark}.png            Dock icons the app swaps
-#                                                    between at runtime (macOS)
+#                                                    icon.icns is the macOS app icon,
+#                                                    and macOS applies the user's
+#                                                    Default/Dark/Clear/Tinted icon
+#                                                    appearance to it itself
+#   src-tauri/icons/dock-{light,dark}.png            Dock icons the running app
+#                                                    swaps to follow the icon
+#                                                    appearance (macOS)
 #   ui/assets/mathia-{light,dark}.png                in-app logo and favicon
 #
-# Needs node/npx (resvg for rendering, @tauri-apps/cli for icns/ico) and, on
-# macOS, iconutil for the dark .icns.
+# Needs node/npx (resvg for rendering, @tauri-apps/cli for icns/ico).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -60,17 +58,6 @@ done
 # Runtime Dock icons.
 cp "$tmp/light-1024.png" "$icons/dock-light.png"
 cp "$tmp/dark-1024.png" "$icons/dock-dark.png"
-
-# Dark .icns.
-if command -v iconutil >/dev/null; then
-  set_dir="$tmp/dark.iconset"
-  mkdir -p "$set_dir"
-  for s in 16 32 128 256 512; do
-    small dark "$set_dir/icon_${s}x${s}.png" "$s"
-    small dark "$set_dir/icon_${s}x${s}@2x.png" "$((s * 2))"
-  done
-  iconutil -c icns "$set_dir" -o "$icons/icon-dark.icns"
-fi
 
 # In-app logo (also the favicon).
 mkdir -p "$root/ui/assets"
