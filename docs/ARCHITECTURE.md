@@ -290,8 +290,8 @@ For every AST node, [`Lexicon::extract`](../crates/math-core/src/features.rs) ex
 ### Stage 3: Sequence Tagging
 The tagger is selected by [`config.tagger`](../crates/math-core/src/config.rs):
 
-- [`TaggerModel::Crf`](../crates/math-core/src/config.rs) (default) uses [`CrfTagger`](../crates/math-core/src/crf.rs), which runs the trained linear-chain CRF model via Viterbi decoding over embedded weights in [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json), assigning global optimal `Begin(BlockType)`, `Inside(BlockType)`, or `Outside` tags. Each tag carries a confidence margin (the gap to the best alternative path).
-- [`TaggerModel::WeightedSum`](../crates/math-core/src/config.rs) uses [`HeuristicTagger`](../crates/math-core/src/tagger.rs), which scores every candidate type with `Σ weight × feature` from [`config.weights`](../crates/math-core/src/config.rs) and opens a block when the best score reaches [`config.threshold`](../crates/math-core/src/config.rs).
+- [`TaggerModel::Crf`](../crates/math-core/src/config.rs) uses [`CrfTagger`](../crates/math-core/src/crf.rs), which runs the trained linear-chain CRF model via Viterbi decoding over embedded weights in [`crates/math-core/src/crf_weights.json`](../crates/math-core/src/crf_weights.json), assigning global optimal `Begin(BlockType)`, `Inside(BlockType)`, or `Outside` tags. Each tag carries a confidence margin (the gap to the best alternative path).
+- [`TaggerModel::WeightedSum`](../crates/math-core/src/config.rs) (default) uses [`HeuristicTagger`](../crates/math-core/src/tagger.rs), which scores every candidate type with `Σ weight × feature` from [`config.weights`](../crates/math-core/src/config.rs) and opens a block when the best score reaches [`config.threshold`](../crates/math-core/src/config.rs).
 
 Both implement [`SequenceTagger`](../crates/math-core/src/tagger.rs), so custom models can still be injected. Users switch models with `--tagger crf|weighted-sum`, `tagger = "weighted_sum"` in the config file, or the desktop **Options → CRF model for detection** toggle.
 

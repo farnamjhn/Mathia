@@ -1476,6 +1476,13 @@ mod tests {
         HeuristicClassifier::default().classify(&parse_markdown(md))
     }
 
+    fn crf_classifier() -> HeuristicClassifier {
+        HeuristicClassifier::new(ScoringConfig {
+            tagger: TaggerModel::Crf,
+            ..Default::default()
+        })
+    }
+
     fn kinds(blocks: &[SemanticBlock]) -> Vec<BlockType> {
         blocks.iter().map(|b| b.kind).collect()
     }
@@ -1854,7 +1861,7 @@ mod tests {
 
     #[test]
     fn judge_can_widen_and_narrow_scope() {
-        let c = HeuristicClassifier::default();
+        let c = crf_classifier();
         let nodes = parse_markdown("Theorem 1. Statement.\n\nSecond half.\n\nThird.\n\nUnrelated.");
         assert_eq!(c.classify(&nodes)[0].span, 0..1);
 
@@ -1899,7 +1906,7 @@ mod tests {
                 }
             }
         }
-        let c = HeuristicClassifier::default();
+        let c = crf_classifier();
         let nodes = parse_markdown("Theorem 1. A.\n\nNote: this is just prose.");
         assert_eq!(
             kinds(&c.classify(&nodes)),
@@ -1972,7 +1979,7 @@ mod tests {
 
     #[test]
     fn judge_can_retype_split_and_move_starts() {
-        let c = HeuristicClassifier::default();
+        let c = crf_classifier();
         let nodes = parse_markdown(
             "Some setup we need.\n\nTheorem 1. Statement.\n\nSecond half.\n\nThird.\n\nUnrelated.",
         );
@@ -2016,7 +2023,7 @@ mod tests {
 
     #[test]
     fn unusable_verdicts_are_logged_and_ignored() {
-        let c = HeuristicClassifier::default();
+        let c = crf_classifier();
         let nodes = parse_markdown("Theorem 1. A.\n\nText.");
         let judge = Script(BTreeMap::from([((0, 1), Verdict::EndAt(9))]));
         let run = c.classify_with_judge_detailed(&nodes, &judge, 4, ScopeOverrides::default());
@@ -2373,7 +2380,7 @@ mod tests {
 
     #[test]
     fn confidence_gated_ambiguous_span_triggers_judge() {
-        let c = HeuristicClassifier::default();
+        let c = crf_classifier();
         let nodes = parse_markdown("Theorem 1. A.\n\nNote: this is just prose.");
         let judge = CallCountJudge(std::sync::Mutex::new(0));
         let run = c.classify_with_judge_detailed(&nodes, &judge, 4, ScopeOverrides::default());

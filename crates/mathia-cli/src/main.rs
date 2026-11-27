@@ -32,7 +32,7 @@ const USAGE: &str = "usage: mathia <input.md | input.html | folder> [options]
                         (default output: input with .fixed.md; -o may name the input itself)
       --dump-features   dump AST nodes and extracted NodeFeatures as JSON (or subcommand: mathia dump-features <input.md | input.html>)
       --config FILE     scoring configuration (.toml or .json)
-      --tagger MODEL    block detection model: crf (default) or weighted-sum
+      --tagger MODEL    block detection model: weighted-sum (default) or crf
       --dump-config     print the default scoring configuration as TOML and exit
       --explain         print every node's BIO tag and why each block ended
       --font FILE       embed a WOFF2 text font (repeatable; family from the file name);

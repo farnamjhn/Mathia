@@ -48,9 +48,9 @@ pub struct ScoringConfig {
 #[serde(rename_all = "snake_case")]
 pub enum TaggerModel {
     /// Pure-Rust Linear-Chain CRF decoded with Viterbi over embedded weights.
-    #[default]
     Crf,
     /// Linear weighted sum of the static features, with greedy structural scoping.
+    #[default]
     #[serde(
         alias = "linear",
         alias = "heuristic",
@@ -463,7 +463,7 @@ mod tests {
         }
         let toml = config.serialize(ConfigFormat::Toml).unwrap();
         assert!(toml.contains("schema_version = 3"));
-        assert!(toml.contains("tagger = \"crf\""));
+        assert!(toml.contains("tagger = \"weighted_sum\""));
         assert!(toml.contains("threshold = 0.5"));
         assert!(toml.contains("[weights]"));
         assert!(toml.contains("[scope]"));

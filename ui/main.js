@@ -262,7 +262,7 @@
   }
 
   function updateMenuToggles() {
-    const isCrf = !currentConfig || currentConfig.tagger !== "weighted_sum";
+    const isCrf = !!currentConfig && currentConfig.tagger === "crf";
     if (el.optCrfModel) el.optCrfModel.checked = isCrf;
     if (el.winMenuModel) {
       const check = el.winMenuModel.querySelector(".menu-check");

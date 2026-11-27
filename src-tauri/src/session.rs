@@ -614,7 +614,7 @@ mod tests {
         assert_eq!(json["tags"][1]["kind"], "theorem");
         assert_eq!(
             json["confidence_threshold"],
-            serde_json::json!(ScoringConfig::default().ml_confidence_threshold)
+            serde_json::json!(ScoringConfig::default().threshold)
         );
         assert!(json["document"]["blocks"][1]["id"].is_string());
     }
@@ -759,11 +759,11 @@ mod tests {
     #[test]
     fn session_switches_between_crf_and_weighted_sum() {
         let mut session = Session::default();
-        assert_eq!(session.config().tagger, math_core::TaggerModel::Crf);
-        let mut config = session.config().clone();
-        config.tagger = math_core::TaggerModel::WeightedSum;
-        session.set_config(config).unwrap();
         assert_eq!(session.config().tagger, math_core::TaggerModel::WeightedSum);
+        let mut config = session.config().clone();
+        config.tagger = math_core::TaggerModel::Crf;
+        session.set_config(config).unwrap();
+        assert_eq!(session.config().tagger, math_core::TaggerModel::Crf);
         let view = session.analyze(&text()).unwrap();
         assert!(!view.document.blocks.is_empty());
     }
