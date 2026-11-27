@@ -97,7 +97,7 @@
         <span>Decision Model…</span>
       </button>
       <button type="button" class="menu-action" data-action="scoring">
-        <span>Detection Settings…</span>
+        <span>Settings…</span>
       </button>
       <div class="menu-divider"></div>
       <button type="button" class="menu-action menu-toggle" data-action="toggle_render_math" id="win-menu-render-math">
@@ -207,7 +207,7 @@
         <button id="fix-markdown" class="menu-item" type="button" disabled>Fix Markdown…
           <span class="option-hint">Saves a repaired copy: formulas that lost their $ $, \( \) delimiters, unbalanced $ and spaced-out bold markers.</span>
         </button>
-        <button id="scoring" class="menu-item" type="button">Detection settings…</button>
+        <button id="scoring" class="menu-item" type="button">Settings…</button>
         <button id="decision" class="menu-item" type="button">Decision model…
           <span class="option-hint">The API key and address of a model that double-checks the blocks.</span>
         </button>
@@ -539,39 +539,51 @@ BEFORE YOU ANSWER, CHECK
 
 <dialog id="config-dialog" class="dialog config" aria-labelledby="config-title">
   <header class="dialog-head">
-    <h2 id="config-title">Detection settings</h2>
+    <h2 id="config-title">Settings</h2>
     <p>How Mathia decides what is a block. Applies to the open document and to exports. Save…
       writes a file you can also use with <code>mathia --config</code>.</p>
   </header>
   <form id="config-form" class="config-form" method="dialog">
-    <fieldset>
-      <legend>Method</legend>
-      <label>Detection model
-        <select id="cfg-tagger">
-          <option value="crf">CRF model</option>
-          <option value="weighted_sum">Linear weighted sum</option>
-        </select>
-        <span class="hint">CRF learns boundaries from training data; the weighted sum scores each node from configurable feature weights.</span>
-      </label>
-    </fieldset>
-    <fieldset>
-      <legend>Scope limits <span class="hint">(nodes)</span></legend>
+    <section class="config-section">
+      <h3 class="config-section-title">Method</h3>
+      <div class="config-row">
+        <span class="config-row-label" id="cfg-tagger-label">Detection model</span>
+        <div class="config-row-control">
+          <div id="cfg-tagger" class="segmented-toggle" role="radiogroup" aria-labelledby="cfg-tagger-label">
+            <button type="button" role="radio" aria-checked="true" data-value="crf">CRF model</button>
+            <button type="button" role="radio" aria-checked="false" data-value="weighted_sum">Linear weighted sum</button>
+          </div>
+          <span class="hint">CRF learns boundaries from training data; the weighted sum scores each node from configurable feature weights.</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="config-section">
+      <h3 class="config-section-title">Scope limits <span class="hint">(nodes)</span></h3>
       <div id="cfg-scope" class="config-grid"></div>
-    </fieldset>
-    <fieldset>
-      <legend>Weights <span class="hint">(weighted sum only)</span></legend>
+    </section>
+
+    <section class="config-section">
+      <h3 class="config-section-title">Weights <span class="hint">(weighted sum only)</span></h3>
+      <div class="config-row config-row-threshold">
+        <label class="config-row-label" for="cfg-threshold">Threshold</label>
+        <div class="config-row-control">
+          <input id="cfg-threshold" type="number" min="0" max="1" step="0.01" required>
+          <span class="hint">Raise it to detect fewer blocks, lower it to detect more.</span>
+        </div>
+      </div>
       <div id="cfg-weights" class="config-grid"></div>
-      <label>Threshold <input id="cfg-threshold" type="number" min="0" max="1" step="0.01" required>
-        <span class="hint">Raise it to detect fewer blocks, lower it to detect more.</span></label>
-    </fieldset>
-    <fieldset>
-      <legend>Keywords <span class="hint">(comma-separated)</span></legend>
+    </section>
+
+    <section class="config-section">
+      <h3 class="config-section-title">Keywords <span class="hint">(comma-separated)</span></h3>
       <div id="cfg-keywords" class="config-list"></div>
-    </fieldset>
-    <fieldset>
-      <legend>Cues <span class="hint">(one per line)</span></legend>
+    </section>
+
+    <section class="config-section">
+      <h3 class="config-section-title">Cues <span class="hint">(one per line)</span></h3>
       <div id="cfg-cues" class="config-cues"></div>
-    </fieldset>
+    </section>
   </form>
   <p id="config-error" class="config-error" role="alert" hidden></p>
   <footer class="dialog-actions">

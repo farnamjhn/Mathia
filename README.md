@@ -311,7 +311,7 @@ text, with every block labelled the way the inspector shows it (`**Theorem 1.** 
 environments kept as environments, and the corrections applied. It is also how an HTML page
 becomes Markdown — open the HTML file and export.
 
-**Options → Detection settings…** edits the thresholds, weights, keywords and scorer, and
+**Options → Settings…** edits the thresholds, weights, keywords and scorer, and
 loads or saves configuration files. The **Transcription prompt** button (also shown on the
 start screen) holds a ready-made prompt to paste into your OCR / vision LLM, so the Markdown
 It transcribes using the conventions that Mathia detects. **Options → Fix Markdown…** saves a

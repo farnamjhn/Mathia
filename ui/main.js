@@ -140,7 +140,7 @@
    *  after, and highlights the frame can replay. */
   let undoStack = [];
   let redoStack = [];
-  /** The configuration shown in the detection settings dialog. */
+  /** The configuration shown in the settings dialog. */
   let editing = null;
   /** Which blocks the list shows: "all", "unsure" or "changed". */
   let view = "all";
@@ -263,7 +263,7 @@
   function updateMenuToggles() {
     const isCrf = !!currentConfig && currentConfig.tagger === "crf";
     if (el.cfgTagger && !(el.configDialog && el.configDialog.open)) {
-      el.cfgTagger.value = isCrf ? "crf" : "weighted_sum";
+      setTaggerValue(isCrf ? "crf" : "weighted_sum");
     }
     const mathBtn = $("win-menu-render-math");
     if (mathBtn) {
@@ -1136,7 +1136,57 @@
     if (analysis && analysis.document.blocks.some((b) => b.id === data.id)) select(data.id, true);
   });
 
-  // ── Detection settings dialog ────────────────────────────────────────────────────
+  // ── Settings dialog ──────────────────────────────────────────────────────────
+
+  const CONFIG_LABELS = {
+    statement_max_nodes: "Statement max",
+    proof_max_nodes: "Proof max",
+    qed: "QED",
+    after_statement: "After statement",
+    logic_symbols: "Logic symbols",
+    qed_markers: "QED markers",
+    definitional_cues: "Definitional cues",
+    proof_cues: "Proof cues",
+    statement_cues: "Statement cues",
+    continuation_cues: "Continuation cues",
+    reference_cues: "Reference cues",
+  };
+
+  function formatConfigLabel(key) {
+    if (CONFIG_LABELS[key]) return CONFIG_LABELS[key];
+    return key.charAt(0).toUpperCase() + key.slice(1).replaceAll("_", " ");
+  }
+
+  function getTaggerValue() {
+    if (!el.cfgTagger) return "crf";
+    const active = el.cfgTagger.querySelector('[aria-checked="true"]');
+    return active && active.dataset.value === "weighted_sum" ? "weighted_sum" : "crf";
+  }
+
+  function setTaggerValue(value) {
+    if (!el.cfgTagger) return;
+    const target = value === "weighted_sum" ? "weighted_sum" : "crf";
+    for (const btn of el.cfgTagger.querySelectorAll('[role="radio"]')) {
+      const checked = btn.dataset.value === target;
+      btn.setAttribute("aria-checked", checked ? "true" : "false");
+      btn.tabIndex = checked ? 0 : -1;
+    }
+  }
+
+  if (el.cfgTagger) {
+    el.cfgTagger.addEventListener("click", (event) => {
+      const btn = event.target.closest('[role="radio"]');
+      if (btn) setTaggerValue(btn.dataset.value);
+    });
+    el.cfgTagger.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const next = getTaggerValue() === "crf" ? "weighted_sum" : "crf";
+      setTaggerValue(next);
+      const nextBtn = el.cfgTagger.querySelector(`[data-value="${next}"]`);
+      if (nextBtn) nextBtn.focus();
+    });
+  }
 
   async function loadConfig() {
     try {
@@ -1145,14 +1195,14 @@
     } catch (_) {}
   }
 
-  function numberField(container, label, value, attrs) {
+  function numberField(container, key, value, attrs) {
     const input = node("input");
     input.type = "number";
     input.required = true;
     Object.assign(input, attrs);
     input.value = String(value);
-    input.dataset.key = label;
-    const wrap = node("label", "", label + " ");
+    input.dataset.key = key;
+    const wrap = node("label", "", formatConfigLabel(key) + " ");
     wrap.append(input);
     container.append(wrap);
   }
@@ -1163,7 +1213,7 @@
     el.configError.hidden = true;
     updateMenuToggles();
     if (el.cfgTagger) {
-      el.cfgTagger.value = config.tagger === "weighted_sum" ? "weighted_sum" : "crf";
+      setTaggerValue(config.tagger === "weighted_sum" ? "weighted_sum" : "crf");
     }
     if (el.cfgThreshold) el.cfgThreshold.value = String(config.threshold ?? 0.5);
     el.cfgWeights.replaceChildren();
@@ -1183,7 +1233,7 @@
       input.value = rule.words.join(", ");
       const id = "cfg-kw-" + rule.kind;
       input.id = id;
-      const label = node("label", "", rule.kind);
+      const label = node("label", "", formatConfigLabel(rule.kind));
       label.htmlFor = id;
       el.cfgKeywords.append(label, input);
     }
@@ -1194,7 +1244,7 @@
       area.spellcheck = false;
       area.dataset.key = key;
       area.value = (config[key] || []).join("\n");
-      const label = node("label", "", key);
+      const label = node("label", "", formatConfigLabel(key));
       label.append(area);
       el.cfgCues.append(label);
     }
@@ -1203,7 +1253,7 @@
   function readConfig() {
     const config = JSON.parse(JSON.stringify(editing));
     if (el.cfgTagger) {
-      config.tagger = el.cfgTagger.value === "weighted_sum" ? "weighted_sum" : "crf";
+      config.tagger = getTaggerValue();
     }
     if (el.cfgThreshold) config.threshold = Number(el.cfgThreshold.value);
     config.weights = config.weights || {};
@@ -1278,7 +1328,7 @@
       currentConfig = cfg;
       updateMenuToggles();
       const dest = await invoke("save_config");
-      if (dest) setStatus("Detection settings saved to " + dest);
+      if (dest) setStatus("Settings saved to " + dest);
       refresh(true);
     } catch (error) {
       configFailed(error);

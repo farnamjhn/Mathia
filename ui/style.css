@@ -982,6 +982,13 @@ pre {
 }
 .dialog-actions .spacer { flex: 1; }
 
+.dialog.config .dialog-head {
+  border-bottom: 1px solid var(--rule);
+}
+.dialog.config .dialog-actions {
+  border-top: 1px solid var(--rule);
+}
+
 .config-form {
   flex: 1;
   overflow-y: auto;
@@ -990,30 +997,126 @@ pre {
   -webkit-user-select: text;
   scrollbar-width: thin;
 }
-.config-form fieldset {
+.dialog.config .config-form {
+  padding: 18px 20px;
+}
+.config-section + .config-section {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--rule);
+}
+.config-section-title {
   margin: 0 0 12px;
-  padding: 8px 12px 12px;
-  border: 1px solid var(--rule);
+  font: 600 13px/1.3 var(--font-ui);
+  color: var(--print);
+}
+.config-form .hint { font-weight: 400; color: var(--muted); }
+.config-row {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 8px 16px;
+  align-items: start;
+}
+.config-row-label {
+  padding-top: 5px;
+  color: var(--text);
+}
+.config-row-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+}
+.segmented-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  gap: 2px;
+  background: var(--desk);
+  border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
 }
-.config-form legend { padding: 0 4px; font-weight: 600; color: var(--print); }
-.config-form .hint { font-weight: 400; color: var(--muted); }
-.config-form label { display: flex; align-items: center; gap: 8px; }
-.config-form fieldset > label + label { margin-top: 6px; }
-.config-form input { height: 26px; padding: 0 6px; }
-.config-form input[type="number"] { width: 6em; font-variant-numeric: tabular-nums; }
+.segmented-toggle button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  line-height: 1;
+  transition: background var(--ease), color var(--ease);
+}
+.segmented-toggle button:hover {
+  color: var(--print);
+}
+.segmented-toggle button[aria-checked="true"] {
+  background: var(--ink-wash);
+  color: var(--ink);
+  font-weight: 600;
+}
+.config-row-control .hint {
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 56ch;
+}
+.config-row-threshold {
+  margin-bottom: 14px;
+}
+.config-form input { height: 28px; padding: 0 8px; }
+.config-form input[type="number"] {
+  width: 6.5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
 .config-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 6px 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 28px;
 }
-.config-grid label { justify-content: space-between; }
-.config-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; align-items: center; }
+.config-grid label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.config-list {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 8px 16px;
+  align-items: center;
+}
 .config-list input { width: 100%; }
-.config-cues { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px 12px; }
-.config-cues label { flex-direction: column; align-items: stretch; gap: 4px; }
-.config-cues textarea { min-height: 96px; padding: 6px; font: 12px/1.4 var(--font-code); resize: vertical; }
+.config-cues {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+.config-cues label {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  color: var(--text);
+}
+.config-cues textarea {
+  min-height: 92px;
+  padding: 8px;
+  font: 12px/1.45 var(--font-code);
+  resize: vertical;
+}
 .config-error { margin: 8px 20px 0; color: var(--error); }
+@media (max-width: 600px) {
+  .config-row,
+  .config-grid,
+  .config-list,
+  .config-cues {
+    grid-template-columns: 1fr;
+  }
+  .config-row-label { padding-top: 0; }
+}
 
 .dialog.narrow { width: min(520px, calc(100vw - 48px)); }
 .config-form.stack { display: flex; flex-direction: column; gap: 12px; padding-bottom: 4px; }
