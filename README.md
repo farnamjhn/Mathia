@@ -305,7 +305,7 @@ Corrections and **Expand block** work on imported HTML pages as well as Markdown
 to undo, `⇧⌘Z` / `Ctrl+Shift+Z` or `Ctrl+Y` to redo. They cover both corrections and text
 highlights, in the order they were made.
 
-**Export → Export as Markdown…** writes the compiled document back out as Markdown: the same
+**Export as… → Markdown** (also `⌘E` / `Ctrl+E`) writes the compiled document back out as Markdown: the same
 text, with every block labelled the way the inspector shows it (`**Theorem 1.** …`), LaTeX
 environments kept as environments, and the corrections applied. It is also how an HTML page
 becomes Markdown — open the HTML file and export.

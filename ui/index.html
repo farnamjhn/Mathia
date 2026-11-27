@@ -41,19 +41,9 @@
         <span class="menu-shortcut">Ctrl+R</span>
       </button>
       <div class="menu-divider"></div>
-      <button type="button" class="menu-action" data-action="export_html" id="win-menu-export-html" disabled>
-        <span>Export as HTML…</span>
+      <button type="button" class="menu-action" data-action="export_menu" id="win-menu-export" disabled>
+        <span>Export as…</span>
         <span class="menu-shortcut">Ctrl+E</span>
-      </button>
-      <button type="button" class="menu-action" data-action="export_markdown" id="win-menu-export-markdown" disabled>
-        <span>Export as Markdown…</span>
-      </button>
-      <button type="button" class="menu-action" data-action="export_pdf" id="win-menu-export-pdf" disabled>
-        <span>Export as PDF…</span>
-        <span class="menu-shortcut">Ctrl+P</span>
-      </button>
-      <button type="button" class="menu-action" data-action="export_folder">
-        <span>Export Folder…</span>
       </button>
       <div class="menu-divider"></div>
       <button type="button" class="menu-action" data-action="close_window">
@@ -268,23 +258,28 @@
   <span class="bar-separator bar-separator-integrated" role="separator" aria-orientation="vertical"></span>
 
   <div class="bar-group bar-group-integrated" role="group" aria-label="Export">
-    <div class="menu-wrap split">
-      <button id="export" class="btn primary split-main" type="button" title="Save this document as one HTML file (⌘E / Ctrl+E)" disabled>Export…</button>
-      <button id="export-more" class="btn primary split-more" type="button" aria-label="More ways to export" aria-haspopup="true" aria-expanded="false" aria-controls="export-menu">
+    <div class="menu-wrap">
+      <button id="export" class="btn primary" type="button" title="Export this document (⌘E / Ctrl+E)" aria-haspopup="true" aria-expanded="false" aria-controls="export-menu" disabled>
+        Export as…
         <svg class="caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5"/></svg>
       </button>
       <div id="export-menu" class="menu menu-end" hidden>
-        <button id="export-markdown" class="menu-item" type="button">
-          Export as Markdown…
-          <span class="option-hint">The compiled document as Markdown, with every block labelled.</span>
-        </button>
         <button id="export-folder" class="menu-item" type="button">
           Export every file in a folder…
           <span class="option-hint">Each Markdown file becomes its own HTML file.</span>
         </button>
+        <hr>
+        <button id="export-markdown" class="menu-item" type="button">
+          Export as Markdown…
+          <span class="option-hint">The compiled document as Markdown, with every block labelled.</span>
+        </button>
         <button id="export-pdf" class="menu-item" type="button">
           Export as PDF…
           <span class="option-hint">Opens the print dialog; choose “Save as PDF”. (⌘P / Ctrl+P)</span>
+        </button>
+        <button id="export-html" class="menu-item" type="button">
+          Export as HTML…
+          <span class="option-hint">One standalone HTML file with the compiled document.</span>
         </button>
       </div>
     </div>

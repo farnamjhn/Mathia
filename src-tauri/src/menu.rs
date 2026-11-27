@@ -1,6 +1,6 @@
 use tauri::{
-    AppHandle, Runtime,
     menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+    AppHandle, Runtime,
 };
 
 /// Builds the native application menubar for Mathia (primarily for macOS).
@@ -75,17 +75,10 @@ pub fn build_app_menu<R: Runtime>(
         )
         .separator()
         .item(
-            &MenuItemBuilder::with_id("export_html", "Export as HTML…")
+            &MenuItemBuilder::with_id("export_menu", "Export as…")
                 .accelerator("CmdOrCtrl+E")
                 .build(app)?,
         )
-        .item(&MenuItemBuilder::with_id("export_markdown", "Export as Markdown…").build(app)?)
-        .item(
-            &MenuItemBuilder::with_id("export_pdf", "Export as PDF…")
-                .accelerator("CmdOrCtrl+P")
-                .build(app)?,
-        )
-        .item(&MenuItemBuilder::with_id("export_folder", "Export Folder…").build(app)?)
         .separator()
         .close_window()
         .build()?;

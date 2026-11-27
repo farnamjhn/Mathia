@@ -46,7 +46,7 @@
     typeFilter: $("block-type"),
     countAll: $("count-all"), countUnsure: $("count-unsure"), countChanged: $("count-changed"),
     optionsButton: $("options-button"), optionsMenu: $("options-menu"),
-    exportMore: $("export-more"), exportMenu: $("export-menu"),
+    exportMenu: $("export-menu"),
     detailClose: $("detail-close"), detailNote: $("detail-note"), fixLength: $("fix-length"),
     drop: $("drop"), detail: $("detail"), detailTitle: $("detail-title"),
     detailFacts: $("detail-facts"), detailScores: $("detail-scores"),
@@ -61,6 +61,7 @@
     copyPrompt: $("copy-prompt"), copyPromptEmpty: $("copy-prompt-empty"),
     exportFolder: $("export-folder"),
     exportMarkdown: $("export-markdown"),
+    exportHtml: $("export-html"),
     fixMarkdown: $("fix-markdown"),
     exportPdf: $("export-pdf"),
     recent: $("recent"), recentList: $("recent-list"), recentClear: $("recent-clear"),
@@ -293,8 +294,8 @@
     updateDecisionRun();
     updateHistory();
     updateMenuToggles();
-    el.reload.disabled = el.export.disabled = el.exportPdf.disabled = !has;
-    el.exportMarkdown.disabled = !has;
+    el.reload.disabled = el.export.disabled = !has;
+    el.exportHtml.disabled = el.exportPdf.disabled = el.exportMarkdown.disabled = !has;
     el.home.disabled = !has;
     const isHtml = Boolean(
       (source && source.path && HTML_EXT.test(source.path)) ||
@@ -307,12 +308,8 @@
     if (winHome) winHome.disabled = !has;
     const winReload = $("win-menu-reload");
     if (winReload) winReload.disabled = !has;
-    const winExportHtml = $("win-menu-export-html");
-    if (winExportHtml) winExportHtml.disabled = !has;
-    const winExportMd = $("win-menu-export-markdown");
-    if (winExportMd) winExportMd.disabled = !has;
-    const winExportPdf = $("win-menu-export-pdf");
-    if (winExportPdf) winExportPdf.disabled = !has;
+    const winExport = $("win-menu-export");
+    if (winExport) winExport.disabled = !has;
     const winFixMd = $("win-menu-fix-markdown");
     if (winFixMd) {
       winFixMd.disabled = !has || isHtml;
@@ -1537,7 +1534,7 @@
   // ── Menus ─────────────────────────────────────────────────────────────
 
   const menus = [
-    [el.optionsButton, el.optionsMenu], [el.exportMore, el.exportMenu],
+    [el.optionsButton, el.optionsMenu], [el.export, el.exportMenu],
     [el.recentButton, el.recentMenu],
   ];
 
@@ -1547,6 +1544,17 @@
       panel.hidden = true;
       button.setAttribute("aria-expanded", "false");
     }
+  }
+
+  // Cmd/Ctrl+E and the File menu both open the same export chooser.
+  function openExportMenu() {
+    if (!analysis || el.export.disabled) return;
+    closeMenus();
+    closeWinMenus();
+    el.exportMenu.hidden = false;
+    el.export.setAttribute("aria-expanded", "true");
+    const first = el.exportMenu.querySelector(".menu-item:not(:disabled)");
+    if (first) first.focus();
   }
 
   for (const [button, panel] of menus) {
@@ -1731,6 +1739,9 @@
         break;
       case "reload":
         if (analysis) refresh();
+        break;
+      case "export_menu":
+        openExportMenu();
         break;
       case "export_html":
         if (analysis) exportHtml();
@@ -2155,7 +2166,6 @@
   el.reload.addEventListener("click", () => refresh());
   el.undo.addEventListener("click", () => undoChange());
   el.redo.addEventListener("click", () => redoChange());
-  el.export.addEventListener("click", exportHtml);
   el.previewToggle.addEventListener("click", () => setPreviewOpen(!previewOpen));
   el.ai.addEventListener("change", () => {
     updateMenuToggles();
@@ -2185,6 +2195,7 @@
   el.correctionsClear.addEventListener("click", clearCorrections);
   el.exportFolder.addEventListener("click", exportFolder);
   el.exportMarkdown.addEventListener("click", exportMarkdown);
+  el.exportHtml.addEventListener("click", exportHtml);
   el.exportPdf.addEventListener("click", exportPdf);
   el.fixMarkdown.addEventListener("click", fixMarkdown);
 
@@ -2228,7 +2239,7 @@
     } else if (key === "y" && !typing) redoChange();
     else if (key === "o") open();
     else if (key === "f" && analysis) el.filter.focus();
-    else if (key === "e") exportHtml();
+    else if (key === "e") openExportMenu();
     else if (key === "p") exportPdf();
     else if (key === "r") refresh();
     else return;

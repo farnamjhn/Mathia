@@ -503,35 +503,6 @@ body.platform-mac .win-menubar {
 .menu-item:hover { background: var(--hover); }
 .menu-item .option-hint { margin-top: 2px; }
 
-.split {
-  display: inline-flex;
-  align-items: center;
-}
-.split .split-main { border-start-end-radius: 0; border-end-end-radius: 0; }
-.split:has(.split-main:disabled) .split-more:not(:hover) {
-  color: var(--print);
-  background: var(--paper);
-  border-color: var(--rule-strong);
-}
-.split .split-more {
-  width: 26px;
-  padding: 0;
-  margin-inline-start: -1px;
-  border-start-start-radius: 0;
-  border-end-start-radius: 0;
-  display: inline-grid;
-  place-items: center;
-  position: relative;
-  z-index: 1;
-}
-.split .split-more:hover:not(:disabled),
-.split .split-more:focus-visible {
-  z-index: 2;
-}
-.split:not(:has(.split-main:disabled)) .split-more {
-  border-inline-start-color: color-mix(in srgb, var(--paper) 20%, transparent);
-}
-
 #preview-toggle[aria-expanded="true"]:not(:disabled) { color: var(--ink); background: var(--ink-wash); }
 
 @media (max-width: 860px) {
