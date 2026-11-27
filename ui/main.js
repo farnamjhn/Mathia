@@ -32,7 +32,6 @@
     home: $("home"), open: $("open"), reload: $("reload"), export: $("export"),
     undo: $("undo"), redo: $("redo"),
     ai: $("ai"), math: $("render-math"), showText: $("show-text"),
-    optCrfModel: $("opt-crf-model"), winMenuModel: $("win-menu-model"),
     status: $("status"), blocks: $("blocks"), panes: $("panes"),
     preview: $("preview"), previewToggle: $("preview-toggle"),
     frame: $("frame"), empty: $("empty"), inspector: $("inspector"),
@@ -263,11 +262,6 @@
 
   function updateMenuToggles() {
     const isCrf = !!currentConfig && currentConfig.tagger === "crf";
-    if (el.optCrfModel) el.optCrfModel.checked = isCrf;
-    if (el.winMenuModel) {
-      const check = el.winMenuModel.querySelector(".menu-check");
-      if (check) check.style.visibility = isCrf ? "visible" : "hidden";
-    }
     if (el.cfgTagger && !(el.configDialog && el.configDialog.open)) {
       el.cfgTagger.value = isCrf ? "crf" : "weighted_sum";
     }
@@ -1151,38 +1145,6 @@
     } catch (_) {}
   }
 
-  async function setDetectionModel(model) {
-    const nextModel = model === "weighted_sum" ? "weighted_sum" : "crf";
-    if (!currentConfig) {
-      try {
-        currentConfig = await invoke("get_config");
-      } catch (_) {
-        currentConfig = {};
-      }
-    }
-    if (currentConfig.tagger === nextModel) {
-      updateMenuToggles();
-      return;
-    }
-    currentConfig.tagger = nextModel;
-    updateMenuToggles();
-    try {
-      await invoke("set_config", { config: currentConfig });
-      if (source) {
-        revision = 0;
-        analysis = null;
-        await refresh();
-      }
-      setStatus(
-        nextModel === "crf"
-          ? "Switched block detection to the CRF model"
-          : "Switched block detection to the linear weighted sum"
-      );
-    } catch (err) {
-      setStatus("Failed to change detection model: " + err, true);
-    }
-  }
-
   function numberField(container, label, value, attrs) {
     const input = node("input");
     input.type = "number";
@@ -1811,11 +1773,6 @@
       case "scoring":
         showConfig();
         break;
-      case "toggle_model":
-        setDetectionModel(
-          currentConfig && currentConfig.tagger === "crf" ? "weighted_sum" : "crf"
-        );
-        break;
       case "toggle_render_math":
         el.math.checked = !el.math.checked;
         updateMenuToggles();
@@ -2175,11 +2132,6 @@
     updateMenuToggles();
     refresh();
   });
-  if (el.optCrfModel) {
-    el.optCrfModel.addEventListener("change", () => {
-      setDetectionModel(el.optCrfModel.checked ? "crf" : "weighted_sum");
-    });
-  }
   el.math.addEventListener("change", () => {
     updateMenuToggles();
     refresh();
