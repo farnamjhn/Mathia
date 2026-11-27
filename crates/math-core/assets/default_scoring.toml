@@ -90,6 +90,7 @@ statement_cues = [
     "برای هر",
     "وجود دارد",
     "if and only if",
+    "iff"
     "for all",
     "for every",
     "for any",
@@ -167,6 +168,7 @@ words = [
 kind = "proposition"
 words = [
     "گزاره",
+    "حکم",
     "proposition",
     "prop",
 ]
@@ -250,4 +252,5 @@ words = [
     "نمادگذاری",
     "نماد",
     "notation",
+    "denote",
 ]
