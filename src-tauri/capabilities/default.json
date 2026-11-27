@@ -28,6 +28,7 @@
     "allow-recent-files",
     "allow-open-recent",
     "allow-clear-recent",
+    "allow-set-document-state",
     "allow-get-decision-model",
     "allow-set-decision-model",
     "allow-test-decision-model",

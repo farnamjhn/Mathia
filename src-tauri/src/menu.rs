@@ -1,12 +1,14 @@
 use tauri::{
-    menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     AppHandle, Runtime,
+    menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
 };
 
 /// Builds the native application menubar for Mathia (primarily for macOS).
 pub fn build_app_menu<R: Runtime>(
     app: &AppHandle<R>,
     recent_paths: &[std::path::PathBuf],
+    document_open: bool,
+    markdown_open: bool,
 ) -> tauri::Result<Menu<R>> {
     let mut builder = MenuBuilder::new(app);
 
@@ -71,12 +73,14 @@ pub fn build_app_menu<R: Runtime>(
         .item(
             &MenuItemBuilder::with_id("reload", "Compile Again")
                 .accelerator("CmdOrCtrl+R")
+                .enabled(document_open)
                 .build(app)?,
         )
         .separator()
         .item(
             &MenuItemBuilder::with_id("export_menu", "Export as…")
                 .accelerator("CmdOrCtrl+E")
+                .enabled(document_open)
                 .build(app)?,
         )
         .separator()
@@ -101,12 +105,20 @@ pub fn build_app_menu<R: Runtime>(
         .paste()
         .select_all()
         .separator()
-        .item(&MenuItemBuilder::with_id("fix_markdown", "Fix Markdown…").build(app)?)
+        .item(
+            &MenuItemBuilder::with_id("fix_markdown", "Fix Markdown…")
+                .enabled(markdown_open)
+                .build(app)?,
+        )
         .build()?;
 
     // --- View menu ---
     let view_menu = SubmenuBuilder::new(app, "View")
-        .item(&MenuItemBuilder::with_id("preview_toggle", "Toggle Preview").build(app)?)
+        .item(
+            &MenuItemBuilder::with_id("preview_toggle", "Toggle Preview")
+                .enabled(document_open)
+                .build(app)?,
+        )
         .item(&MenuItemBuilder::with_id("theme_toggle", "Toggle Color Theme").build(app)?)
         .build()?;
 

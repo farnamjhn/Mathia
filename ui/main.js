@@ -303,6 +303,10 @@
     );
     el.fixMarkdown.disabled = !has || isHtml;
     el.fixMarkdown.title = isHtml ? "Fix Markdown is for Markdown files." : "";
+    invoke("set_document_state", {
+      documentOpen: has,
+      markdownOpen: has && !isHtml,
+    }).catch(() => {});
 
     const winHome = $("win-menu-home");
     if (winHome) winHome.disabled = !has;

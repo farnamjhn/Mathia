@@ -25,6 +25,7 @@ const COMMANDS: &[&str] = &[
     "recent_files",
     "open_recent",
     "clear_recent",
+    "set_document_state",
     "get_decision_model",
     "set_decision_model",
     "test_decision_model",

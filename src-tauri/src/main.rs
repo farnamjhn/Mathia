@@ -41,6 +41,63 @@ const PREVIEW_SCHEME: &str = "mathia-preview";
 type Shared = Mutex<Session>;
 type SharedDecision = Mutex<decision::Decision>;
 
+/// Whether a document is open, so the native menu can grey out actions that
+/// need one. The menu is rebuilt when recent files change, so this outlives it.
+#[derive(Default)]
+struct MenuState {
+    #[allow(dead_code)] // only read by the macOS native menu
+    document_open: bool,
+    #[allow(dead_code)] // only read by the macOS native menu
+    markdown_open: bool,
+}
+
+type SharedMenuState = Mutex<MenuState>;
+
+fn lock_menu(state: &SharedMenuState) -> MutexGuard<'_, MenuState> {
+    state.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+#[cfg(target_os = "macos")]
+fn apply_menu_state(app: &AppHandle, document_open: bool, markdown_open: bool) {
+    if let Some(menu) = app.menu() {
+        set_menu_item_enabled(&menu, "export_menu", document_open);
+        set_menu_item_enabled(&menu, "preview_toggle", document_open);
+        set_menu_item_enabled(&menu, "reload", document_open);
+        set_menu_item_enabled(&menu, "fix_markdown", markdown_open);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_menu_state(_app: &AppHandle, _document_open: bool, _markdown_open: bool) {}
+
+#[cfg(target_os = "macos")]
+fn set_menu_item_enabled<R: tauri::Runtime>(menu: &tauri::menu::Menu<R>, id: &str, enabled: bool) {
+    if let Ok(items) = menu.items() {
+        set_item_enabled(&items, id, enabled);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_item_enabled<R: tauri::Runtime>(
+    items: &[tauri::menu::MenuItemKind<R>],
+    id: &str,
+    enabled: bool,
+) {
+    for item in items {
+        if item.id() == id {
+            if let Some(menu_item) = item.as_menuitem() {
+                let _ = menu_item.set_enabled(enabled);
+            }
+            return;
+        }
+        if let Some(submenu) = item.as_submenu()
+            && let Ok(children) = submenu.items()
+        {
+            set_item_enabled(&children, id, enabled);
+        }
+    }
+}
+
 fn lock_decision(state: &SharedDecision) -> MutexGuard<'_, decision::Decision> {
     state.lock().unwrap_or_else(|p| p.into_inner())
 }
@@ -85,7 +142,10 @@ fn save_recent(app: &AppHandle, session: &Session) {
     }
     #[cfg(target_os = "macos")]
     {
-        if let Ok(m) = menu::build_app_menu(app, &paths) {
+        let state = app.state::<SharedMenuState>();
+        let state = lock_menu(&state);
+        let (document_open, markdown_open) = (state.document_open, state.markdown_open);
+        if let Ok(m) = menu::build_app_menu(app, &paths, document_open, markdown_open) {
             let _ = app.set_menu(m);
         }
     }
@@ -195,6 +255,23 @@ async fn clear_recent(app: AppHandle, state: State<'_, Shared>) -> Result<(), St
     let mut session = lock(&state);
     session.clear_recent();
     save_recent(&app, &session);
+    Ok(())
+}
+
+/// Greys out native menu actions that need an open document.
+#[tauri::command]
+fn set_document_state(
+    app: AppHandle,
+    state: State<'_, SharedMenuState>,
+    document_open: bool,
+    markdown_open: bool,
+) -> Result<(), String> {
+    {
+        let mut menu_state = lock_menu(&state);
+        menu_state.document_open = document_open;
+        menu_state.markdown_open = markdown_open;
+    }
+    apply_menu_state(&app, document_open, markdown_open);
     Ok(())
 }
 
@@ -871,6 +948,7 @@ fn main() {
         .manage(Shared::default())
         .manage(PrintDoc::default())
         .manage(SharedDecision::default())
+        .manage(Mutex::new(MenuState::default()))
         .register_uri_scheme_protocol(PREVIEW_SCHEME, |context, request| {
             let app = context.app_handle();
             let html = if request.uri().path() == PRINT_PATH {
@@ -895,7 +973,12 @@ fn main() {
             }
             #[cfg(target_os = "macos")]
             {
-                if let Ok(m) = menu::build_app_menu(app.handle(), &saved) {
+                let state = app.state::<SharedMenuState>();
+                let state = lock_menu(&state);
+                let (document_open, markdown_open) = (state.document_open, state.markdown_open);
+                if let Ok(m) =
+                    menu::build_app_menu(app.handle(), &saved, document_open, markdown_open)
+                {
                     let _ = app.set_menu(m);
                 }
             }
@@ -965,6 +1048,7 @@ fn main() {
             recent_files,
             open_recent,
             clear_recent,
+            set_document_state,
             get_decision_model,
             set_decision_model,
             test_decision_model,
