@@ -209,7 +209,9 @@ labeling and troubleshooting, see [`RETRAINING.md`](RETRAINING.md).
 
 1. **Update Configuration Model (`crates/math-core/src/config.rs`)**:
    - Add field to `struct ScoringConfig` (or the nested `ScopeConfig`).
-   - Define sensible defaults in `impl Default for ScoringConfig`.
+   - Add the default value to `crates/math-core/assets/default_scoring.toml`; the
+     built-in defaults are loaded from that file at runtime, so changing them does
+     not require a recompile.
    - Update `ScoringConfig::validate(&self)` to enforce value ranges (e.g., scores in $[0.0, 1.0]$).
 
 2. **Update CLI Parser (`crates/mathia-cli/src/main.rs`)**:

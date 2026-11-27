@@ -216,7 +216,8 @@ interval. English words and parenthesised glosses are never touched.
 ### CLI Options
 
 - `--config scoring.toml` — scoring configuration (TOML or JSON); `--dump-config` prints the
-  defaults.
+  defaults, which live in `crates/math-core/assets/default_scoring.toml` and are loaded at
+  runtime (override with `MATHIA_DEFAULT_CONFIG=/path/to/scoring.toml`).
 - `--tagger weighted-sum|crf` — choose block detection: the linear weighted sum (default) or the
   trained CRF model.
 - `--explain` — print every node's BIO tag and confidence, and why each block ended where it did.

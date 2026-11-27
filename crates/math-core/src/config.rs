@@ -1,7 +1,13 @@
 //! Everything tunable about classification lives here as plain data, so it can
 //! be loaded from a file or edited in the UI without touching the scorer.
+//!
+//! The built-in defaults live in `assets/default_scoring.toml` rather than in
+//! Rust literals. [`ScoringConfig::default`] reads that file at runtime (see
+//! [`DEFAULT_CONFIG_ENV`] for the lookup order), so changing a default does not
+//! require a recompile.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +17,15 @@ use crate::model::BlockType;
 /// Current version of the [`ScoringConfig`] file format. Files written by a
 /// newer Mathia (a higher number) are rejected rather than half-understood.
 pub const CONFIG_SCHEMA_VERSION: u32 = 3;
+
+/// Environment variable naming a TOML file that replaces the built-in defaults.
+/// When unset, `default_scoring.toml` next to the executable is used, then the
+/// copy in the source tree (debug builds), then the embedded copy.
+pub const DEFAULT_CONFIG_ENV: &str = "MATHIA_DEFAULT_CONFIG";
+
+/// Compile-time copy of `assets/default_scoring.toml`, used as the last-resort
+/// fallback so a build always has working defaults.
+const EMBEDDED_DEFAULT_TOML: &str = include_str!("../assets/default_scoring.toml");
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -123,200 +138,158 @@ impl Weights {
 
 impl Default for Weights {
     fn default() -> Self {
-        Weights {
-            lead: 0.45,
-            label: 0.20,
-            emphasis: 0.15,
-            mention: 0.10,
-            qed: 0.30,
-            logic: 0.15,
-            math: 0.10,
-            definitional: 0.25,
-            cue: 0.10,
-            after_statement: 0.25,
-        }
+        builtin_defaults().weights.clone()
     }
 }
 
 impl Default for ScopeConfig {
     fn default() -> Self {
-        ScopeConfig {
-            statement_max_nodes: 6,
-            proof_max_nodes: 12,
-        }
+        builtin_defaults().scope.clone()
     }
-}
-
-fn strings(items: &[&str]) -> Vec<String> {
-    items.iter().map(|s| s.to_string()).collect()
 }
 
 impl Default for ScoringConfig {
     fn default() -> Self {
-        let rule = |kind, words: &[&str]| KeywordRule {
-            kind,
-            words: strings(words),
-        };
+        builtin_defaults().clone()
+    }
+}
+
+/// Fully-specified shape of the defaults file. Unlike [`ScoringConfig`] it has
+/// no serde defaults, so parsing it can never recurse back into `Default`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DefaultsFile {
+    schema_version: u32,
+    tagger: TaggerModel,
+    threshold: f32,
+    weights: DefaultsWeights,
+    scope: DefaultsScope,
+    keywords: Vec<KeywordRule>,
+    logic_symbols: Vec<String>,
+    qed_markers: Vec<String>,
+    definitional_cues: Vec<String>,
+    proof_cues: Vec<String>,
+    statement_cues: Vec<String>,
+    continuation_cues: Vec<String>,
+    reference_cues: Vec<String>,
+    ml_confidence_threshold: f32,
+    ml_telemetry: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DefaultsWeights {
+    lead: f32,
+    label: f32,
+    emphasis: f32,
+    mention: f32,
+    qed: f32,
+    logic: f32,
+    math: f32,
+    definitional: f32,
+    cue: f32,
+    after_statement: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DefaultsScope {
+    statement_max_nodes: usize,
+    proof_max_nodes: usize,
+}
+
+impl DefaultsFile {
+    fn into_config(self) -> ScoringConfig {
         ScoringConfig {
-            schema_version: CONFIG_SCHEMA_VERSION,
-            tagger: TaggerModel::default(),
-            threshold: 0.5,
-            weights: Weights::default(),
-            scope: ScopeConfig::default(),
-            keywords: vec![
-                rule(BlockType::Theorem, &["قضیه", "theorem", "thm"]),
-                rule(BlockType::Lemma, &["لم", "lemma"]),
-                rule(BlockType::Proposition, &["گزاره", "proposition", "prop"]),
-                rule(BlockType::Corollary, &["نتیجه", "corollary", "cor"]),
-                rule(
-                    BlockType::Definition,
-                    &["تعریف", "definition", "defn", "def"],
-                ),
-                rule(
-                    BlockType::Proof,
-                    &[
-                        "برهان",
-                        "اثبات",
-                        "ایده اثبات",
-                        "ایده‌ی اثبات",
-                        "proof",
-                        "proof sketch",
-                        "proof idea",
-                        "sketch of proof",
-                    ],
-                ),
-                rule(BlockType::Example, &["مثال", "example"]),
-                rule(
-                    BlockType::Remark,
-                    &["تذکر", "نکته", "توجه", "remark", "note"],
-                ),
-                rule(
-                    BlockType::Exercise,
-                    &["تمرین", "مسئله", "مساله", "exercise", "problem"],
-                ),
-                rule(BlockType::Solution, &["حل", "پاسخ", "راه حل", "solution"]),
-                rule(BlockType::Claim, &["ادعا", "claim"]),
-                rule(BlockType::Notation, &["نمادگذاری", "نماد", "notation"]),
-            ],
-            logic_symbols: strings(&[
-                "\\implies",
-                "\\impliedby",
-                "\\Rightarrow",
-                "\\Longrightarrow",
-                "\\iff",
-                "\\Leftrightarrow",
-                "\\Longleftrightarrow",
-                "\\forall",
-                "\\exists",
-                "\\nexists",
-                "\\therefore",
-                "\\because",
-                "⇒",
-                "⟹",
-                "⇔",
-                "∀",
-                "∃",
-                "∴",
-            ]),
-            qed_markers: strings(&[
-                "\\blacksquare",
-                "\\square",
-                "\\Box",
-                "\\qed",
-                "∎",
-                "■",
-                "□",
-                "q.e.d",
-                "qed",
-                "حکم ثابت شد",
-                "اثبات کامل است",
-                "برهان کامل است",
-                "اثبات کامل می‌شود",
-                "برهان کامل می‌شود",
-            ]),
-            definitional_cues: strings(&[
-                "گوییم",
-                "می‌گوییم",
-                "می‌نامیم",
-                "نامیده می‌شود",
-                "تعریف می‌کنیم",
-                "تعریف می‌شود",
-                "عبارت است از",
-                "is called",
-                "is said to be",
-                "are called",
-                "we say",
-                "we call",
-                "we define",
-                "is defined",
-                ":=",
-                "\\coloneqq",
-                "\\triangleq",
-                "\\overset{\\text{def}}",
-            ]),
-            proof_cues: strings(&[
-                "برهان خلف",
-                "برهان بالتناقض",
-                "فرض کنید",
-                "فرض کنیم",
-                "فرض می‌کنیم",
-                "بدون کاستن از کلیت",
-                "proof by contradiction",
-                "proof by induction",
-                "suppose",
-                "assume",
-                "without loss of generality",
-            ]),
-            statement_cues: strings(&[
-                "آنگاه",
-                "اگر و تنها اگر",
-                "به ازای هر",
-                "برای هر",
-                "وجود دارد",
-                "if and only if",
-                "for all",
-                "for every",
-                "for any",
-                "there exists",
-                "then",
-            ]),
-            continuation_cues: strings(&[
-                "که در آن",
-                "که",
-                "آنگاه",
-                "به‌طوری‌که",
-                "به طوری که",
-                "و در نتیجه",
-                "where",
-                "such that",
-                "then",
-                "in which",
-            ]),
-            reference_cues: strings(&[
-                "نتیجه می‌دهد",
-                "نشان می‌دهد",
-                "بیان می‌کند",
-                "ایجاب می‌کند",
-                "تضمین می‌کند",
-                "می‌گوید",
-                "را",
-                "implies",
-                "shows",
-                "states",
-                "says",
-                "gives",
-                "yields",
-                "tells",
-                "guarantees",
-                "is",
-                "was",
-                "can",
-                "does",
-            ]),
-            ml_confidence_threshold: 5.0,
-            ml_telemetry: false,
+            schema_version: self.schema_version,
+            tagger: self.tagger,
+            threshold: self.threshold,
+            weights: Weights {
+                lead: self.weights.lead,
+                label: self.weights.label,
+                emphasis: self.weights.emphasis,
+                mention: self.weights.mention,
+                qed: self.weights.qed,
+                logic: self.weights.logic,
+                math: self.weights.math,
+                definitional: self.weights.definitional,
+                cue: self.weights.cue,
+                after_statement: self.weights.after_statement,
+            },
+            scope: ScopeConfig {
+                statement_max_nodes: self.scope.statement_max_nodes,
+                proof_max_nodes: self.scope.proof_max_nodes,
+            },
+            keywords: self.keywords,
+            logic_symbols: self.logic_symbols,
+            qed_markers: self.qed_markers,
+            definitional_cues: self.definitional_cues,
+            proof_cues: self.proof_cues,
+            statement_cues: self.statement_cues,
+            continuation_cues: self.continuation_cues,
+            reference_cues: self.reference_cues,
+            ml_confidence_threshold: self.ml_confidence_threshold,
+            ml_telemetry: self.ml_telemetry,
         }
     }
+}
+
+/// The built-in defaults, loaded once and cached.
+fn builtin_defaults() -> &'static ScoringConfig {
+    static DEFAULTS: OnceLock<ScoringConfig> = OnceLock::new();
+    DEFAULTS.get_or_init(|| runtime_defaults().unwrap_or_else(embedded_defaults))
+}
+
+/// Where to look for a defaults file, in priority order.
+fn defaults_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os(DEFAULT_CONFIG_ENV) {
+        return Some(PathBuf::from(path));
+    }
+    #[cfg(debug_assertions)]
+    {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/default_scoring.toml");
+        if source.is_file() {
+            return Some(source);
+        }
+    }
+    let beside_exe = std::env::current_exe()
+        .ok()?
+        .parent()?
+        .join("default_scoring.toml");
+    beside_exe.is_file().then_some(beside_exe)
+}
+
+/// Loads a defaults file from [`defaults_path`], or `None` if there is none or
+/// it is unreadable or invalid (in which case the embedded copy takes over).
+fn runtime_defaults() -> Option<ScoringConfig> {
+    let path = defaults_path()?;
+    let loaded = (|| {
+        let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let file: DefaultsFile = toml::from_str(&text).map_err(|e| e.to_string())?;
+        let config = file.into_config();
+        config.validate().map_err(|e| e.to_string())?;
+        Ok::<_, String>(config)
+    })();
+    match loaded {
+        Ok(config) => Some(config),
+        Err(message) => {
+            eprintln!(
+                "mathia: ignoring default scoring config {}: {message}; using the built-in defaults",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+fn embedded_defaults() -> ScoringConfig {
+    let file: DefaultsFile =
+        toml::from_str(EMBEDDED_DEFAULT_TOML).expect("embedded default scoring config is valid");
+    let config = file.into_config();
+    config
+        .validate()
+        .expect("embedded default scoring config is valid");
+    config
 }
 
 /// File formats a [`ScoringConfig`] can be stored in.
@@ -468,6 +441,20 @@ mod tests {
         assert!(toml.contains("[weights]"));
         assert!(toml.contains("[scope]"));
         assert!(toml.contains("statement_max_nodes = 6"));
+    }
+
+    #[test]
+    fn builtin_defaults_come_from_the_toml_file() {
+        let config = ScoringConfig::default();
+        assert_eq!(config.schema_version, CONFIG_SCHEMA_VERSION);
+        assert_eq!(config, embedded_defaults());
+
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/default_scoring.toml");
+        let text = std::fs::read_to_string(&source).unwrap();
+        assert_eq!(
+            ScoringConfig::parse(&text, ConfigFormat::Toml).unwrap(),
+            config
+        );
     }
 
     #[test]

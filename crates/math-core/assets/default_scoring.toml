@@ -1,0 +1,253 @@
+# Built-in default scoring configuration.
+#
+# This is the single source of truth for Mathia's default settings. It is read
+# at runtime (see `ScoringConfig::default`), so editing this file changes the
+# defaults without recompiling. A copy is also embedded in the binary and used
+# as a fallback when no file is found.
+#
+# Resolution order:
+#   1. the file named by the `MATHIA_DEFAULT_CONFIG` environment variable
+#   2. `default_scoring.toml` next to the running executable
+#   3. this file in the source tree (debug builds only)
+#   4. the copy embedded at compile time
+
+schema_version = 3
+tagger = "weighted_sum"
+threshold = 0.5
+logic_symbols = [
+    '\implies',
+    '\impliedby',
+    '\Rightarrow',
+    '\Longrightarrow',
+    '\iff',
+    '\Leftrightarrow',
+    '\Longleftrightarrow',
+    '\forall',
+    '\exists',
+    '\nexists',
+    '\therefore',
+    '\because',
+    "⇒",
+    "⟹",
+    "⇔",
+    "∀",
+    "∃",
+    "∴",
+]
+qed_markers = [
+    '\blacksquare',
+    '\square',
+    '\Box',
+    '\qed',
+    "∎",
+    "■",
+    "□",
+    "q.e.d",
+    "qed",
+    "حکم ثابت شد",
+    "اثبات کامل است",
+    "برهان کامل است",
+    "اثبات کامل می‌شود",
+    "برهان کامل می‌شود",
+]
+definitional_cues = [
+    "گوییم",
+    "می‌گوییم",
+    "می‌نامیم",
+    "نامیده می‌شود",
+    "تعریف می‌کنیم",
+    "تعریف می‌شود",
+    "عبارت است از",
+    "is called",
+    "is said to be",
+    "are called",
+    "we say",
+    "we call",
+    "we define",
+    "is defined",
+    ":=",
+    '\coloneqq',
+    '\triangleq',
+    '\overset{\text{def}}',
+]
+proof_cues = [
+    "برهان خلف",
+    "برهان بالتناقض",
+    "فرض کنید",
+    "فرض کنیم",
+    "فرض می‌کنیم",
+    "بدون کاستن از کلیت",
+    "proof by contradiction",
+    "proof by induction",
+    "suppose",
+    "assume",
+    "without loss of generality",
+]
+statement_cues = [
+    "آنگاه",
+    "اگر و تنها اگر",
+    "به ازای هر",
+    "برای هر",
+    "وجود دارد",
+    "if and only if",
+    "for all",
+    "for every",
+    "for any",
+    "there exists",
+    "then",
+]
+continuation_cues = [
+    "که در آن",
+    "که",
+    "آنگاه",
+    "به‌طوری‌که",
+    "به طوری که",
+    "و در نتیجه",
+    "where",
+    "such that",
+    "then",
+    "in which",
+]
+reference_cues = [
+    "نتیجه می‌دهد",
+    "نشان می‌دهد",
+    "بیان می‌کند",
+    "ایجاب می‌کند",
+    "تضمین می‌کند",
+    "می‌گوید",
+    "را",
+    "implies",
+    "shows",
+    "states",
+    "says",
+    "gives",
+    "yields",
+    "tells",
+    "guarantees",
+    "is",
+    "was",
+    "can",
+    "does",
+]
+ml_confidence_threshold = 5.0
+ml_telemetry = false
+
+[weights]
+lead = 0.45
+label = 0.2
+emphasis = 0.15
+mention = 0.1
+qed = 0.3
+logic = 0.15
+math = 0.1
+definitional = 0.25
+cue = 0.1
+after_statement = 0.25
+
+[scope]
+statement_max_nodes = 6
+proof_max_nodes = 12
+
+[[keywords]]
+kind = "theorem"
+words = [
+    "قضیه",
+    "theorem",
+    "thm",
+]
+
+[[keywords]]
+kind = "lemma"
+words = [
+    "لم",
+    "lemma",
+]
+
+[[keywords]]
+kind = "proposition"
+words = [
+    "گزاره",
+    "proposition",
+    "prop",
+]
+
+[[keywords]]
+kind = "corollary"
+words = [
+    "نتیجه",
+    "corollary",
+    "cor",
+]
+
+[[keywords]]
+kind = "definition"
+words = [
+    "تعریف",
+    "definition",
+    "defn",
+    "def",
+]
+
+[[keywords]]
+kind = "proof"
+words = [
+    "برهان",
+    "اثبات",
+    "ایده اثبات",
+    "ایده‌ی اثبات",
+    "proof",
+    "proof sketch",
+    "proof idea",
+    "sketch of proof",
+]
+
+[[keywords]]
+kind = "example"
+words = [
+    "مثال",
+    "example",
+]
+
+[[keywords]]
+kind = "remark"
+words = [
+    "تذکر",
+    "نکته",
+    "توجه",
+    "remark",
+    "note",
+]
+
+[[keywords]]
+kind = "exercise"
+words = [
+    "تمرین",
+    "مسئله",
+    "مساله",
+    "exercise",
+    "problem",
+]
+
+[[keywords]]
+kind = "solution"
+words = [
+    "حل",
+    "پاسخ",
+    "راه حل",
+    "solution",
+]
+
+[[keywords]]
+kind = "claim"
+words = [
+    "ادعا",
+    "claim",
+]
+
+[[keywords]]
+kind = "notation"
+words = [
+    "نمادگذاری",
+    "نماد",
+    "notation",
+]
