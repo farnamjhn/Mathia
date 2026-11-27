@@ -35,13 +35,11 @@ pub fn build_app_menu<R: Runtime>(
     }
 
     // --- File menu ---
-    let mut file_builder = SubmenuBuilder::new(app, "File")
-        .item(
-            &MenuItemBuilder::with_id("open", "Open…")
-                .accelerator("CmdOrCtrl+O")
-                .build(app)?,
-        )
-        .item(&MenuItemBuilder::with_id("combine", "Combine…").build(app)?);
+    let mut file_builder = SubmenuBuilder::new(app, "File").item(
+        &MenuItemBuilder::with_id("open", "Open…")
+            .accelerator("CmdOrCtrl+O")
+            .build(app)?,
+    );
 
     // Recent files submenu
     let mut recent_builder = SubmenuBuilder::new(app, "Open Recent");

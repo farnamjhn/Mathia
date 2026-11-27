@@ -19,9 +19,6 @@
         <span>Open…</span>
         <span class="menu-shortcut">Ctrl+O</span>
       </button>
-      <button type="button" class="menu-action" data-action="combine">
-        <span>Combine…</span>
-      </button>
       <div class="menubar-submenu-parent" id="win-recent-parent">
         <button type="button" class="menu-action submenu-trigger" id="win-recent-trigger">
           <span>Open Recent</span>
@@ -168,8 +165,7 @@
   <span class="bar-space"></span>
 
   <div class="bar-group bar-group-integrated" role="group" aria-label="Document files">
-    <button id="open" class="btn" type="button" title="Open a Markdown or HTML file (⌘O / Ctrl+O)">Open…</button>
-    <button id="open-multi" class="btn" type="button" title="Import multiple Markdown files and compile them together">Combine…</button>
+    <button id="open" class="btn" type="button" title="Open one file, or select several to merge them (⌘O / Ctrl+O)">Open…</button>
     <div class="menu-wrap" id="recent-wrap" hidden>
       <button id="recent-button" class="btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="recent-menu">
         Recent
@@ -379,10 +375,9 @@
         </li>
         <li>
           <h2>Open the Markdown or HTML</h2>
-          <p>Choose the file, or drop it anywhere on this window.</p>
+          <p>Choose one file, select several to merge them in order, or drop them anywhere on this window.</p>
           <div class="actions">
-            <button id="open-welcome" class="btn primary" type="button">Open a Markdown or HTML file…</button>
-            <button id="open-multi-welcome" class="btn" type="button">Combine multiple Markdown files…</button>
+            <button id="open-welcome" class="btn primary" type="button">Open files…</button>
           </div>
         </li>
         <li>
@@ -683,7 +678,7 @@ BEFORE YOU ANSWER, CHECK
 
 <dialog id="order-dialog" class="dialog order-dialog" aria-labelledby="order-title">
   <header class="dialog-head">
-    <h2 id="order-title">Combine Markdown files</h2>
+    <h2 id="order-title">Merge files</h2>
     <p>Choose the order of the files to compile into a single document. Drag or use the arrows to reorder.</p>
   </header>
   <div class="order-body">

@@ -37,7 +37,6 @@
     preview: $("preview"), previewToggle: $("preview-toggle"),
     frame: $("frame"), empty: $("empty"), inspector: $("inspector"),
     docName: $("doc-name"), openWelcome: $("open-welcome"),
-    openMulti: $("open-multi"), openMultiWelcome: $("open-multi-welcome"),
     orderDialog: $("order-dialog"), orderTitle: $("order-title"),
     orderAdd: $("order-add"), orderClear: $("order-clear"),
     orderCount: $("order-count"), orderList: $("order-list"),
@@ -647,17 +646,6 @@
       setStatus(String(error), true);
     }
     loadRecent();
-  }
-
-  async function combineMarkdowns() {
-    try {
-      const paths = await invoke("pick_markdown");
-      if (paths && paths.length > 0) {
-        openOrderDialog(paths);
-      }
-    } catch (error) {
-      setStatus(String(error), true);
-    }
   }
 
   async function exportHtml() {
@@ -1733,9 +1721,6 @@
       case "open":
         open();
         break;
-      case "combine":
-        combineMarkdowns();
-        break;
       case "clear_recent":
         invoke("clear_recent")
           .then(loadRecent)
@@ -2143,8 +2128,6 @@
 
   el.open.addEventListener("click", open);
   el.openWelcome.addEventListener("click", open);
-  el.openMulti.addEventListener("click", combineMarkdowns);
-  el.openMultiWelcome.addEventListener("click", combineMarkdowns);
   el.detailClose.addEventListener("click", deselect);
   el.filter.addEventListener("input", renderBlocks);
   el.typeFilter.addEventListener("change", () => {
