@@ -43,6 +43,7 @@ pub use features::{
 };
 pub use html::{
     AiOptions, AiProvider, CustomProvider, EmbeddedFont, HtmlOptions, KatexAssets, MathAssets,
+    SourceBlockEntry, SourcePayload,
 };
 pub use model::{
     BlockType, Direction, Document, EndReason, EnvSpan, ListInfo, Node, NodeKind, SemanticBlock,
@@ -201,7 +202,11 @@ pub fn analyze_with_judge_detailed(
 pub fn compile(input: &str, config: &ScoringConfig, options: &HtmlOptions) -> Result<String> {
     if is_html(input) {
         clean_html(input, options)
-    } else {
+    } else if options.source_markdown.is_some() {
         html::render(&analyze(input, config), options)
+    } else {
+        let mut opts = options.clone();
+        opts.source_markdown = Some(normalize_markdown(input));
+        html::render(&analyze(input, config), &opts)
     }
 }

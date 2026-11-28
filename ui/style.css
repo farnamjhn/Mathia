@@ -184,6 +184,7 @@ button { cursor: pointer; }
 }
 .icon-btn:hover:not(:disabled) { color: var(--print); background: var(--hover); }
 .icon-btn:active:not(:disabled) { background: var(--pressed); }
+.icon-btn[aria-pressed="true"]:not(:disabled) { color: var(--paper); background: var(--print); }
 .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .theme-option { display: inline-grid; place-items: center; }
 

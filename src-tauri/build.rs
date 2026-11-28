@@ -7,6 +7,8 @@ const COMMANDS: &[&str] = &[
     "startup_file",
     "analyze",
     "compile",
+    "apply_live_edit",
+    "write_source_files",
     "export",
     "export_markdown",
     "export_pdf",

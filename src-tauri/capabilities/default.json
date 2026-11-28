@@ -10,6 +10,8 @@
     "allow-startup-file",
     "allow-analyze",
     "allow-compile",
+    "allow-apply-live-edit",
+    "allow-write-source-files",
     "allow-export",
     "allow-export-markdown",
     "allow-export-pdf",

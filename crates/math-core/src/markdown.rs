@@ -17,16 +17,88 @@ use crate::model::{BlockType, Direction, Document, EnvSpan, SemanticBlock};
 pub fn render(doc: &Document, source: Option<&str>) -> String {
     let mut out = String::new();
     for block in &doc.blocks {
-        let body = match source {
-            Some(source) => from_source(doc, block, source),
-            None => html_to_markdown(&block.html),
-        };
-        let env = source
-            .and_then(|_| doc.nodes.get(block.span.start))
-            .and_then(|node| node.env.as_ref());
-        push_block(&mut out, block, &body, env);
+        let md = block_markdown(doc, block, source);
+        if md.is_empty() {
+            continue;
+        }
+        out.push_str(&md);
+        out.push_str("\n\n");
     }
     tidy(out)
+}
+
+/// Renders a single [`SemanticBlock`] as standardized Markdown (adding bold
+/// labels or `#` heading markers when needed).
+pub fn block_markdown(doc: &Document, block: &SemanticBlock, source: Option<&str>) -> String {
+    let body = match source {
+        Some(source) => from_source(doc, block, source),
+        None => html_to_markdown(&block.html),
+    };
+    let env = source
+        .and_then(|_| doc.nodes.get(block.span.start))
+        .and_then(|node| node.env.as_ref());
+    let mut out = String::new();
+    push_block(&mut out, block, &body, env);
+    out.trim().to_string()
+}
+
+/// Returns a single [`SemanticBlock`]'s verbatim Markdown for in-place editing.
+///
+/// When `source` is `Some`, preserves the exact authored text (restoring any
+/// surrounding `\begin{...}...\end{...}` lines) rather than synthesizing new
+/// labels on unlabelled blocks. When `source` is `None` (HTML import), falls
+/// back to [`block_markdown`].
+pub fn raw_block_markdown(doc: &Document, block: &SemanticBlock, source: Option<&str>) -> String {
+    let Some(source) = source else {
+        return block_markdown(doc, block, None);
+    };
+    if let Some(range) = block_source_range(doc, block, source)
+        && let Some(slice) = source.get(range)
+    {
+        return slice.trim().to_string();
+    }
+    block_markdown(doc, block, Some(source))
+}
+
+/// Byte range of `block` inside `source` (the normalised Markdown), including
+/// any outer `\begin{env}...\end{env}` wrapper lines and trimmed of trailing
+/// line endings.
+pub fn block_source_range(
+    doc: &Document,
+    block: &SemanticBlock,
+    source: &str,
+) -> Option<std::ops::Range<usize>> {
+    let first = doc.nodes.get(block.span.start)?;
+    let last_idx = block.span.end.checked_sub(1)?;
+    let last = doc.nodes.get(last_idx)?;
+    let mut start = first.source.start;
+    let mut end = last.source.end;
+    if start > source.len() || end > source.len() || start > end {
+        return None;
+    }
+
+    if first.env.is_some() {
+        // Walk backwards across the `\begin{...}` line that split_environments cut out.
+        let before = &source[..start];
+        if let Some(begin_pos) = before.rfind("\\begin{") {
+            let line_start = before[..begin_pos].rfind('\n').map_or(0, |n| n + 1);
+            if before[line_start..begin_pos].trim().is_empty()
+                && let Some((env_name, _)) = crate::normalize::begin_at(before, begin_pos)
+            {
+                start = line_start;
+                let end_tag = format!("\\end{{{env_name}}}");
+                let after = &source[end..];
+                if let Some(end_rel) = after.find(&end_tag) {
+                    end += end_rel + end_tag.len();
+                }
+            }
+        }
+    }
+
+    while end > start && matches!(source.as_bytes()[end - 1], b'\n' | b'\r') {
+        end -= 1;
+    }
+    Some(start..end)
 }
 
 /// The block's own Markdown, copied out of the normalised source.
@@ -783,5 +855,27 @@ mod tests {
         let out = from_markdown("## Theorem 1\n\nEvery group of prime order is cyclic.\n");
         assert!(out.starts_with("## Theorem 1\n"), "{out}");
         assert!(!out.contains("**Theorem 1.**"), "{out}");
+    }
+
+    #[test]
+    fn raw_block_markdown_and_source_range_handle_environments_and_lists() {
+        let source = "# Intro\n\n\\begin{theorem}[Cauchy]\nLet $G$ be finite.\n\n- Case 1\n- Case 2\n\\end{theorem}\n\nAfter.\n";
+        let norm = normalize_markdown(source);
+        let doc = analyze(&norm, &ScoringConfig::default());
+        assert_eq!(doc.blocks.len(), 3);
+
+        let thm = &doc.blocks[1];
+        let range = block_source_range(&doc, thm, &norm).expect("theorem range");
+        assert_eq!(
+            &norm[range],
+            "\\begin{theorem}[Cauchy]\nLet $G$ be finite.\n\n- Case 1\n- Case 2\n\\end{theorem}"
+        );
+        assert_eq!(
+            raw_block_markdown(&doc, thm, Some(&norm)),
+            "\\begin{theorem}[Cauchy]\nLet $G$ be finite.\n\n- Case 1\n- Case 2\n\\end{theorem}"
+        );
+
+        let after = &doc.blocks[2];
+        assert_eq!(raw_block_markdown(&doc, after, Some(&norm)), "After.");
     }
 }

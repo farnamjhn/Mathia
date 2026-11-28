@@ -133,6 +133,13 @@ const CHROME_CLASSES: &[&str] = &[
     "mx-math-copy",
     "mx-ai-panel",
     "mx-ai-figure-wrap",
+    "mx-edit-toggle",
+    "mx-edit-toggle-standalone",
+    "mx-edit-sep",
+    "mx-edit-bar",
+    "mx-edit-banner",
+    "mx-edit-add-row",
+    "mx-lp-math-preview",
 ];
 
 /// Wrappers that exist only for layout; their children are the content.

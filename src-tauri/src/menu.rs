@@ -119,6 +119,12 @@ pub fn build_app_menu<R: Runtime>(
                 .enabled(document_open)
                 .build(app)?,
         )
+        .item(
+            &MenuItemBuilder::with_id("live_edit_toggle", "Edit in Live Preview")
+                .accelerator("CmdOrCtrl+Shift+E")
+                .enabled(document_open)
+                .build(app)?,
+        )
         .item(&MenuItemBuilder::with_id("theme_toggle", "Toggle Color Theme").build(app)?)
         .build()?;
 

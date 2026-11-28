@@ -328,6 +328,7 @@ fn run() -> Result<(), String> {
                 providers: ai_providers,
                 custom_providers,
             },
+            ..HtmlOptions::default()
         },
         explain,
         judge: judge_command.map(|command| JudgeSettings {
@@ -571,6 +572,7 @@ fn compile_file(input: &Path, output: &Path, settings: &Settings) -> Result<(), 
         print!("{}", analysis.explain());
     }
     let document = analysis.document;
+    html_options.source_markdown = Some(math_core::normalize_markdown(&markdown));
     let html = math_core::html::render(&document, &html_options).map_err(|e| e.to_string())?;
     std::fs::write(output, html).map_err(|e| format!("{}: {e}", output.display()))?;
 

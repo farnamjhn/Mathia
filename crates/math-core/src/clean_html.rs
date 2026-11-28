@@ -455,6 +455,40 @@ pub fn analyze_html_detailed(input: &str) -> Analysis {
     analysis
 }
 
+/// Extracts `<figure>` elements containing `<svg>` (and any standalone `<svg>`
+/// elements) from an existing block HTML fragment so they can be preserved when
+/// the block's prose is edited.
+pub fn extract_figures_html(html: &str) -> String {
+    if !html.contains("<svg") {
+        return String::new();
+    }
+    let dom = crate::dom::Dom::parse(html);
+    let opts = crate::dom::SerializeOptions::default();
+    let figures = dom.find_all(dom.root(), |d, id| {
+        if d.is_tag(id, "figure") {
+            return !d
+                .find_all(id, |dd, cid| dd.element(cid).is_some_and(|e| e.is_svg()))
+                .is_empty();
+        }
+        if d.element(id).is_some_and(|e| e.is_svg()) {
+            let mut p = d.node(id).parent;
+            while let Some(pid) = p {
+                if d.is_tag(pid, "figure") {
+                    return false;
+                }
+                p = d.node(pid).parent;
+            }
+            return true;
+        }
+        false
+    });
+    let mut out = String::new();
+    for id in figures {
+        out.push_str(&dom.serialize(id, &opts));
+    }
+    out
+}
+
 /// Rebuilds the per-block score tables of an HTML analysis. HTML has no source
 /// nodes, so these tables mirror the block list; call this again after
 /// [`apply_overrides`] merged blocks.

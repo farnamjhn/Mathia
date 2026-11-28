@@ -26,7 +26,10 @@ use tauri::{
 };
 use tauri_plugin_dialog::DialogExt;
 
-use session::{AnalysisView, CompileOptions, Compiled, Session, Source};
+use session::{
+    AnalysisView, BlockEdit, CompileOptions, Compiled, FileSnapshot, LiveEditResult, Session,
+    Source,
+};
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct CompileProgress {
@@ -62,6 +65,7 @@ fn apply_menu_state(app: &AppHandle, document_open: bool, markdown_open: bool) {
     if let Some(menu) = app.menu() {
         set_menu_item_enabled(&menu, "export_menu", document_open);
         set_menu_item_enabled(&menu, "preview_toggle", document_open);
+        set_menu_item_enabled(&menu, "live_edit_toggle", document_open);
         set_menu_item_enabled(&menu, "reload", document_open);
         set_menu_item_enabled(&menu, "fix_markdown", markdown_open);
     }
@@ -346,6 +350,28 @@ async fn compile(
     }
 
     result
+}
+
+/// Persists Live Preview edits to disk and returns refreshed metadata.
+#[tauri::command]
+async fn apply_live_edit(
+    state: State<'_, Shared>,
+    source: Source,
+    edits: Vec<BlockEdit>,
+    options: CompileOptions,
+) -> Result<LiveEditResult, String> {
+    lock(&state).apply_live_edit(&source, edits, &options)
+}
+
+/// Restores source file snapshots (used by Undo/Redo of live edits).
+#[tauri::command]
+async fn write_source_files(
+    state: State<'_, Shared>,
+    source: Source,
+    files: Vec<FileSnapshot>,
+    options: CompileOptions,
+) -> Result<LiveEditResult, String> {
+    lock(&state).write_source_files(&source, files, &options)
 }
 
 /// Compiles `source` and writes it where the user says. Returns the
@@ -1029,6 +1055,8 @@ fn main() {
             startup_file,
             analyze,
             compile,
+            apply_live_edit,
+            write_source_files,
             export,
             export_markdown,
             export_mindmap,

@@ -77,6 +77,11 @@
       <button type="button" class="menu-action" data-action="preview_toggle" id="win-menu-preview" disabled>
         <span>Toggle Preview</span>
       </button>
+      <button type="button" class="menu-action menu-toggle" data-action="live_edit_toggle" id="win-menu-live-edit" disabled>
+        <span class="menu-check" aria-hidden="true" style="visibility: hidden;">✓</span>
+        <span>Edit in Live Preview</span>
+        <span class="menu-shortcut">Ctrl+Shift+E</span>
+      </button>
       <button type="button" class="menu-action" data-action="theme_toggle">
         <span>Toggle Color Theme</span>
       </button>
@@ -221,6 +226,12 @@
   <span class="bar-separator bar-separator-integrated" role="separator" aria-orientation="vertical"></span>
 
   <div class="bar-group" role="group" aria-label="View and display">
+    <button id="edit-toggle" class="icon-btn" type="button" aria-pressed="false" aria-label="Edit in Live Preview" title="Edit in Live Preview (⌘⇧E / Ctrl+Shift+E)" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 20h9"/>
+        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+      </svg>
+    </button>
     <button id="preview-toggle" class="icon-btn" type="button" aria-controls="preview" aria-expanded="true" aria-label="Preview" title="Hide the preview" disabled>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="3" y="4" width="18" height="16" rx="2"/>

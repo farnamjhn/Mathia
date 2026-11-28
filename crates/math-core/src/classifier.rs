@@ -394,6 +394,19 @@ impl ScopeOverrides {
         }
         Ok(())
     }
+
+    /// Drops unanchored index-only overrides whose node indices no longer fit `nodes`.
+    pub fn prune_oob(&mut self, nodes: usize) {
+        let valid_key =
+            |key: &OverrideKey| key.anchor.is_some() || key.fallback.is_none_or(|i| i < nodes);
+        self.delta.retain(|k, _| valid_key(k));
+        self.suppressed.retain(valid_key);
+        self.retype.retain(|k, _| valid_key(k));
+        self.end.retain(|k, end| {
+            valid_key(k)
+                && (k.anchor.is_some() || k.fallback.is_none_or(|i| *end > i && *end <= nodes))
+        });
+    }
 }
 
 /// What a decision model thinks of one proposed block.

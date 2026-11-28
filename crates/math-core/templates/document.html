@@ -9,7 +9,7 @@
 <style id="mx-style">{{ css|safe }}</style>
 {{ math_head|safe }}
 </head>
-<body{% if !ai_attr.is_empty() %} data-mx-ai="{{ ai_attr }}"{% endif %}{% if !ai_endpoints.is_empty() %} data-mx-ai-endpoints="{{ ai_endpoints }}"{% endif %}>
+<body data-mx-doc-id="{{ doc_id }}"{% if !ai_attr.is_empty() %} data-mx-ai="{{ ai_attr }}"{% endif %}{% if !ai_endpoints.is_empty() %} data-mx-ai-endpoints="{{ ai_endpoints }}"{% endif %}>
 <button id="mx-theme-toggle" class="mx-theme-toggle" type="button" aria-label="{{ theme_label }}" title="{{ theme_label }}" hidden>◐</button>
 <button id="mx-print" class="mx-print" type="button" aria-label="{{ print_label }}" title="{{ print_label }}" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="7" rx="1"/></svg></button>
 <button id="mx-toc-toggle" class="mx-toc-toggle" type="button" aria-controls="mx-toc" aria-expanded="true" aria-label="{{ toc_label }}">☰</button>
@@ -26,6 +26,7 @@
 </ol>
 </nav>
 <div id="mx-mindmap-data" hidden>{{ mindmap_json }}</div>
+<div id="mx-source-data" hidden>{{ source_json }}</div>
 <main id="mx-main" class="mx-main">
 {%- if !raw_content.is_empty() %}
 {{ raw_content|safe }}

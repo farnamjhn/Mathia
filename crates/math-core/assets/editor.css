@@ -1,0 +1,260 @@
+/* Mathia Live Preview editor & standalone browser persistence styles.
+   Inherits light/dark theme tokens (--mx-*) from style.css. */
+
+/* Edit toggle button (docked inside .mx-map-switch or standalone fallback). */
+.mx-map-switch .mx-edit-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 3px;
+  background: var(--mx-border);
+}
+.mx-edit-toggle-standalone {
+  position: fixed;
+  z-index: 5;
+  inset-block-start: 18px;
+  inset-inline-end: 112px;
+  font: 500 12px var(--mx-font-sans);
+  padding: 6px 10px;
+  border: 1px solid var(--mx-border);
+  border-radius: 6px;
+  background: var(--mx-bg);
+  color: var(--mx-text);
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.mx-edit-toggle-standalone:hover,
+.mx-edit-toggle[aria-pressed="true"],
+.mx-map-switch .mx-edit-toggle[aria-pressed="true"] {
+  background: var(--mx-text);
+  border-color: var(--mx-text);
+  color: var(--mx-bg);
+}
+.mx-edit-toggle:focus-visible {
+  outline: 2px solid var(--mx-text);
+  outline-offset: 2px;
+}
+
+/* Floating edit action bar (Undo/Redo, Save, Export .md, Revert). */
+.mx-edit-bar {
+  position: fixed;
+  z-index: 6;
+  inset-block-end: 18px;
+  inset-inline-start: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100vw - 32px);
+  padding: 6px 10px;
+  border: 1px solid var(--mx-border);
+  border-radius: 10px;
+  background: var(--mx-bg);
+  box-shadow: 0 8px 28px rgb(0 0 0 / .16);
+  font: 500 12px var(--mx-font-sans);
+}
+.mx-edit-bar[hidden] { display: none; }
+.mx-edit-bar button {
+  padding: 4px 9px;
+  border: 1px solid var(--mx-border);
+  border-radius: 5px;
+  background: var(--mx-bg-secondary);
+  color: var(--mx-text);
+  font: 500 12px var(--mx-font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .12s ease;
+}
+.mx-edit-bar button:hover:not(:disabled) {
+  background: var(--mx-text);
+  border-color: var(--mx-text);
+  color: var(--mx-bg);
+}
+.mx-edit-bar button:disabled {
+  opacity: .38;
+  cursor: default;
+}
+.mx-edit-bar button.mx-edit-primary {
+  background: var(--mx-text);
+  border-color: var(--mx-text);
+  color: var(--mx-bg);
+}
+.mx-edit-bar button.mx-edit-primary:hover:not(:disabled) {
+  opacity: .86;
+}
+.mx-edit-bar-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--mx-border);
+}
+.mx-edit-status {
+  color: var(--mx-gray-600);
+  font: 500 11.5px var(--mx-font-mono);
+  padding-inline: 4px;
+  white-space: nowrap;
+}
+.mx-edit-status.mx-edit-dirty {
+  color: var(--mx-text);
+}
+
+/* Non-intrusive restored-draft banner inside main. */
+.mx-edit-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 10px 14px;
+  border: 1px solid var(--mx-border);
+  border-inline-start: 3px solid var(--mx-text);
+  border-radius: 8px;
+  background: var(--mx-bg-secondary);
+  font-size: 13px;
+}
+.mx-edit-banner[hidden] { display: none; }
+.mx-edit-banner-actions {
+  display: flex;
+  gap: 6px;
+}
+.mx-edit-banner button {
+  padding: 3px 9px;
+  border: 1px solid var(--mx-border);
+  border-radius: 5px;
+  background: var(--mx-bg);
+  color: var(--mx-text);
+  font: 500 12px var(--mx-font-sans);
+  cursor: pointer;
+}
+.mx-edit-banner button:hover {
+  background: var(--mx-text);
+  border-color: var(--mx-text);
+  color: var(--mx-bg);
+}
+
+/* Obsidian-style Live Preview units inside blocks & headings. */
+body.mx-editing .mx-lp-unit {
+  position: relative;
+  border-radius: 5px;
+  cursor: text;
+  transition: background-color .1s ease;
+}
+body.mx-editing .mx-lp-unit:not(.mx-lp-active):hover {
+  background: color-mix(in srgb, var(--mx-gray-200) 45%, transparent);
+}
+body.mx-editing .mx-lp-unit > :first-child { margin-top: 0; }
+body.mx-editing .mx-lp-unit > :last-child { margin-bottom: 0; }
+body.mx-editing .mx-lp-unit + .mx-lp-unit { margin-top: .55em; }
+.mx-lp-unit .mx-lp-list { margin: 0; }
+
+/* Disable reading-mode math copy cursor when clicking math edits the unit. */
+body.mx-editing .math:not(.math-display) {
+  cursor: text;
+}
+body.mx-editing .mx-math-copy {
+  display: none;
+}
+
+.mx-lp-unit.mx-lp-active {
+  padding: 6px 8px;
+  margin-inline: -8px;
+  background: var(--mx-bg-secondary);
+  outline: 1px solid var(--mx-gray-400);
+  border-radius: 6px;
+}
+
+.mx-lp-input {
+  display: block;
+  width: 100%;
+  min-height: 1.85em;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: var(--mx-text);
+  font-family: var(--mx-font-sans);
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  caret-color: var(--mx-text);
+}
+.mx-lp-input-code {
+  font-family: var(--mx-font-mono);
+  font-size: .9em;
+  line-height: 1.55;
+  direction: ltr;
+  text-align: left;
+}
+.mx-lp-input-heading {
+  font-weight: 700;
+}
+
+.mx-lp-math-preview {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--mx-border);
+  font-size: .96em;
+  opacity: .95;
+}
+.mx-lp-math-preview:empty,
+.mx-lp-math-preview[hidden] {
+  display: none;
+}
+.mx-lp-math-preview-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--mx-gray-500);
+  font: 600 10px var(--mx-font-mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  direction: ltr;
+  text-align: start;
+}
+
+/* Add block button at bottom of document in Edit mode. */
+.mx-edit-add-row {
+  display: flex;
+  justify-content: center;
+  margin-top: 24px;
+}
+.mx-edit-add-row[hidden] { display: none; }
+.mx-edit-add-btn {
+  padding: 7px 14px;
+  border: 1px dashed var(--mx-gray-400);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--mx-gray-600);
+  font: 500 13px var(--mx-font-sans);
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.mx-edit-add-btn:hover {
+  border-style: solid;
+  border-color: var(--mx-text);
+  color: var(--mx-text);
+  background: var(--mx-bg-secondary);
+}
+
+@media (max-width: 640px) {
+  .mx-edit-bar {
+    inset-block-end: 10px;
+    padding: 5px 8px;
+    gap: 4px;
+  }
+}
+
+@media print {
+  .mx-edit-toggle,
+  .mx-edit-sep,
+  .mx-edit-toggle-standalone,
+  .mx-edit-bar,
+  .mx-edit-banner,
+  .mx-edit-add-row,
+  .mx-lp-math-preview {
+    display: none !important;
+  }
+}

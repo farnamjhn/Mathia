@@ -153,10 +153,10 @@
     });
   }
 
-  function renderMath() {
-    if (!window.katex) return;
-    autoRenderDelimiters(document.getElementById("mx-main") || document.body);
-    document.querySelectorAll(".math, .arithmatex, .latex, .tex").forEach(function (el) {
+  function renderMathIn(container) {
+    if (!window.katex || !container) return;
+    autoRenderDelimiters(container);
+    container.querySelectorAll(".math, .arithmatex, .latex, .tex").forEach(function (el) {
       if (el.dataset.mxTex !== undefined) return;
       var raw = el.textContent;
       var tex = cleanTex(raw);
@@ -180,6 +180,11 @@
         el.title = String(err);
       }
     });
+  }
+
+  function renderMath() {
+    if (!window.katex) return;
+    renderMathIn(document.getElementById("mx-main") || document.body);
     decorateMath();
   }
 
@@ -250,6 +255,7 @@
 
   function setupCopy() {
     document.addEventListener("click", function (e) {
+      if (document.body.classList.contains("mx-editing")) return;
       var m = e.target.closest && e.target.closest(".math");
       if (!m || m.classList.contains("math-display") || e.target.closest("button")) return;
       var sel = window.getSelection();
@@ -258,6 +264,8 @@
     });
     /* Ctrl/Cmd+C over a selection yields LaTeX for formulas, not KaTeX's MathML. */
     document.addEventListener("copy", function (e) {
+      var targetTag = (e.target && e.target.tagName) || "";
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(targetTag)) return;
       var sel = window.getSelection();
       if (!sel || sel.isCollapsed || !sel.rangeCount || !e.clipboardData) return;
       var range = sel.getRangeAt(0);
@@ -329,6 +337,9 @@
 
   /* Sections of the sidebar fold: a heading hides the entries nested under it. */
   function setupTocFolding() {
+    document.querySelectorAll("#mx-toc .mx-toc-fold").forEach(function (btn) {
+      btn.remove();
+    });
     var items = Array.prototype.slice.call(document.querySelectorAll(".mx-toc-item"));
     function depth(item) { return Number(item.dataset.depth) || 1; }
     function refresh() {
@@ -1039,7 +1050,11 @@
     }
 
     function onSelectionChange() {
-      if (held) return;
+      if (held || document.body.classList.contains("mx-editing")) {
+        pending = null;
+        hide();
+        return;
+      }
       var sel = window.getSelection();
       if (!sel || !sel.rangeCount || sel.isCollapsed) { pending = null; hide(); return; }
       var range = sel.getRangeAt(0);
@@ -1123,14 +1138,19 @@
     window.addEventListener("beforeunload", destroy);
   }
 
+  var scrollObserver = null;
   function setupScrollSpy() {
     if (!("IntersectionObserver" in window)) return;
+    if (scrollObserver) {
+      scrollObserver.disconnect();
+      scrollObserver = null;
+    }
     var links = {};
     document.querySelectorAll("[data-toc-target]").forEach(function (a) {
       links[a.dataset.tocTarget] = a;
     });
     var current = null;
-    var observer = new IntersectionObserver(
+    scrollObserver = new IntersectionObserver(
       function (entries) {
         entries.forEach(function (entry) {
           var link = links[entry.target.id];
@@ -1144,7 +1164,7 @@
     );
     Object.keys(links).forEach(function (id) {
       var target = document.getElementById(id);
-      if (target) observer.observe(target);
+      if (target) scrollObserver.observe(target);
     });
   }
 
@@ -1182,6 +1202,13 @@
     });
   }
 
+  function remountActions() {
+    document.querySelectorAll("[data-block-actions]").forEach(function (slot) {
+      slot.textContent = "";
+    });
+    actions.forEach(mountAction);
+  }
+
   window.Mathia = {
     version: 1,
     blocks: function () {
@@ -1196,6 +1223,10 @@
       actions.push(action);
       mountAction(action);
     },
+    remountActions: remountActions,
+    refreshTocFolding: setupTocFolding,
+    refreshScrollSpy: setupScrollSpy,
+    renderMathIn: renderMathIn,
     renderMath: renderMath,
   };
 

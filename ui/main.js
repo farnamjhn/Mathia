@@ -33,7 +33,7 @@
     undo: $("undo"), redo: $("redo"),
     ai: $("ai"), math: $("render-math"), showText: $("show-text"),
     status: $("status"), blocks: $("blocks"), panes: $("panes"),
-    preview: $("preview"), previewToggle: $("preview-toggle"),
+    preview: $("preview"), previewToggle: $("preview-toggle"), editToggle: $("edit-toggle"),
     frame: $("frame"), empty: $("empty"), inspector: $("inspector"),
     docName: $("doc-name"), openWelcome: $("open-welcome"),
     orderDialog: $("order-dialog"), orderTitle: $("order-title"),
@@ -150,6 +150,9 @@
   let typeFilterKey = "";
   /** Whether the user wants the preview pane (it only shows with a document). */
   let previewOpen = true;
+  /** Whether Obsidian-style Live Preview editing is active inside the iframe. */
+  let liveEditMode = false;
+  let editSaveChain = Promise.resolve();
   let initialPromptText = el.promptText ? el.promptText.value : "";
   let continuationPromptText = el.promptContinuation ? el.promptContinuation.value : "";
   let promptMode = "initial";
@@ -203,9 +206,63 @@
     if (frame) frame.postMessage({ mathia: kind }, "*");
   }
 
+  function setLiveEditState(enabled) {
+    liveEditMode = Boolean(enabled);
+    if (el.editToggle) {
+      el.editToggle.setAttribute("aria-pressed", String(liveEditMode));
+      el.editToggle.title = liveEditMode
+        ? "Exit Live Preview editing (⌘⇧E / Ctrl+Shift+E)"
+        : "Edit in Live Preview (⌘⇧E / Ctrl+Shift+E)";
+    }
+    const winLiveEdit = $("win-menu-live-edit");
+    if (winLiveEdit) {
+      const check = winLiveEdit.querySelector(".menu-check");
+      if (check) check.style.visibility = liveEditMode ? "visible" : "hidden";
+    }
+  }
+
+  function toggleLiveEdit() {
+    if (!analysis) return;
+    if (!previewOpen) setPreviewOpen(true);
+    const frame = el.frame.contentWindow;
+    if (frame) frame.postMessage({ mathia: "set-edit-mode", enabled: !liveEditMode }, "*");
+  }
+
+  function applySyncedResult(res, statusPrefix) {
+    if (!res) return;
+    if (res.stamp !== undefined && res.stamp !== null) stamp = res.stamp;
+    revision = res.revision;
+    analysis = res.analysis;
+    renderBlocks();
+    const frame = el.frame.contentWindow;
+    if (frame) {
+      frame.postMessage({
+        mathia: "edit-synced",
+        sourceData: res.sourceData,
+        toc: res.toc,
+        mindmapJson: res.mindmapJson,
+        blocksPatch: res.blocksPatch,
+      }, "*");
+    }
+    const found = res.semanticBlocks;
+    const blocksText = found === 1 ? "1 block found" : found + " blocks found";
+    const sizeText = Math.round(res.bytes / 1024) + " kB of HTML";
+    setStatus((statusPrefix ? statusPrefix + " — " : "") + blocksText + ", " + sizeText);
+  }
+
   async function replayHistory(entry, backwards) {
     if (entry.kind === "highlight") {
       postToFrame(backwards ? "highlight-undo" : "highlight-redo");
+      return;
+    }
+    if (entry.kind === "source-edit") {
+      try {
+        const files = backwards ? entry.before : entry.after;
+        const res = await invoke("write_source_files", { source, files, options: options() });
+        applySyncedResult(res, backwards ? "Undone" : "Redone");
+      } catch (error) {
+        setStatus(String(error), true);
+      }
       return;
     }
     overrides = cloneOverrides(backwards ? entry.before : entry.after);
@@ -285,6 +342,7 @@
     el.preview.hidden = !has || !previewOpen;
     el.panes.classList.toggle("preview-closed", has && !previewOpen);
     el.previewToggle.disabled = !has;
+    if (el.editToggle) el.editToggle.disabled = !has;
     updateDecisionRun();
     updateHistory();
     updateMenuToggles();
@@ -315,6 +373,8 @@
     }
     const winPreview = $("win-menu-preview");
     if (winPreview) winPreview.disabled = !has;
+    const winLiveEdit = $("win-menu-live-edit");
+    if (winLiveEdit) winLiveEdit.disabled = !has;
   }
 
   function node(tag, className, text) {
@@ -484,6 +544,7 @@
     analysis = null;
     stamp = null;
     overrides = emptyOverrides();
+    setLiveEditState(false);
     resetHistory();
     view = "all";
     typeFilter = "all";
@@ -510,6 +571,7 @@
     analysis = null;
     stamp = null;
     overrides = emptyOverrides();
+    setLiveEditState(false);
     resetHistory();
     view = "all";
     typeFilter = "all";
@@ -536,6 +598,7 @@
     analysis = null;
     stamp = null;
     overrides = emptyOverrides();
+    setLiveEditState(false);
     resetHistory();
     view = "all";
     typeFilter = "all";
@@ -1097,6 +1160,32 @@
     const data = event.data;
     if (data && data.mathia === "print") {
       exportPdf();
+      return;
+    }
+    if (data && data.mathia === "edit-mode-changed") {
+      setLiveEditState(data.enabled);
+      return;
+    }
+    if (data && data.mathia === "edit-commit" && Array.isArray(data.edits) && source) {
+      const targetSource = source;
+      const targetEdits = data.edits;
+      const targetOptions = options();
+      editSaveChain = editSaveChain.then(async () => {
+        if (source !== targetSource) return;
+        try {
+          const res = await invoke("apply_live_edit", {
+            source: targetSource,
+            edits: targetEdits,
+            options: targetOptions,
+          });
+          if (res.beforeFiles && res.beforeFiles.length > 0 && res.afterFiles && res.afterFiles.length > 0) {
+            pushHistory({ kind: "source-edit", before: res.beforeFiles, after: res.afterFiles });
+          }
+          applySyncedResult(res, "Saved");
+        } catch (error) {
+          setStatus("Save failed: " + error, true);
+        }
+      });
       return;
     }
     if (data && data.mathia === "expand" && typeof data.id === "string") {
@@ -1804,6 +1893,9 @@
       case "preview_toggle":
         if (analysis) setPreviewOpen(!previewOpen);
         break;
+      case "live_edit_toggle":
+        if (analysis) toggleLiveEdit();
+        break;
       case "theme_toggle": {
         const themeBtn = document.getElementById("theme-toggle");
         if (themeBtn) themeBtn.click();
@@ -2178,6 +2270,14 @@
   el.undo.addEventListener("click", () => undoChange());
   el.redo.addEventListener("click", () => redoChange());
   el.previewToggle.addEventListener("click", () => setPreviewOpen(!previewOpen));
+  if (el.editToggle) el.editToggle.addEventListener("click", () => toggleLiveEdit());
+  if (el.frame) {
+    el.frame.addEventListener("load", () => {
+      if (liveEditMode && el.frame.contentWindow) {
+        el.frame.contentWindow.postMessage({ mathia: "set-edit-mode", enabled: true }, "*");
+      }
+    });
+  }
   el.ai.addEventListener("change", () => {
     updateMenuToggles();
     refresh();
@@ -2243,9 +2343,10 @@
       if (event.shiftKey) redoChange();
       else undoChange();
     } else if (key === "y" && !typing) redoChange();
+    else if (key === "e" && event.shiftKey && analysis) toggleLiveEdit();
     else if (key === "o") open();
     else if (key === "f" && analysis) el.filter.focus();
-    else if (key === "e") openExportMenu();
+    else if (key === "e" && !event.shiftKey) openExportMenu();
     else if (key === "p") exportPdf();
     else if (key === "r") refresh();
     else return;

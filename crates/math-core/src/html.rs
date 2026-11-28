@@ -1,8 +1,10 @@
 //! [`Document`] → one self-contained HTML5 file.
 
+use std::ops::Range;
 use std::path::Path;
 
 use askama::Template;
+use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::model::{BlockType, Document};
@@ -229,6 +231,202 @@ pub struct HtmlOptions {
     /// Text fonts to embed; the first family leads the font stack.
     pub fonts: Vec<EmbeddedFont>,
     pub ai: AiOptions,
+    /// Normalised Markdown source corresponding to the compiled document, used to
+    /// embed per-block source metadata for in-browser Live Preview editing.
+    pub source_markdown: Option<String>,
+    /// Byte ranges (within `source_markdown`) belonging to each source file when
+    /// multiple files are combined; empty for single-file documents.
+    pub source_segments: Vec<Range<usize>>,
+}
+
+/// Per-block source metadata embedded into compiled HTML (`#mx-source-data`) so
+/// Obsidian-style Live Preview editing works both in-app and in web browsers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceBlockEntry {
+    pub id: String,
+    pub kind: String,
+    pub heading_level: u8,
+    pub dir: String,
+    pub label: String,
+    pub title: String,
+    pub proves: String,
+    pub proves_title: String,
+    pub has_figure: bool,
+    pub md: String,
+    pub file_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourcePayload {
+    pub version: u8,
+    pub direction: String,
+    pub title: String,
+    pub blocks: Vec<SourceBlockEntry>,
+}
+
+/// Builds the serializable source map for `doc` and `options`.
+pub fn build_source_payload(doc: &Document, options: &HtmlOptions) -> SourcePayload {
+    let rtl = doc.direction == crate::model::Direction::Rtl;
+    let title = options
+        .title
+        .as_deref()
+        .or(doc.title.as_deref())
+        .unwrap_or(if rtl { "جزوه" } else { "Study guide" });
+    let src = options.source_markdown.as_deref();
+    let blocks = doc
+        .blocks
+        .iter()
+        .map(|b| {
+            let proves = b.proves.as_deref().unwrap_or("").to_string();
+            let proves_title = b
+                .proves
+                .as_deref()
+                .and_then(|id| doc.blocks.iter().find(|t| t.id == id))
+                .map_or("", |t| t.title.as_str())
+                .to_string();
+            let file_index = if options.source_segments.is_empty() {
+                0
+            } else {
+                let start_byte = doc
+                    .nodes
+                    .get(b.span.start)
+                    .map(|n| n.source.start)
+                    .unwrap_or(0);
+                options
+                    .source_segments
+                    .iter()
+                    .position(|seg| seg.contains(&start_byte))
+                    .unwrap_or_else(|| {
+                        options
+                            .source_segments
+                            .iter()
+                            .rposition(|seg| seg.start <= start_byte)
+                            .unwrap_or(0)
+                    })
+            };
+            SourceBlockEntry {
+                id: b.id.clone(),
+                kind: b.kind.slug().to_string(),
+                heading_level: if b.kind == BlockType::Heading {
+                    b.heading_level.unwrap_or(2).clamp(1, 6)
+                } else {
+                    0
+                },
+                dir: b.direction.as_str().to_string(),
+                label: b.kind.label(b.direction).to_string(),
+                title: b.title.clone(),
+                proves,
+                proves_title,
+                has_figure: b.html.contains("<svg"),
+                md: crate::markdown::raw_block_markdown(doc, b, src),
+                file_index,
+            }
+        })
+        .collect();
+    SourcePayload {
+        version: 1,
+        direction: doc.direction.as_str().to_string(),
+        title: title.to_string(),
+        blocks,
+    }
+}
+
+/// Renders one [`SemanticBlock`]'s outer HTML matching `document.html`.
+pub fn render_block_outer_html(
+    doc: &Document,
+    block: &crate::model::SemanticBlock,
+    has_ai: bool,
+) -> String {
+    let dir = block.direction.as_str();
+    let kind = block.kind.slug();
+    if block.kind == BlockType::Heading {
+        let lvl = block.heading_level.unwrap_or(2).clamp(1, 6);
+        return format!(
+            "<h{lvl} id=\"{id}\" class=\"mx-heading\" data-block-id=\"{id}\" data-block-type=\"{kind}\" dir=\"{dir}\">{html}</h{lvl}>",
+            id = escape_attr(&block.id),
+            html = block.html,
+        );
+    }
+    let proves = block.proves.as_deref().unwrap_or("");
+    let proves_title = block
+        .proves
+        .as_deref()
+        .and_then(|id| doc.blocks.iter().find(|t| t.id == id))
+        .map_or("", |t| t.title.as_str());
+    let has_figure = block.html.contains("<svg");
+    let semantic = block.kind.is_semantic();
+
+    let mut out = format!(
+        "<section id=\"{id}\" class=\"mx-block mx-{kind}\" data-block-id=\"{id}\" data-block-type=\"{kind}\" dir=\"{dir}\"",
+        id = escape_attr(&block.id),
+    );
+    if !proves.is_empty() {
+        out.push_str(&format!(" data-proves=\"{}\"", escape_attr(proves)));
+    }
+    if semantic {
+        out.push_str(&format!(" aria-label=\"{}\"", escape_attr(&block.title)));
+    }
+    if has_figure {
+        out.push_str(" data-mx-figure=\"true\"");
+    }
+    out.push('>');
+    if semantic {
+        out.push_str(&format!(
+            "<header class=\"mx-block-head\"><span class=\"mx-badge\">{}</span>",
+            escape_attr(block.kind.label(block.direction))
+        ));
+        if !proves.is_empty() {
+            out.push_str(&format!(
+                "<a class=\"mx-proves\" href=\"#{}\">{}</a>",
+                escape_attr(proves),
+                escape_attr(proves_title)
+            ));
+        }
+        out.push_str(&format!(
+            "<span class=\"mx-actions\" data-block-actions=\"{}\"></span></header>",
+            escape_attr(&block.id)
+        ));
+    } else if has_figure && has_ai {
+        out.push_str(&format!(
+            "<header class=\"mx-block-head\"><span class=\"mx-actions\" data-block-actions=\"{}\"></span></header>",
+            escape_attr(&block.id)
+        ));
+    }
+    out.push_str("<div class=\"mx-block-body\">\n");
+    out.push_str(&block.html);
+    out.push_str("</div></section>");
+    out
+}
+
+fn escape_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn doc_fingerprint(title: &str, options: &HtmlOptions, doc: &Document) -> String {
+    let mut seed = String::new();
+    if let Some(name) = &options.source_name {
+        seed.push_str(name);
+    }
+    seed.push('\0');
+    seed.push_str(title);
+    seed.push('\0');
+    for b in doc.blocks.iter().take(12) {
+        seed.push_str(&b.id);
+        seed.push(':');
+        seed.push_str(&b.title);
+        seed.push(';');
+    }
+    let digest = sha256(seed.as_bytes());
+    let mut hex = String::with_capacity(16);
+    for byte in &digest[..8] {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    hex
 }
 
 struct BlockView<'a> {
@@ -260,6 +458,7 @@ struct TocView<'a> {
 #[template(path = "document.html")]
 struct DocumentTemplate<'a> {
     title: &'a str,
+    doc_id: String,
     lang: &'static str,
     dir: &'static str,
     toc_label: &'static str,
@@ -279,6 +478,7 @@ struct DocumentTemplate<'a> {
     toc: Vec<TocView<'a>>,
     blocks: Vec<BlockView<'a>>,
     mindmap_json: String,
+    source_json: String,
     raw_content: &'a str,
 }
 
@@ -299,10 +499,11 @@ pub fn render_with_raw_content(
         .unwrap_or(if rtl { "جزوه" } else { "Study guide" });
 
     let runtime_js = normalize_newlines(&format!(
-        "{}\n{}\n{}",
+        "{}\n{}\n{}\n{}",
         RUNTIME_JS,
         include_str!("../assets/mindmap.js"),
-        include_str!("../assets/graph.js")
+        include_str!("../assets/graph.js"),
+        include_str!("../assets/editor.js")
     ))
     .replace("</script", "<\\/script");
     let katex = match &options.math {
@@ -357,6 +558,7 @@ pub fn render_with_raw_content(
     css.push_str(STYLE_CSS);
     css.push_str(include_str!("../assets/mindmap.css"));
     css.push_str(include_str!("../assets/graph.css"));
+    css.push_str(include_str!("../assets/editor.css"));
     if has_ai {
         css.push_str(AI_CSS);
     }
@@ -370,8 +572,13 @@ pub fn render_with_raw_content(
         }
     }
 
+    let source_json = serde_json::to_string(&build_source_payload(doc, options))
+        .expect("source payload contains only strings and integers");
+    let doc_id = doc_fingerprint(title, options, doc);
+
     let template = DocumentTemplate {
         title,
+        doc_id,
         lang: if rtl { "fa" } else { "en" },
         dir: doc.direction.as_str(),
         toc_label: if rtl { "فهرست" } else { "Contents" },
@@ -448,6 +655,7 @@ pub fn render_with_raw_content(
             options.source_name.as_deref().unwrap_or(title),
         ))
         .expect("mind map contains only strings and integers"),
+        source_json,
         raw_content,
     };
     Ok(template.render()?)
@@ -1178,5 +1386,56 @@ mod tests {
             .count();
         assert_eq!(non_xmlns_http, 0, "No external HTTP URLs allowed");
         assert!(html.contains("KaTeX_Main"));
+    }
+
+    #[test]
+    fn embeds_source_payload_with_file_segments_and_doc_id() {
+        let part1 = "# Chapter 1\n\n**Theorem 1.** First claim.";
+        let part2 = "## Chapter 2\n\nSecond paragraph with $x^2$.";
+        let combined = format!("{part1}\n\n{part2}");
+        let seg1 = 0..part1.len();
+        let seg2 = (part1.len() + 2)..combined.len();
+        let doc = analyze(&combined, &ScoringConfig::default());
+        let html = render(
+            &doc,
+            &HtmlOptions {
+                source_name: Some("combined.md".into()),
+                source_markdown: Some(combined),
+                source_segments: vec![seg1, seg2],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(html.contains(r#"data-mx-doc-id=""#));
+        assert!(html.contains(r#"id="mx-source-data""#));
+        let dom = crate::dom::Dom::parse(&html);
+        let src_el = (0..dom.len())
+            .find(|&id| dom.attr(id, "id") == Some("mx-source-data"))
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&dom.text_content(src_el)).unwrap();
+        let blocks = payload["blocks"].as_array().unwrap();
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0]["fileIndex"], 0);
+        assert_eq!(blocks[1]["fileIndex"], 0);
+        assert_eq!(blocks[1]["md"], "**Theorem 1.** First claim.");
+        assert_eq!(blocks[2]["fileIndex"], 1);
+        assert_eq!(blocks[3]["fileIndex"], 1);
+        assert_eq!(blocks[3]["md"], "Second paragraph with $x^2$.");
+    }
+
+    #[test]
+    fn render_block_outer_html_matches_document_template() {
+        let doc = analyze(SAMPLE, &ScoringConfig::default());
+        let html = render_sample(MathAssets::None);
+        for block in &doc.blocks {
+            let fragment = render_block_outer_html(&doc, block, false);
+            assert!(
+                html.contains(&format!("data-block-id=\"{}\"", block.id)),
+                "doc missing {}",
+                block.id
+            );
+            assert!(fragment.contains(&format!("id=\"{}\"", block.id)));
+        }
     }
 }

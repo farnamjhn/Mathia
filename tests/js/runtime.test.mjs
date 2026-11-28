@@ -1262,3 +1262,178 @@ describe("obsidian-style graph", () => {
     await finish(s);
   });
 });
+
+describe("live preview editor", () => {
+  test("obsidian-style unit editing reveals raw Markdown+LaTeX and re-renders on blur", async () => {
+    const s = await open(pages.plain);
+    await s.page.click("#mx-edit-toggle");
+    assert.equal(await s.page.evaluate(() => document.body.classList.contains("mx-editing")), true);
+    assert.equal(await s.page.locator(".mx-lp-input").count(), 0, "no textarea until a unit is clicked");
+
+    const thmUnit = s.page.locator('#block-theorem-1 .mx-lp-unit[data-unit-index="0"]');
+    await thmUnit.click();
+    const ta = thmUnit.locator("textarea.mx-lp-input");
+    await ta.waitFor({ state: "visible" });
+    const rawBefore = await ta.inputValue();
+    assert.ok(rawBefore.includes("Lagrange") || rawBefore.includes("Theorem"), rawBefore);
+
+    // Sibling blocks stay rendered while active unit shows raw Markdown+LaTeX
+    assert.equal(await s.page.locator("#block-definition-1 .katex").count() > 0, true);
+    assert.equal(await s.page.locator("#block-definition-1 textarea.mx-lp-input").count(), 0);
+
+    await ta.fill("**Theorem 1.3 (Updated).** Every subgroup has order dividing $x^3 + y^3$.");
+    await s.page.locator("#block-theorem-1 .mx-lp-math-preview .katex").first().waitFor({ state: "visible" });
+
+    // Escape commits and re-renders cleanly with KaTeX
+    await ta.press("Escape");
+    assert.equal(await s.page.locator(".mx-lp-input").count(), 0);
+    assert.ok((await s.page.locator("#block-theorem-1").textContent()).includes("Updated"));
+    assert.ok(await s.page.locator("#block-theorem-1 .katex").count() > 0);
+    assert.ok((await s.page.locator("#mx-source-data").textContent()).includes("x^3 + y^3"));
+
+    await s.page.click("#mx-edit-done");
+    assert.equal(await s.page.evaluate(() => document.body.classList.contains("mx-editing")), false);
+    await finish(s);
+  });
+
+  test("keyboard ArrowDown/ArrowUp, blank-line split, and Backspace merge work across units", async () => {
+    const s = await open(pages.plain);
+    await s.page.click("#mx-edit-toggle");
+
+    const beforeCount = await s.page.locator("#block-definition-1 .mx-lp-unit").count();
+    const defUnit = s.page.locator('#block-definition-1 .mx-lp-unit[data-unit-index="0"]');
+    await defUnit.click();
+    const ta = s.page.locator("textarea.mx-lp-input");
+    const orig = await ta.inputValue();
+
+    // Typing \n\n splits unit 0 into two units and focuses the new second unit
+    await ta.fill(orig + "\n\nSecond split paragraph.");
+    await s.page.waitForFunction((want) => {
+      const units = document.querySelectorAll("#block-definition-1 .mx-lp-unit");
+      return units.length === want && units[1].classList.contains("mx-lp-active");
+    }, beforeCount + 1);
+
+    // ArrowUp on line 0 of unit 1 moves back to unit 0
+    const activeTa = s.page.locator("textarea.mx-lp-input");
+    await activeTa.evaluate((el) => el.setSelectionRange(0, 0));
+    await activeTa.press("ArrowUp");
+    await s.page.waitForFunction(() => {
+      const u0 = document.querySelector('#block-definition-1 .mx-lp-unit[data-unit-index="0"]');
+      return u0 && u0.classList.contains("mx-lp-active");
+    });
+
+    // ArrowDown on last line moves to unit 1, and Backspace at 0 merges back
+    await s.page.locator("textarea.mx-lp-input").press("ArrowDown");
+    await s.page.waitForFunction(() => {
+      const u1 = document.querySelector('#block-definition-1 .mx-lp-unit[data-unit-index="1"]');
+      return u1 && u1.classList.contains("mx-lp-active");
+    });
+    const mergedTa = s.page.locator("textarea.mx-lp-input");
+    await mergedTa.evaluate((el) => el.setSelectionRange(0, 0));
+    await mergedTa.press("Backspace");
+    await s.page.waitForFunction(
+      (want) => document.querySelectorAll("#block-definition-1 .mx-lp-unit").length === want,
+      beforeCount,
+    );
+    assert.ok((await s.page.locator("textarea.mx-lp-input").inputValue()).includes("Second split paragraph."));
+
+    await finish(s);
+  });
+
+  test("standalone browser auto-saves draft to localStorage, supports undo/revert, and downloads valid HTML & md", async () => {
+    const s = await open(pages.plain);
+    await s.page.click("#mx-edit-toggle");
+
+    const headingUnit = s.page.locator('#sec-1 .mx-lp-unit[data-unit-index="0"]');
+    await headingUnit.click();
+    const ta = s.page.locator("textarea.mx-lp-input");
+    await ta.fill("# Edited Study Guide");
+    await ta.press("Escape");
+
+    // Undo and Redo work in standalone browser mode
+    await s.page.click("#mx-edit-undo");
+    assert.ok((await s.page.locator("#sec-1").textContent()).includes("Group Theory Notes"));
+    await s.page.click("#mx-edit-redo");
+    assert.ok((await s.page.locator("#sec-1").textContent()).includes("Edited Study Guide"));
+
+    // Wait for localStorage draft debounce (300ms)
+    await s.page.waitForFunction(() => {
+      return Object.keys(localStorage).some((k) => k.startsWith("mathia-edit-draft:"));
+    });
+
+    // Reloading restores draft and shows banner
+    await s.page.reload();
+    await s.page.locator("#mx-edit-banner").waitFor({ state: "visible" });
+    assert.ok((await s.page.locator("#sec-1").textContent()).includes("Edited Study Guide"));
+
+    await s.page.click("#mx-edit-toggle");
+
+    // Export .md downloads Markdown
+    const mdWait = s.page.waitForEvent("download");
+    await s.page.click("#mx-edit-export-md");
+    const mdDl = await mdWait;
+    assert.ok(mdDl.suggestedFilename().endsWith(".md"));
+    const mdText = readFileSync(await mdDl.path(), "utf8");
+    assert.ok(mdText.includes("# Edited Study Guide"));
+
+    // Download HTML creates self-preserving standalone HTML without duplicate chrome
+    const htmlWait = s.page.waitForEvent("download");
+    await s.page.click("#mx-edit-download-html");
+    const htmlDl = await htmlWait;
+    assert.ok(htmlDl.suggestedFilename().endsWith(".html"));
+    const outDir = mkdtempSync(join(tmpdir(), "mathia-edited-html-"));
+    try {
+      const savedPath = join(outDir, "edited.html");
+      const savedHtml = readFileSync(await htmlDl.path(), "utf8");
+      writeFileSync(savedPath, savedHtml);
+      assert.equal((savedHtml.match(/class="mx-map-switch"/g) || []).length, 0, "no runtime chrome baked in");
+      assert.equal(savedHtml.includes('id="mx-edit-bar"'), false, "no edit bar baked in");
+      assert.equal(savedHtml.includes('id="mx-edit-toggle"'), false, "no edit toggle baked in");
+      assert.ok(savedHtml.includes("Edited Study Guide"));
+
+      // Open the saved HTML in a fresh page and verify zero CSP violations & working Live Preview
+      const s2 = await open(pathToFileURL(savedPath).href);
+      assert.equal(await s2.page.locator("#mx-edit-bar").count(), 1);
+      assert.equal(await s2.page.locator("#mx-edit-toggle").count(), 1);
+      assert.ok((await s2.page.locator("#sec-1").textContent()).includes("Edited Study Guide"));
+      await s2.page.click("#mx-edit-toggle");
+      assert.equal(await s2.page.evaluate(() => document.body.classList.contains("mx-editing")), true);
+      await finish(s2);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+
+    // Revert restores baseline after editing again
+    await s.page.locator('#sec-1 .mx-lp-unit[data-unit-index="0"]').click();
+    await s.page.locator("textarea.mx-lp-input").fill("# Temporary Change");
+    await s.page.locator("textarea.mx-lp-input").press("Escape");
+    await s.page.click("#mx-edit-revert");
+    assert.ok((await s.page.locator("#sec-1").textContent()).includes("Edited Study Guide"));
+
+    await finish(s);
+  });
+
+  test("preserves embedded SVG figures and works in RTL Persian documents", async () => {
+    const sFig = await open(pages.figure);
+    const svgCountBefore = await sFig.page.locator("#mx-main svg").count();
+    assert.ok(svgCountBefore >= 1);
+    await sFig.page.click("#mx-edit-toggle");
+    const unit = sFig.page.locator('#mx-main section.mx-block .mx-lp-unit[data-unit-index="0"]').first();
+    await unit.click();
+    const ta = sFig.page.locator("textarea.mx-lp-input");
+    await ta.fill("Updated caption with $d(v) = 2$.");
+    await ta.press("Escape");
+    await sFig.page.click("#mx-edit-done");
+    assert.ok(await sFig.page.locator("#mx-main svg").count() >= 1, "SVG preserved across edit");
+    await finish(sFig);
+
+    const sFa = await open(pages.fa);
+    await sFa.page.click("#mx-edit-toggle");
+    const faUnit = sFa.page.locator("#mx-main .mx-lp-unit").first();
+    await faUnit.click();
+    const faTa = sFa.page.locator("textarea.mx-lp-input");
+    assert.equal(await faTa.getAttribute("dir"), "auto");
+    await faTa.press("Escape");
+    await finish(sFa);
+  });
+});

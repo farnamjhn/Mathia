@@ -2,6 +2,7 @@
 //! thin wrappers over `math-core`. Kept separate so it can be unit-tested.
 
 use std::collections::HashSet;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -101,6 +102,7 @@ impl CompileOptions {
                 providers,
                 custom_providers,
             },
+            ..HtmlOptions::default()
         })
     }
 }
@@ -144,6 +146,53 @@ pub struct Compiled {
     pub changed: bool,
     pub semantic_blocks: usize,
     pub bytes: usize,
+}
+
+/// One edited block sent from the Live Preview editor.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockEdit {
+    pub id: String,
+    pub md: String,
+    #[serde(default)]
+    pub file_index: usize,
+    #[serde(default)]
+    pub edited: bool,
+}
+
+/// A disk file snapshot used for unified Undo/Redo across live edits.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSnapshot {
+    pub path: PathBuf,
+    pub content: String,
+}
+
+/// Updated outer HTML for a single block so the desktop iframe can patch
+/// non-focused blocks without reloading and losing the active cursor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderedBlockPatch {
+    pub id: String,
+    pub outer_html: String,
+}
+
+/// Response returned after persisting Live Preview edits and recompiling.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveEditResult {
+    pub revision: u64,
+    pub changed: bool,
+    pub stamp: Option<String>,
+    pub semantic_blocks: usize,
+    pub bytes: usize,
+    pub analysis: AnalysisView,
+    pub source_data: math_core::SourcePayload,
+    pub toc: Vec<math_core::TocEntry>,
+    pub mindmap_json: String,
+    pub blocks_patch: Vec<RenderedBlockPatch>,
+    pub before_files: Vec<FileSnapshot>,
+    pub after_files: Vec<FileSnapshot>,
 }
 
 /// The app state: one scoring configuration, the hand corrections for the
@@ -213,9 +262,9 @@ impl Session {
         self.recent.clear();
     }
 
-    pub fn read(&self, source: &Source) -> Result<String, String> {
+    fn read_source_files(&self, source: &Source) -> Result<Vec<(PathBuf, String)>, String> {
         match source {
-            Source::Text(text) => Ok(text.clone()),
+            Source::Text(_) => Err("text source has no backing file".to_string()),
             Source::Path(path) => {
                 let canonical = path
                     .canonicalize()
@@ -226,14 +275,16 @@ impl Session {
                         path.display()
                     ));
                 }
-                std::fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", path.display()))
+                let content = std::fs::read_to_string(&canonical)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                Ok(vec![(canonical, content)])
             }
             Source::MultiPath(paths) => {
                 if paths.is_empty() {
                     return Err("no files to read".to_string());
                 }
-                let mut combined = String::new();
-                for (i, path) in paths.iter().enumerate() {
+                let mut files = Vec::with_capacity(paths.len());
+                for path in paths {
                     let canonical = path
                         .canonicalize()
                         .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -245,6 +296,40 @@ impl Session {
                     }
                     let content = std::fs::read_to_string(&canonical)
                         .map_err(|e| format!("{}: {e}", path.display()))?;
+                    files.push((canonical, content));
+                }
+                Ok(files)
+            }
+        }
+    }
+
+    /// Combines Markdown files into a normalised buffer and returns the byte
+    /// range belonging to each file in order.
+    fn normalized_markdown_with_segments(
+        &self,
+        source: &Source,
+    ) -> Result<(String, Vec<Range<usize>>), String> {
+        match source {
+            Source::Text(text) => Ok((math_core::normalize_markdown(text), Vec::new())),
+            Source::Path(_) => {
+                let raw = self.read(source)?;
+                Ok((math_core::normalize_markdown(&raw), Vec::new()))
+            }
+            Source::MultiPath(_) => {
+                let files = self.read_source_files(source)?;
+                Ok(combine_normalized_files(&files))
+            }
+        }
+    }
+
+    pub fn read(&self, source: &Source) -> Result<String, String> {
+        match source {
+            Source::Text(text) => Ok(text.clone()),
+            Source::Path(_) => Ok(self.read_source_files(source)?.remove(0).1),
+            Source::MultiPath(_) => {
+                let files = self.read_source_files(source)?;
+                let mut combined = String::new();
+                for (i, (_, content)) in files.iter().enumerate() {
                     let content_trimmed = content.trim_end_matches(['\r', '\n']);
                     if i > 0 {
                         combined.push_str("\n\n");
@@ -449,6 +534,7 @@ impl Session {
             let markdown =
                 std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
             let document = math_core::analyze(&markdown, &self.config);
+            html_options.source_markdown = Some(math_core::normalize_markdown(&markdown));
             let html =
                 math_core::html::render(&document, &html_options).map_err(|e| e.to_string())?;
             let name = file.with_extension("html");
@@ -520,6 +606,7 @@ impl Session {
             return Ok((html, semantic));
         }
         on_progress(0.3, "Parsing Markdown content…");
+        let (norm_source, segments) = self.normalized_markdown_with_segments(source)?;
         let document = self.classify(source)?.document;
         on_progress(0.6, "Classifying semantic blocks…");
         let semantic = document
@@ -528,9 +615,225 @@ impl Session {
             .filter(|b| b.kind.is_semantic())
             .count();
         on_progress(0.8, "Compiling standalone HTML…");
+        html_options.source_markdown = Some(norm_source);
+        html_options.source_segments = segments;
         let html = math_core::html::render(&document, &html_options).map_err(|e| e.to_string())?;
         on_progress(0.95, "HTML compiled");
         Ok((html, semantic))
+    }
+
+    /// Saves edits made in the desktop Live Preview back to the source file(s),
+    /// updates the compiled preview in place, and returns synchronized block
+    /// metadata plus file snapshots for unified Undo/Redo.
+    pub fn apply_live_edit(
+        &mut self,
+        source: &Source,
+        edits: Vec<BlockEdit>,
+        options: &CompileOptions,
+    ) -> Result<LiveEditResult, String> {
+        let mut before_files = Vec::new();
+        let mut after_files = Vec::new();
+
+        match source {
+            Source::Text(_) => {
+                return Err("in-memory text sources cannot be written to disk".to_string());
+            }
+            Source::Path(_) | Source::MultiPath(_) => {
+                let files = self.read_source_files(source)?;
+                let is_html_doc = self.is_html_source(source)
+                    || files.first().is_some_and(|(_, c)| math_core::is_html(c));
+
+                if is_html_doc {
+                    let (path, before_html) = &files[0];
+                    let mut analysis = math_core::clean_html::analyze_html_detailed(before_html);
+                    math_core::clean_html::apply_overrides(&mut analysis.document, &self.overrides);
+                    let updated_doc = rebuild_html_document(
+                        &analysis.document,
+                        &edits,
+                        &self.config,
+                        options.title.as_deref(),
+                    );
+                    let mut html_options = options.html_options()?;
+                    html_options.source_name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned());
+                    let new_html = math_core::html::render(&updated_doc, &html_options)
+                        .map_err(|e| e.to_string())?;
+                    std::fs::write(path, &new_html)
+                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                    before_files.push(FileSnapshot {
+                        path: path.clone(),
+                        content: before_html.clone(),
+                    });
+                    after_files.push(FileSnapshot {
+                        path: path.clone(),
+                        content: new_html,
+                    });
+                } else {
+                    let (combined_norm, segments) = combine_normalized_files(&files);
+                    let current_analysis = math_core::analyze_with_overrides(
+                        &combined_norm,
+                        &self.config,
+                        &self.overrides,
+                    );
+                    let current_doc = &current_analysis.document;
+                    let mut old_opts = options.html_options()?;
+                    old_opts.source_markdown = Some(combined_norm.clone());
+                    old_opts.source_segments = segments.clone();
+                    let old_payload = math_core::html::build_source_payload(current_doc, &old_opts);
+
+                    for (file_idx, (path, raw)) in files.iter().enumerate() {
+                        let file_edits: Vec<&BlockEdit> = edits
+                            .iter()
+                            .filter(|e| e.file_index.min(files.len() - 1) == file_idx)
+                            .collect();
+                        let old_indices: Vec<usize> = old_payload
+                            .blocks
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, b)| b.file_index == file_idx)
+                            .map(|(idx, _)| idx)
+                            .collect();
+
+                        let changed = file_edits.len() != old_indices.len()
+                            || file_edits.iter().zip(old_indices.iter()).any(|(e, &idx)| {
+                                e.edited || e.md.trim() != old_payload.blocks[idx].md.trim()
+                            });
+                        if !changed {
+                            continue;
+                        }
+
+                        let updated = update_markdown_file(
+                            raw,
+                            current_doc,
+                            &combined_norm,
+                            &segments[file_idx],
+                            &old_indices,
+                            &file_edits,
+                        );
+                        if updated != *raw {
+                            std::fs::write(path, &updated)
+                                .map_err(|e| format!("{}: {e}", path.display()))?;
+                            before_files.push(FileSnapshot {
+                                path: path.clone(),
+                                content: raw.clone(),
+                            });
+                            after_files.push(FileSnapshot {
+                                path: path.clone(),
+                                content: updated,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        self.prune_overrides_for_source(source)?;
+        self.build_live_edit_result(source, options, before_files, after_files)
+    }
+
+    /// Writes `files` (used when undoing/redoing a source edit) and refreshes
+    /// preview & analysis state without reloading the active editor frame.
+    pub fn write_source_files(
+        &mut self,
+        source: &Source,
+        files: Vec<FileSnapshot>,
+        options: &CompileOptions,
+    ) -> Result<LiveEditResult, String> {
+        let mut verified = Vec::with_capacity(files.len());
+        for snap in files {
+            let canonical = snap
+                .path
+                .canonicalize()
+                .map_err(|e| format!("{}: {e}", snap.path.display()))?;
+            if !self.granted.contains(&canonical) {
+                return Err(format!(
+                    "{}: not opened in Mathia (use Open or drop the file on the window)",
+                    snap.path.display()
+                ));
+            }
+            verified.push((canonical, snap.content));
+        }
+        for (path, content) in &verified {
+            std::fs::write(path, content).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        self.prune_overrides_for_source(source)?;
+        self.build_live_edit_result(source, options, Vec::new(), Vec::new())
+    }
+
+    fn prune_overrides_for_source(&mut self, source: &Source) -> Result<(), String> {
+        if self.overrides.is_empty() || self.is_html_source(source) {
+            return Ok(());
+        }
+        let content = self.read(source)?;
+        if math_core::is_html(&content) {
+            return Ok(());
+        }
+        let nodes = math_core::parser::parse_markdown(&math_core::normalize_markdown(&content));
+        self.overrides.prune_oob(nodes.len());
+        Ok(())
+    }
+
+    fn build_live_edit_result(
+        &mut self,
+        source: &Source,
+        options: &CompileOptions,
+        before_files: Vec<FileSnapshot>,
+        after_files: Vec<FileSnapshot>,
+    ) -> Result<LiveEditResult, String> {
+        let compiled = self.compile_preview_with_progress(source, options, |_, _| {})?;
+        let analysis = self.analyze(source)?;
+        let stamp = self.stamp(source)?;
+        let mut html_options = options.html_options()?;
+        html_options.source_name = match source {
+            Source::Path(path) => path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned()),
+            _ => None,
+        };
+        if !self.is_html_source(source) {
+            let (norm, segments) = self.normalized_markdown_with_segments(source)?;
+            html_options.source_markdown = Some(norm);
+            html_options.source_segments = segments;
+        }
+        let source_data = math_core::html::build_source_payload(&analysis.document, &html_options);
+        let fallback_title = html_options
+            .source_name
+            .as_deref()
+            .or(html_options.title.as_deref())
+            .or(analysis.document.title.as_deref())
+            .unwrap_or("Study guide");
+        let mindmap_json = serde_json::to_string(&math_core::mindmap::extract(
+            &analysis.document,
+            fallback_title,
+        ))
+        .map_err(|e| e.to_string())?;
+        let has_ai = !html_options.ai.is_empty();
+        let blocks_patch = analysis
+            .document
+            .blocks
+            .iter()
+            .map(|b| RenderedBlockPatch {
+                id: b.id.clone(),
+                outer_html: math_core::html::render_block_outer_html(&analysis.document, b, has_ai),
+            })
+            .collect();
+        let toc = analysis.document.toc.clone();
+
+        Ok(LiveEditResult {
+            revision: compiled.revision,
+            changed: compiled.changed,
+            stamp,
+            semantic_blocks: compiled.semantic_blocks,
+            bytes: compiled.bytes,
+            analysis,
+            source_data,
+            toc,
+            mindmap_json,
+            blocks_patch,
+            before_files,
+            after_files,
+        })
     }
 
     /// Compiles and makes the result the preview.
@@ -579,6 +882,191 @@ impl Session {
         self.config = config;
         Ok(())
     }
+}
+
+fn combine_normalized_files(files: &[(PathBuf, String)]) -> (String, Vec<Range<usize>>) {
+    let mut combined = String::new();
+    let mut segments = Vec::with_capacity(files.len());
+    for (i, (_, content)) in files.iter().enumerate() {
+        let trimmed = content.trim_matches(['\r', '\n']);
+        let norm = math_core::normalize_markdown(trimmed);
+        let clean = norm.trim_end_matches('\n');
+        if i > 0 {
+            combined.push_str("\n\n");
+        }
+        let start = combined.len();
+        combined.push_str(clean);
+        let end = combined.len();
+        segments.push(start..end);
+    }
+    if !combined.is_empty() && !combined.ends_with('\n') {
+        combined.push('\n');
+    }
+    (combined, segments)
+}
+
+fn update_markdown_file(
+    raw: &str,
+    current_doc: &Document,
+    combined_norm: &str,
+    segment: &Range<usize>,
+    old_indices: &[usize],
+    file_edits: &[&BlockEdit],
+) -> String {
+    let crlf = raw.contains("\r\n");
+    let raw_lf = raw.replace("\r\n", "\n");
+    let lead_len = raw_lf.len() - raw_lf.trim_start_matches('\n').len();
+    let trimmed_raw = raw_lf.trim_matches('\n');
+    let norm_i = math_core::normalize_markdown(trimmed_raw);
+    let can_splice = trimmed_raw == norm_i.trim_matches('\n')
+        && !old_indices.is_empty()
+        && old_indices.len() == file_edits.len();
+
+    let mut out_lf = if can_splice {
+        let mut ranges = Vec::with_capacity(old_indices.len());
+        let mut valid = true;
+        let mut prev_end = 0usize;
+        for &idx in old_indices {
+            let Some(block) = current_doc.blocks.get(idx) else {
+                valid = false;
+                break;
+            };
+            let Some(r) =
+                math_core::markdown::block_source_range(current_doc, block, combined_norm)
+            else {
+                valid = false;
+                break;
+            };
+            if r.start < segment.start || r.end > segment.end {
+                valid = false;
+                break;
+            }
+            let local_start = r.start - segment.start + lead_len;
+            let local_end = r.end - segment.start + lead_len;
+            if local_start < prev_end || local_end > raw_lf.len() {
+                valid = false;
+                break;
+            }
+            prev_end = local_end;
+            ranges.push(local_start..local_end);
+        }
+
+        if valid {
+            let mut spliced = raw_lf.clone();
+            for (r, edit) in ranges.into_iter().zip(file_edits.iter()).rev() {
+                let replacement = edit.md.replace("\r\n", "\n");
+                let replacement = replacement.trim();
+                if replacement.is_empty() {
+                    // Remove block and collapse an adjacent blank-line separator cleanly.
+                    let mut del_start = r.start;
+                    let mut del_end = r.end;
+                    if spliced[del_end..].starts_with("\n\n") {
+                        del_end += 2;
+                    } else if del_start >= 2 && spliced[..del_start].ends_with("\n\n") {
+                        del_start -= 2;
+                    }
+                    spliced.replace_range(del_start..del_end, "");
+                } else {
+                    spliced.replace_range(r, replacement);
+                }
+            }
+            spliced
+        } else {
+            reconstruct_file_markdown(&raw_lf, file_edits)
+        }
+    } else {
+        reconstruct_file_markdown(&raw_lf, file_edits)
+    };
+
+    if !out_lf.is_empty() && !out_lf.ends_with('\n') {
+        out_lf.push('\n');
+    }
+    if crlf {
+        out_lf.replace('\n', "\r\n")
+    } else {
+        out_lf
+    }
+}
+
+fn reconstruct_file_markdown(_raw_lf: &str, file_edits: &[&BlockEdit]) -> String {
+    let mut parts = Vec::new();
+    for edit in file_edits {
+        let t = edit.md.replace("\r\n", "\n");
+        let t = t.trim();
+        if !t.is_empty() {
+            parts.push(t.to_string());
+        }
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", parts.join("\n\n"))
+    }
+}
+
+fn rebuild_html_document(
+    old_doc: &Document,
+    edits: &[BlockEdit],
+    config: &ScoringConfig,
+    title_override: Option<&str>,
+) -> Document {
+    let mut new_blocks = Vec::with_capacity(edits.len());
+    for edit in edits {
+        let existing = old_doc.blocks.iter().find(|b| b.id == edit.id);
+        if !edit.edited
+            && let Some(existing) = existing
+        {
+            new_blocks.push(existing.clone());
+            continue;
+        }
+        let figures = existing
+            .map(|b| math_core::clean_html::extract_figures_html(&b.html))
+            .unwrap_or_default();
+        let trimmed = edit.md.trim();
+        if trimmed.is_empty() && figures.is_empty() {
+            continue;
+        }
+        if trimmed.is_empty() {
+            if let Some(mut existing) = existing.cloned() {
+                existing.html = figures;
+                new_blocks.push(existing);
+            }
+            continue;
+        }
+        let mut parsed = math_core::analyze(trimmed, config);
+        if !figures.is_empty()
+            && let Some(last) = parsed.blocks.last_mut()
+        {
+            last.html.push_str(&figures);
+        }
+        new_blocks.extend(parsed.blocks);
+    }
+
+    // Ensure unique HTML ids after partial re-analysis.
+    let mut seen_ids = HashSet::new();
+    for (idx, block) in new_blocks.iter_mut().enumerate() {
+        let base = if block.id.is_empty() {
+            format!("block-{}-{}", block.kind.slug(), idx + 1)
+        } else {
+            block.id.clone()
+        };
+        let mut candidate = base.clone();
+        let mut suffix = 2usize;
+        while !seen_ids.insert(candidate.clone()) {
+            candidate = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+        block.id = candidate;
+    }
+
+    let mut doc = Document::new(Vec::new(), new_blocks);
+    doc.direction = old_doc.direction;
+    if let Some(title) = title_override.filter(|t| !t.trim().is_empty()) {
+        doc.title = Some(title.to_string());
+    } else if doc.title.is_none() {
+        doc.title = old_doc.title.clone();
+    }
+    doc
 }
 
 #[cfg(test)]
@@ -1048,5 +1536,159 @@ mod tests {
         assert!(!html_events.is_empty());
         assert!(html_events.first().unwrap().0 <= 0.15);
         assert!(html_events.last().unwrap().0 >= 0.9);
+    }
+
+    #[test]
+    fn live_edit_splices_single_markdown_and_supports_undo_restore() {
+        let initial =
+            "# Notes\n\n<!-- keep comment -->\n\n**Theorem 1.** Let $x > 0$.\n\nPlain text.\n";
+        let path = temp_file("live-single.md", initial);
+        let mut session = Session::default();
+        let canon = session.grant(&path).unwrap();
+        let source = Source::Path(canon.clone());
+
+        let compiled = session
+            .compile_preview(&source, &CompileOptions::default())
+            .unwrap();
+        assert!(compiled.changed);
+
+        let analysis = session.analyze(&source).unwrap();
+        let mut opts = CompileOptions::default().html_options().unwrap();
+        opts.source_markdown = Some(math_core::normalize_markdown(initial));
+        let payload = math_core::html::build_source_payload(&analysis.document, &opts);
+
+        let edits: Vec<BlockEdit> = payload
+            .blocks
+            .iter()
+            .map(|b| {
+                let mut md = b.md.clone();
+                let mut edited = false;
+                if b.id == "block-theorem-1" {
+                    md = "**Theorem 1.** Let $x > 1$.".to_string();
+                    edited = true;
+                }
+                BlockEdit {
+                    id: b.id.clone(),
+                    md,
+                    file_index: b.file_index,
+                    edited,
+                }
+            })
+            .collect();
+
+        let res = session
+            .apply_live_edit(&source, edits, &CompileOptions::default())
+            .unwrap();
+        let on_disk = std::fs::read_to_string(&canon).unwrap();
+        assert!(on_disk.contains("<!-- keep comment -->"), "{on_disk}");
+        assert!(on_disk.contains("**Theorem 1.** Let $x > 1$."), "{on_disk}");
+        assert_eq!(res.before_files.len(), 1);
+        assert_eq!(res.before_files[0].content, initial);
+
+        // Undo restores exact original file contents.
+        session
+            .write_source_files(&source, res.before_files, &CompileOptions::default())
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&canon).unwrap(), initial);
+    }
+
+    #[test]
+    fn live_edit_on_multi_path_writes_only_modified_file() {
+        let f1 = temp_file("multi-edit-1.md", "# Chapter 1\n\nUntouched one.\n");
+        let f2 = temp_file("multi-edit-2.md", "# Chapter 2\n\nOriginal two.\n");
+        let mut session = Session::default();
+        let f1 = session.grant(&f1).unwrap();
+        let f2 = session.grant(&f2).unwrap();
+        let source = Source::MultiPath(vec![f1.clone(), f2.clone()]);
+
+        let compiled = session
+            .compile_preview(&source, &CompileOptions::default())
+            .unwrap();
+        assert!(compiled.changed);
+
+        let analysis = session.analyze(&source).unwrap();
+        let (norm, segs) = session.normalized_markdown_with_segments(&source).unwrap();
+        let mut opts = CompileOptions::default().html_options().unwrap();
+        opts.source_markdown = Some(norm);
+        opts.source_segments = segs;
+        let payload = math_core::html::build_source_payload(&analysis.document, &opts);
+
+        let edits: Vec<BlockEdit> = payload
+            .blocks
+            .iter()
+            .map(|b| {
+                let is_target = b.file_index == 1 && b.md.contains("Original two.");
+                BlockEdit {
+                    id: b.id.clone(),
+                    md: if is_target {
+                        "Updated two.".to_string()
+                    } else {
+                        b.md.clone()
+                    },
+                    file_index: b.file_index,
+                    edited: is_target,
+                }
+            })
+            .collect();
+
+        let res = session
+            .apply_live_edit(&source, edits, &CompileOptions::default())
+            .unwrap();
+        assert_eq!(res.after_files.len(), 1);
+        assert_eq!(res.after_files[0].path, f2);
+        assert_eq!(
+            std::fs::read_to_string(&f1).unwrap(),
+            "# Chapter 1\n\nUntouched one.\n"
+        );
+        assert!(
+            std::fs::read_to_string(&f2)
+                .unwrap()
+                .contains("Updated two.")
+        );
+    }
+
+    #[test]
+    fn live_edit_on_html_preserves_untouched_svg_figures() {
+        let html = "<!DOCTYPE html><html><head><title>Geo</title></head><body><main>\
+            <h1>Shapes</h1>\
+            <p>Old intro.</p>\
+            <figure><svg viewBox=\"0 0 10 10\"><circle cx=\"5\" cy=\"5\" r=\"4\"/></svg></figure>\
+            </main></body></html>";
+        let path = temp_file("svg-live.html", html);
+        let mut session = Session::default();
+        let path = session.grant(&path).unwrap();
+        let source = Source::Path(path.clone());
+
+        let analysis = session.analyze(&source).unwrap();
+        let opts = CompileOptions::default().html_options().unwrap();
+        let payload = math_core::html::build_source_payload(&analysis.document, &opts);
+        let edits: Vec<BlockEdit> = payload
+            .blocks
+            .iter()
+            .map(|b| {
+                let edit_me = b.md.contains("Old intro.");
+                BlockEdit {
+                    id: b.id.clone(),
+                    md: if edit_me {
+                        "New intro with $r = 4$.".to_string()
+                    } else {
+                        b.md.clone()
+                    },
+                    file_index: b.file_index,
+                    edited: edit_me,
+                }
+            })
+            .collect();
+
+        session
+            .apply_live_edit(&source, edits, &CompileOptions::default())
+            .unwrap();
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(updated.contains("New intro with"), "{updated}");
+        assert!(updated.contains("<svg"), "SVG figure must be preserved");
+        assert!(
+            updated.contains("<circle"),
+            "SVG contents must be preserved"
+        );
     }
 }
